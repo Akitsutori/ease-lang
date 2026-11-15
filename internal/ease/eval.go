@@ -69,8 +69,11 @@ func FormatValue(v Value) string {
 		if math.IsNaN(val) || math.IsInf(val, 0) {
 			return fmt.Sprintf("%v", val)
 		}
+		if val == 0 {
+			return "0"
+		}
 		if val == math.Trunc(val) {
-			return strconv.FormatInt(int64(val), 10)
+			return strconv.FormatFloat(val, 'f', 0, 64)
 		}
 		return strconv.FormatFloat(val, 'f', -1, 64)
 	case string:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1294,6 +1295,40 @@ test "float modulo and modulo by zero"
     10 % 3 is 1
     5 % 0 raises "Modulo by zero"
     5 % 0.0 raises "Modulo by zero"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 5 || report.Failed != 0 {
+		t.Fatalf("expected 5 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+}
+
+func TestFormatValueLargeIntegersNoInt64Overflow(t *testing.T) {
+	two63 := math.Ldexp(1, 63) // 9223372036854775808 (exact in float64, overflows int64)
+	if got := FormatValue(two63); got != "9223372036854775808" {
+		t.Fatalf("FormatValue(2^63) = %q, want %q", got, "9223372036854775808")
+	}
+	negZero := math.Copysign(0, -1)
+	if got := FormatValue(negZero); got != "0" {
+		t.Fatalf("FormatValue(-0.0) = %q, want %q", got, "0")
+	}
+	if got := FormatValue(-10000000000.0 * 1000000000.0); got != "-10000000000000000000" {
+		t.Fatalf("FormatValue(-1e19) = %q, want %q", got, "-10000000000000000000")
+	}
+
+	src := `
+test "large integer floats format without int64 overflow"
+    n = 9223372036854775808
+    n as text is "9223372036854775808"
+    "{n}" is "9223372036854775808"
+    big = 10000000000 * 1000000000
+    big as text is "10000000000000000000"
+    neg_big = -big
+    neg_big as text is "-10000000000000000000"
+    (-0.0) as text is "0"
 end
 `
 	report, err := RunChecks(src)
