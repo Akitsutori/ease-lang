@@ -235,6 +235,39 @@ async function activate(context) {
   const diagnostics = vscode.languages.createDiagnosticCollection("ease");
   const client = new EaseLspClient(resolveExecutable(), output, diagnostics);
 
+  const debugProvider = {
+    provideDebugConfigurations() {
+      return [
+        {
+          type: "ease",
+          request: "launch",
+          name: "Run Ease File",
+          program: "${file}",
+        },
+      ];
+    },
+    resolveDebugConfiguration(folder, config) {
+      const active = vscode.window.activeTextEditor;
+      const resolved = Object.assign(
+        {
+          type: "ease",
+          request: "launch",
+          name: "Run Ease File",
+          program: "${file}",
+        },
+        config || {}
+      );
+      if (!resolved.program || resolved.program === "${file}") {
+        if (active && active.document.languageId === "ease") {
+          resolved.program = active.document.uri.fsPath;
+        }
+      } else if (folder && resolved.program.includes("${workspaceFolder}")) {
+        resolved.program = resolved.program.replace("${workspaceFolder}", folder.uri.fsPath);
+      }
+      return resolved;
+    },
+  };
+
   context.subscriptions.push(
     output,
     diagnostics,
@@ -246,38 +279,16 @@ async function activate(context) {
         return new vscode.DebugAdapterInlineImplementation(new EaseDebugAdapter());
       },
     }),
-    vscode.debug.registerDebugConfigurationProvider("ease", {
-      provideDebugConfigurations() {
-        return [
-          {
-            type: "ease",
-            request: "launch",
-            name: "Run Ease File",
-            program: "${file}",
-          },
-        ];
-      },
-      resolveDebugConfiguration(folder, config) {
-        const active = vscode.window.activeTextEditor;
-        const resolved = Object.assign(
-          {
-            type: "ease",
-            request: "launch",
-            name: "Run Ease File",
-            program: "${file}",
-          },
-          config || {}
-        );
-        if (!resolved.program || resolved.program === "${file}") {
-          if (active && active.document.languageId === "ease") {
-            resolved.program = active.document.uri.fsPath;
-          }
-        } else if (folder && resolved.program.includes("${workspaceFolder}")) {
-          resolved.program = resolved.program.replace("${workspaceFolder}", folder.uri.fsPath);
-        }
-        return resolved;
-      },
-    })
+    vscode.debug.registerDebugConfigurationProvider(
+      "ease",
+      debugProvider,
+      vscode.DebugConfigurationProviderTriggerKind.Initial
+    ),
+    vscode.debug.registerDebugConfigurationProvider(
+      "ease",
+      debugProvider,
+      vscode.DebugConfigurationProviderTriggerKind.Dynamic
+    )
   );
 
   try {

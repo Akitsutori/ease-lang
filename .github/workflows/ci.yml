@@ -59,8 +59,13 @@ jobs:
       - name: Run Go unit tests
         run: go test ${{ matrix.race_flag }} -v ./...
 
+      - name: Determine dev build version
+        id: ver
+        shell: bash
+        run: echo "version=dev-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
       - name: Build ease CLI
-        run: go build -o ${{ matrix.bin }} ./cmd/ease
+        run: go build -ldflags "-X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ matrix.bin }} ./cmd/ease
 
       - name: Run Ease language feature tests
         shell: bash

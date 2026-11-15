@@ -11,8 +11,6 @@ import (
 	"ease-lang/internal/ease"
 )
 
-const version = "0.1.0"
-
 func main() {
 	runtime.LockOSThread()
 
@@ -66,7 +64,7 @@ func runCLI() int {
 	case "lsp":
 		return cmdLsp()
 	case "version", "--version", "-v":
-		fmt.Printf("ease %s\n", version)
+		fmt.Printf("ease %s\n", ease.Version)
 		return 0
 	case "help", "--help", "-h":
 		printUsage()
@@ -288,7 +286,7 @@ func cmdTokens(args []string) int {
 }
 
 func cmdRepl() int {
-	fmt.Printf("Ease %s REPL (type 'exit' to quit)\n", version)
+	fmt.Printf("Ease %s REPL (type 'exit' to quit)\n", ease.Version)
 	scanner := bufio.NewScanner(os.Stdin)
 	prog := &ease.Program{}
 	ev := ease.NewEvaluator("", prog, os.Stdout)

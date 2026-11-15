@@ -127,7 +127,7 @@ func (s *LSPServer) handleMessage(msg *lspMessage) bool {
 			},
 			"serverInfo": map[string]any{
 				"name":    "ease-lsp",
-				"version": "0.1.0",
+				"version": Version,
 			},
 		}
 		s.sendResponse(msg.ID, result, nil)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type vsCodePackage struct {
@@ -32,7 +33,22 @@ func main() {
 		fatalf("parse package.json: %v", err)
 	}
 
-	outPath := filepath.Join(extDir, fmt.Sprintf("%s-%s.vsix", pkg.Name, pkg.Version))
+	version := pkg.Version
+	if envVer := strings.TrimPrefix(strings.TrimSpace(os.Getenv("EASE_VERSION")), "v"); envVer != "" {
+		version = envVer
+		var raw map[string]any
+		if err := json.Unmarshal(pkgBytes, &raw); err != nil {
+			fatalf("parse raw package.json: %v", err)
+		}
+		raw["version"] = version
+		patched, err := json.MarshalIndent(raw, "", "  ")
+		if err != nil {
+			fatalf("marshal patched package.json: %v", err)
+		}
+		pkgBytes = append(patched, '\n')
+	}
+
+	outPath := filepath.Join(extDir, fmt.Sprintf("%s-%s.vsix", pkg.Name, version))
 	f, err := os.Create(outPath)
 	if err != nil {
 		fatalf("create %s: %v", outPath, err)
@@ -66,7 +82,7 @@ func main() {
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/>
   </Assets>
 </PackageManifest>
-`, pkg.Name, pkg.Version, pkg.Publisher, pkg.DisplayName, pkg.Description)
+`, pkg.Name, version, pkg.Publisher, pkg.DisplayName, pkg.Description)
 
 	if err := writeZipString(zw, "[Content_Types].xml", contentTypes); err != nil {
 		fatalf("write [Content_Types].xml: %v", err)
@@ -74,9 +90,11 @@ func main() {
 	if err := writeZipString(zw, "extension.vsixmanifest", manifest); err != nil {
 		fatalf("write extension.vsixmanifest: %v", err)
 	}
+	if err := writeZipString(zw, "extension/package.json", string(pkgBytes)); err != nil {
+		fatalf("pack package.json: %v", err)
+	}
 
 	files := []string{
-		"package.json",
 		"extension.js",
 		"language-configuration.json",
 		filepath.Join("syntaxes", "ease.tmLanguage.json"),

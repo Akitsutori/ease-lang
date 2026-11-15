@@ -45,11 +45,22 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Determine release version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Build binary
-        run: go build -o ${{ matrix.asset_name }} ./cmd/ease
+        run: go build -ldflags "-s -w -X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ matrix.asset_name }} ./cmd/ease
+
+      - name: Verify embedded version
+        shell: bash
+        run: ./${{ matrix.asset_name }} version
 
       - name: Package VS Code extension (.vsix)
         if: runner.os == 'Linux'
+        env:
+          EASE_VERSION: ${{ steps.ver.outputs.version }}
         run: go run ./editors/vscode
 
       - name: Upload build artifact
