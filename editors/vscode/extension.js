@@ -156,12 +156,76 @@ function resolveExecutable() {
   return "ease";
 }
 
+async function runEaseSubcommand(subcommand, targetPath) {
+  let filePath = targetPath;
+  const activeEditor = vscode.window.activeTextEditor;
+  if (!filePath && activeEditor && activeEditor.document.languageId === "ease") {
+    if (activeEditor.document.isDirty) {
+      await activeEditor.document.save();
+    }
+    filePath = activeEditor.document.uri.fsPath;
+  }
+  if (!filePath) {
+    vscode.window.showWarningMessage("No active .ease file to run.");
+    return;
+  }
+
+  const exe = resolveExecutable();
+  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+  const exec = new vscode.ShellExecution(exe, [subcommand, filePath]);
+  const task = new vscode.Task(
+    { type: "ease", subcommand },
+    folder || vscode.TaskScope.Workspace,
+    `${subcommand} ${path.basename(filePath)}`,
+    "ease",
+    exec
+  );
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Always,
+    panel: vscode.TaskPanelKind.Shared,
+    clear: true,
+    focus: true,
+  };
+  await vscode.tasks.executeTask(task);
+}
+
 async function activate(context) {
   const output = vscode.window.createOutputChannel("Ease Language");
   const diagnostics = vscode.languages.createDiagnosticCollection("ease");
   const client = new EaseLspClient(resolveExecutable(), output, diagnostics);
 
-  context.subscriptions.push(output, diagnostics, { dispose: () => client.stop() });
+  context.subscriptions.push(
+    output,
+    diagnostics,
+    { dispose: () => client.stop() },
+    vscode.commands.registerCommand("ease.runFile", () => runEaseSubcommand("run")),
+    vscode.commands.registerCommand("ease.testFile", () => runEaseSubcommand("test")),
+    vscode.debug.registerDebugConfigurationProvider("ease", {
+      provideDebugConfigurations() {
+        return [
+          {
+            type: "ease",
+            request: "launch",
+            name: "Run Ease File",
+            program: "${file}",
+          },
+        ];
+      },
+      resolveDebugConfiguration(folder, config) {
+        const active = vscode.window.activeTextEditor;
+        let program = config && config.program;
+        if (!program || program === "${file}") {
+          if (active && active.document.languageId === "ease") {
+            program = active.document.uri.fsPath;
+          }
+        } else if (folder && program.includes("${workspaceFolder}")) {
+          program = program.replace("${workspaceFolder}", folder.uri.fsPath);
+        }
+        runEaseSubcommand("run", program);
+        return null;
+      },
+    })
+  );
 
   try {
     await client.start();

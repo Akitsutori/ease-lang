@@ -4,6 +4,7 @@ Mit der Extension unter [editors/vscode/](editors/vscode/) und dem eingebauten L
 
 - **Syntax-Highlighting** für `.ease`-Dateien (Keywords, Typen, `#`-Kommentare, Zahlen, Operatoren sowie `{expr}`-Interpolation in Strings)
 - **Live-Fehlererkennung** beim Tippen (rote Unterstreichungen & Problems-Panel inkl. `Hint`-Texten direkt aus dem Ease-Parser)
+- **Direkt ausführen & testen**: `Ctrl+F5` (*Run Without Debugging*), Play-Button ▶ oben rechts oder `Ease: Run Tests` im Editor
 - **Outline / Breadcrumbs** für `def`-Records, `union`-Typen, `to`-Funktionen und `check`-Blöcke
 - **Autocomplete** für Ease-Keywords sowie im Dokument definierte Funktionen und Typen
 - **Editor-Komfort**: `#`-Kommentar-Toggle (`Ctrl+/`), Klammer-/Anführungszeichen-Auto-Closing und Einrückung für `to` / `def` / `if` / `repeat` / `for` → `end`

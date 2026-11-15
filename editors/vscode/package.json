@@ -1,20 +1,80 @@
 {
   "name": "ease-lang",
   "displayName": "Ease Language",
-  "description": "Syntax highlighting, live diagnostics, outline symbols, and autocomplete for the Ease programming language (.ease)",
-  "version": "0.1.0",
+  "description": "Syntax highlighting, live diagnostics, outline symbols, autocomplete, and direct run/test support for Ease (.ease)",
+  "version": "0.1.2",
   "publisher": "ease-lang",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "activationEvents": [
-    "onLanguage:ease"
+    "onLanguage:ease",
+    "onDebugInitialConfigurations",
+    "onDebugResolve:ease"
   ],
   "main": "./extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "ease.runFile",
+        "title": "Ease: Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ease.testFile",
+        "title": "Ease: Run Tests",
+        "icon": "$(beaker)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "ease.runFile",
+          "when": "resourceExtname == .ease",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ease.testFile",
+          "when": "resourceExtname == .ease",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "debuggers": [
+      {
+        "type": "ease",
+        "label": "Ease",
+        "languages": [
+          "ease"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the .ease file to run",
+                "default": "${file}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "ease",
+            "request": "launch",
+            "name": "Run Ease File",
+            "program": "${file}"
+          }
+        ]
+      }
+    ],
     "languages": [
       {
         "id": "ease",
