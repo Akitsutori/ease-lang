@@ -177,7 +177,7 @@ end
 test "Striktes as Casting & decode_json (Ausgang B): 10 Negativtests"
     "abc" as number raises "Cannot convert text"
     "" as number raises "Cannot convert text"
-    (list 1) as number raises "Cannot convert"
+    (list "a", "b") as number raises "Cannot convert"
     "pending" as ticket raises "not valid for union"
     123 as ticket raises "not valid for union"
     '{"id": 7, "name": "Gast", "role": "admin"}' as api_user raises "Cannot validate text"

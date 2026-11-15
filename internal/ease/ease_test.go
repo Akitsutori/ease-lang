@@ -1403,3 +1403,222 @@ say "val={missing_var}"
 		})
 	}
 }
+
+func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
+	// Rule 1: Every runtime list is *ListValue with inferred or explicit ElemType.
+	val, err := EvalProgram("do range 1 3\n", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("range eval failed: %v", err)
+	}
+	rangeLV, ok := val.(*ListValue)
+	if !ok || rangeLV.ElemType != "number" || len(rangeLV.Elements) != 3 {
+		t.Fatalf("expected *ListValue{ElemType: number, len: 3}, got %T %+v", val, val)
+	}
+
+	val, err = EvalProgram("list 10, 20\n", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("list literal eval failed: %v", err)
+	}
+	litLV, ok := val.(*ListValue)
+	if !ok || litLV.ElemType != "number" || len(litLV.Elements) != 2 {
+		t.Fatalf("expected *ListValue{ElemType: number, len: 2}, got %T %+v", val, val)
+	}
+
+	val, err = EvalProgram("def p\n  x = 1\nend\ninst = p with x = 2\ndo fields inst\n", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("fields eval failed: %v", err)
+	}
+	fieldsLV, ok := val.(*ListValue)
+	if !ok || fieldsLV.ElemType != "text" || len(fieldsLV.Elements) != 1 {
+		t.Fatalf("expected *ListValue{ElemType: text, len: 1}, got %T %+v", val, val)
+	}
+
+	val, err = EvalProgram(`do decode_json '[1, 2]'`+"\n", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("decode_json array failed: %v", err)
+	}
+	jsonLV, ok := val.(*ListValue)
+	if !ok || jsonLV.ElemType != "number" || len(jsonLV.Elements) != 2 {
+		t.Fatalf("expected *ListValue{ElemType: number, len: 2} from decode_json, got %T %+v", val, val)
+	}
+
+	val, err = EvalProgram(`do decode_json '[]'`+"\n", &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("decode_json empty array failed: %v", err)
+	}
+	emptyJSONLV, ok := val.(*ListValue)
+	if !ok || emptyJSONLV.ElemType != "" || len(emptyJSONLV.Elements) != 0 {
+		t.Fatalf("expected *ListValue{ElemType: \"\", len: 0} from empty decode_json, got %T %+v", val, val)
+	}
+
+	// Rule 1 & Rule 2 & Rule 3 & Rule 4 & Rule 5 via Ease source + checks.
+	src := `
+def user
+    id   = 0
+    name = "Gast"
+end
+
+def team
+    title  = ""
+    scores = list as number
+end
+
+def particle
+    x     = 0
+    vx    = 10
+    life  = 100
+    state = "active" | "dead"
+end
+
+def ticket = "vip" | "standard"
+
+test "Rule 1 & 2: strict list types and 'as' validation"
+    (list 1, 2) as number is list 1, 2
+    (list "vip", "standard") as ticket is list "vip", "standard"
+    (do decode_json '[1, 2, 3]') as number is list 1, 2, 3
+    (do decode_json '["a", "b"]') as text is list "a", "b"
+    users = (do decode_json '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]') as user
+    do len users is 2
+    users.0 is user
+    users.0.name is "Ada"
+    users.1.id is 2
+
+    t = (do decode_json '{"title": "Red", "scores": [10, 20]}') as team
+    t is team
+    t.scores is list 10, 20
+
+    (list "a", "b") as number raises "Cannot convert list to number"
+    (list 1, 2) as text raises "Cannot convert list to text"
+    (list "vip", "gold") as ticket raises "not valid for union"
+    (do decode_json '[1, "bad"]') as number raises "element 1 expected number, got text"
+    (do decode_json '[{"id": 1, "name": "Ada"}, {"id": 2}]') as user raises "Missing field 'user.1.name'"
+    (do decode_json '{"title": "Red", "scores": [10, "bad"]}') as team raises "Element 'team.scores.1' expected number"
+end
+
+test "Rule 3: homogeneous list concatenation with +"
+    combined = (list 1, 2) + (list 3, 4)
+    combined is list 1, 2, 3, 4
+    combined2 = (list as number) + (list 5, 6)
+    combined2 is list 5, 6
+    combined3 = (list 7, 8) + (do decode_json '[]')
+    combined3 is list 7, 8
+    ((list 1, 2) + (list "a", "b")) raises "Cannot concatenate list of number and list of text"
+    ((list as number) + (list as text)) raises "Cannot concatenate list of number and list of text"
+end
+
+test "Rule 4: batch-with on record lists"
+    cloud = list as particle with
+        x = 0, vx = 5, life = 20
+        x = 10, vx = 2, life = 5
+    end
+    moved = cloud with x = x + vx
+    do len moved is 2
+    moved.0 is particle
+    moved.0.x is 5
+    moved.1.x is 12
+    cloud.0.x is 0
+
+    p1 = particle with x = 1, vx = 3
+    p2 = particle with x = 4, vx = 6
+    moved2 = (list p1, p2) with x = x + vx
+    moved2.0.x is 4
+    moved2.1.x is 10
+    (moved2 + (list p1)).2.x is 1
+
+    ((list 1, 2) with x = 1) raises "Cannot use 'with'"
+end
+
+test "Rule 5: push type lock and value semantics under aliasing"
+    r = do range 1 1
+    a = do push r 2
+    b = do push a 3
+    c = do push a 4
+    a is list 1, 2
+    b is list 1, 2, 3
+    c is list 1, 2, 4
+
+    dyn = do decode_json '[]'
+    dyn_num = do push dyn 42
+    dyn_num is list 42
+    do len dyn is 0
+    do push dyn_num "bad" raises "Cannot push text into list of number"
+    bad_empty = list as number
+    do push bad_empty "bad" raises "Cannot push text into list of number"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 37 {
+		t.Fatalf("expected 37 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Verify TypeError stage explicitly for cast, +, and push failures.
+	typeErrCases := []struct {
+		name string
+		src  string
+	}{
+		{"cast list mismatch", `x = (list "a", "b") as number`},
+		{"cast mixed json array", `x = (do decode_json '[1, "bad"]') as number`},
+		{"concat mismatch", `x = (list 1, 2) + (list "a", "b")`},
+		{"push mismatch", "xs = list 1, 2\nys = do push xs \"x\""},
+	}
+	for _, tc := range typeErrCases {
+		_, err := EvalProgram(tc.src+"\n", &bytes.Buffer{})
+		var easeErr *EaseError
+		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
+			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
+		}
+	}
+
+	// Verify batch-with preserves ElemType ("particle") and O(1) push backing-array reuse vs fork copy.
+	prog, err := ParseProgram(`
+def particle
+    x = 0
+    vx = 10
+end
+cloud = list as particle with
+    x = 1, vx = 2
+end
+moved = cloud with x = x + vx
+`)
+	if err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	ev := NewEvaluator("", prog, &bytes.Buffer{})
+	defer ev.Close()
+	if _, err := ev.ExecStatements(prog.Body, ev.global); err != nil {
+		t.Fatalf("ExecStatements failed: %v", err)
+	}
+	movedVal, ok := ev.global.Lookup("moved")
+	movedLV, isLV := movedVal.(*ListValue)
+	if !ok || !isLV || movedLV.ElemType != "particle" {
+		t.Fatalf("expected moved to be *ListValue{ElemType: particle}, got %#v", movedVal)
+	}
+
+	// Verify amortized O(1) push: linear chain reuses spare capacity; branching copies without aliasing corruption.
+	prealloc := make([]Value, 2, 8)
+	prealloc[0] = 1.0
+	prealloc[1] = 2.0
+	base := &ListValue{ElemType: "number", Elements: prealloc}
+	b1Val, handled, err := ev.callBuiltin("push", []Value{base, 3.0}, 1, 1)
+	if !handled || err != nil {
+		t.Fatalf("first push failed: handled=%v err=%v", handled, err)
+	}
+	b1 := b1Val.(*ListValue)
+	if &b1.Elements[0] != &base.Elements[0] {
+		t.Fatalf("expected linear first push to reuse spare slice capacity in O(1)")
+	}
+	b2Val, handled, err := ev.callBuiltin("push", []Value{base, 4.0}, 1, 1)
+	if !handled || err != nil {
+		t.Fatalf("second branched push failed: handled=%v err=%v", handled, err)
+	}
+	b2 := b2Val.(*ListValue)
+	if &b2.Elements[0] == &b1.Elements[0] {
+		t.Fatalf("expected branched push on already-pushed list to allocate a fresh backing array")
+	}
+	if b1.Elements[2] != 3.0 || b2.Elements[2] != 4.0 {
+		t.Fatalf("value semantics corrupted: b1=%v b2=%v", b1.Elements, b2.Elements)
+	}
+}

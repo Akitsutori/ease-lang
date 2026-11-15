@@ -42,17 +42,14 @@ type UnionValue struct {
 type ListValue struct {
 	ElemType string
 	Elements []Value
+	pushed   bool
 }
 
 func asListElements(v Value) ([]Value, string, bool) {
-	switch lv := v.(type) {
-	case []Value:
-		return lv, "", true
-	case *ListValue:
+	if lv, ok := v.(*ListValue); ok {
 		return lv.Elements, lv.ElemType, true
-	default:
-		return nil, "", false
 	}
+	return nil, "", false
 }
 
 // FormatValue returns a clean, beginner-friendly display string for an Ease value.
@@ -78,9 +75,9 @@ func FormatValue(v Value) string {
 		return strconv.FormatFloat(val, 'f', -1, 64)
 	case string:
 		return val
-	case []Value:
-		parts := make([]string, len(val))
-		for i, el := range val {
+	case *ListValue:
+		parts := make([]string, len(val.Elements))
+		for i, el := range val.Elements {
 			if s, ok := el.(string); ok {
 				parts[i] = strconv.Quote(s)
 			} else {
@@ -88,8 +85,6 @@ func FormatValue(v Value) string {
 			}
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
-	case *ListValue:
-		return FormatValue(val.Elements)
 	case *RecordValue:
 		parts := make([]string, 0, len(val.Order))
 		for _, k := range val.Order {
@@ -138,7 +133,7 @@ func TypeName(v Value) string {
 		return "number"
 	case string:
 		return "text"
-	case []Value, *ListValue:
+	case *ListValue:
 		return "list"
 	case *RecordValue:
 		return val.TypeName
@@ -169,7 +164,7 @@ func matchesEaseType(v Value, typeName string) bool {
 		_, ok := v.(float64)
 		return ok
 	case "list":
-		_, _, ok := asListElements(v)
+		_, ok := v.(*ListValue)
 		return ok
 	default:
 		if rec, ok := v.(*RecordValue); ok {
@@ -213,24 +208,13 @@ func ValuesEqual(a, b Value) bool {
 	case string:
 		vb, ok := b.(string)
 		return ok && va == vb
-	case []Value:
-		vb, _, ok := asListElements(b)
-		if !ok || len(va) != len(vb) {
-			return false
-		}
-		for i := range va {
-			if !ValuesEqual(va[i], vb[i]) {
-				return false
-			}
-		}
-		return true
 	case *ListValue:
-		vb, _, ok := asListElements(b)
-		if !ok || len(va.Elements) != len(vb) {
+		vb, ok := b.(*ListValue)
+		if !ok || len(va.Elements) != len(vb.Elements) {
 			return false
 		}
 		for i := range va.Elements {
-			if !ValuesEqual(va.Elements[i], vb[i]) {
+			if !ValuesEqual(va.Elements[i], vb.Elements[i]) {
 				return false
 			}
 		}
@@ -619,7 +603,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		if err != nil {
 			return nil, nil, err
 		}
-		items, _, ok := asListElements(iterVal)
+		lv, ok := iterVal.(*ListValue)
 		if !ok {
 			line, col := s.Iterable.Pos()
 			return nil, nil, newError(
@@ -628,11 +612,11 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				col,
 				ev.source,
 				fmt.Sprintf("'for' requires a list, got %s", TypeName(iterVal)),
-				"Iterate over a list like 'list 1, 2, 3' or 'range(0, 5)'.",
+				"Iterate over a list like 'list 1, 2, 3' or 'range 0 5'.",
 			)
 		}
 		var last Value
-		for _, item := range items {
+		for _, item := range lv.Elements {
 			loopEnv := NewEnv(env)
 			if s.ItemName != "" {
 				loopEnv.Define(s.ItemName, item, false)
@@ -782,34 +766,37 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			items[i] = v
 		}
-		if e.Homogeneous && len(items) > 0 {
-			firstType := TypeName(items[0])
-			for i := 1; i < len(items); i++ {
-				if TypeName(items[i]) != firstType {
-					line, col := e.Elements[i].Pos()
-					return nil, newError(
-						"RuntimeError",
-						line,
-						col,
-						ev.source,
-						fmt.Sprintf("Mixed types in 'list': expected %s, got %s", firstType, TypeName(items[i])),
-						"All elements in a 'list' must have the same type. Use 'def' records for structured data.",
-					)
-				}
-			}
-			return &ListValue{ElemType: firstType, Elements: items}, nil
+		if len(items) == 0 {
+			return &ListValue{ElemType: "", Elements: items}, nil
 		}
-		return items, nil
+		firstType := structuredTypeName(items[0])
+		for i := 1; i < len(items); i++ {
+			gotType := structuredTypeName(items[i])
+			if gotType != firstType {
+				line, col := e.Elements[i].Pos()
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Mixed types in 'list': expected %s, got %s", firstType, gotType),
+					"All elements in a 'list' must have the same type. Use 'def' records for structured data.",
+				)
+			}
+		}
+		return &ListValue{ElemType: firstType, Elements: items}, nil
 
 	case *TypedListExpr:
 		if len(e.Rows) == 0 {
 			if e.ElemType != "number" && e.ElemType != "text" {
 				protoVal, ok := ev.global.Lookup(e.ElemType)
 				if !ok {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def' or use 'number' / 'text'.")
+					return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def', a union, or use 'number' / 'text'.")
 				}
-				if _, isRec := protoVal.(*RecordValue); !isRec {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text'.")
+				_, isRec := protoVal.(*RecordValue)
+				_, isUnion := protoVal.(*UnionValue)
+				if !isRec && !isUnion {
+					return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record or union type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text'.")
 				}
 			}
 			return &ListValue{ElemType: e.ElemType}, nil
@@ -923,11 +910,6 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		}
 		idx := int(idxFloat)
 		switch container := targetVal.(type) {
-		case []Value:
-			if idx < 0 || idx >= len(container) {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("List index %d out of range (length %d)", idx, len(container)), "Valid indices are 0 to len(list) - 1.")
-			}
-			return container[idx], nil
 		case *ListValue:
 			if idx < 0 || idx >= len(container.Elements) {
 				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("List index %d out of range (length %d)", idx, len(container.Elements)), "Valid indices are 0 to len(list) - 1.")
@@ -1009,6 +991,9 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if lv, isList := baseVal.(*ListValue); isList {
+			return ev.cloneRecordListWithUpdates(lv, e.Updates, env, e.Line, e.Col)
+		}
 		rec, ok := baseVal.(*RecordValue)
 		if !ok {
 			return nil, newError(
@@ -1036,6 +1021,89 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 
 	line, col := expr.Pos()
 	return nil, newError("RuntimeError", line, col, ev.source, "Unsupported expression", "")
+}
+
+func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFieldUpdate, env *Env, line, col int) (*ListValue, error) {
+	if len(lv.Elements) == 0 {
+		if lv.ElemType == "" {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				"Cannot use 'with' on empty untyped list",
+				"'with' on a list only supports lists of 'def' records.",
+			)
+		}
+		if lv.ElemType == "number" || lv.ElemType == "text" {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'with' on list of %s", lv.ElemType),
+				"'with' on a list only supports lists of 'def' records.",
+			)
+		}
+		protoVal, ok := env.Lookup(lv.ElemType)
+		if !ok {
+			protoVal, ok = ev.global.Lookup(lv.ElemType)
+		}
+		recProto, isRec := protoVal.(*RecordValue)
+		if !ok || !isRec {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'with' on list of %s", lv.ElemType),
+				"'with' on a list only supports lists of 'def' records.",
+			)
+		}
+		for _, upd := range updates {
+			if _, exists := recProto.Fields[upd.Name]; !exists {
+				return nil, newError(
+					"RuntimeError",
+					upd.Line,
+					upd.Col,
+					ev.source,
+					fmt.Sprintf("%s has no field %q", recProto.TypeName, upd.Name),
+					fmt.Sprintf("Available fields: %s", strings.Join(recProto.Order, ", ")),
+				)
+			}
+		}
+		return &ListValue{ElemType: lv.ElemType}, nil
+	}
+
+	out := make([]Value, 0, len(lv.Elements))
+	elemType := lv.ElemType
+	for _, item := range lv.Elements {
+		rec, ok := item.(*RecordValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'with' on list of %s", structuredTypeName(item)),
+				"'with' on a list only supports lists of 'def' records.",
+			)
+		}
+		if elemType == "" {
+			elemType = rec.TypeName
+		}
+		itemEnv := NewEnv(env)
+		for k, v := range rec.Fields {
+			itemEnv.Define(k, v, false)
+		}
+		itemEnv.Define("it", rec, false)
+		inst, err := ev.cloneRecordWithUpdates(rec, updates, itemEnv)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, inst)
+	}
+	return &ListValue{ElemType: elemType, Elements: out}, nil
 }
 
 func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFieldUpdate, env *Env) (*RecordValue, error) {
@@ -1117,12 +1185,26 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 		if _, rok := right.(string); rok {
 			return FormatValue(left) + FormatValue(right), nil
 		}
-		if la, ok := left.([]Value); ok {
-			if rb, ok2 := right.([]Value); ok2 {
-				merged := make([]Value, 0, len(la)+len(rb))
-				merged = append(merged, la...)
-				merged = append(merged, rb...)
-				return merged, nil
+		if la, ok := left.(*ListValue); ok {
+			if rb, ok2 := right.(*ListValue); ok2 {
+				if la.ElemType != "" && rb.ElemType != "" && la.ElemType != rb.ElemType {
+					return nil, newError(
+						"TypeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Cannot concatenate list of %s and list of %s", la.ElemType, rb.ElemType),
+						"Both lists in '+' must have the same element type.",
+					)
+				}
+				elemType := la.ElemType
+				if elemType == "" {
+					elemType = rb.ElemType
+				}
+				merged := make([]Value, 0, len(la.Elements)+len(rb.Elements))
+				merged = append(merged, la.Elements...)
+				merged = append(merged, rb.Elements...)
+				return &ListValue{ElemType: elemType, Elements: merged}, nil
 			}
 		}
 		ln, lok := left.(float64)
@@ -1221,8 +1303,6 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			return nil, true, newError("RuntimeError", line, col, ev.source, "len() takes 1 argument", "")
 		}
 		switch v := args[0].(type) {
-		case []Value:
-			return float64(len(v)), true, nil
 		case *ListValue:
 			return float64(len(v.Elements)), true, nil
 		case string:
@@ -1274,26 +1354,44 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		for i := start; i <= end; i++ {
 			out = append(out, float64(i))
 		}
-		return out, true, nil
+		return &ListValue{ElemType: "number", Elements: out}, true, nil
 
 	case "push":
 		if len(args) != 2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "push(list, item) takes 2 arguments", "")
 		}
-		xs, elemType, ok := asListElements(args[0])
+		listVal, ok := args[0].(*ListValue)
 		if !ok {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "push() expects a list as first argument", "")
+			return nil, true, newError("TypeError", line, col, ev.source, "push() expects a list as first argument", "")
 		}
-		if elemType != "" && !matchesEaseType(args[1], elemType) {
-			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot push %s into list of %s", TypeName(args[1]), elemType), fmt.Sprintf("This list only accepts elements of type %q.", elemType))
-		}
-		next := make([]Value, len(xs)+1)
-		copy(next, xs)
-		next[len(xs)] = args[1]
+		gotType := structuredTypeName(args[1])
+		elemType := listVal.ElemType
 		if elemType != "" {
-			return &ListValue{ElemType: elemType, Elements: next}, true, nil
+			if !matchesListElemType(args[1], elemType, ev.global) {
+				return nil, true, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot push %s into list of %s", gotType, elemType),
+					fmt.Sprintf("This list only accepts elements of type %q.", elemType),
+				)
+			}
+		} else {
+			elemType = gotType
 		}
-		return next, true, nil
+		var next []Value
+		if !listVal.pushed {
+			listVal.pushed = true
+			next = append(listVal.Elements, args[1])
+		} else {
+			newLen := len(listVal.Elements) + 1
+			newCap := max(4, newLen*2)
+			next = make([]Value, newLen, newCap)
+			copy(next, listVal.Elements)
+			next[len(listVal.Elements)] = args[1]
+		}
+		return &ListValue{ElemType: elemType, Elements: next}, true, nil
 
 	case "abs":
 		if len(args) != 1 {
@@ -1335,7 +1433,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			for i, k := range mv.Order {
 				out[i] = k
 			}
-			return out, true, nil
+			return &ListValue{ElemType: "text", Elements: out}, true, nil
 		}
 		rec, ok := args[0].(*RecordValue)
 		if !ok {
@@ -1345,7 +1443,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		for i, k := range rec.Order {
 			out[i] = k
 		}
-		return out, true, nil
+		return &ListValue{ElemType: "text", Elements: out}, true, nil
 
 	case "decode_json":
 		if len(args) != 1 {
@@ -1523,10 +1621,18 @@ func jsonAnyToEase(v any) Value {
 		return &MapValue{Fields: fields, Order: order}
 	case []any:
 		out := make([]Value, len(x))
+		elemType := ""
 		for i, el := range x {
-			out[i] = jsonAnyToEase(el)
+			conv := jsonAnyToEase(el)
+			out[i] = conv
+			et := structuredTypeName(conv)
+			if i == 0 {
+				elemType = et
+			} else if elemType != "" && et != elemType {
+				elemType = ""
+			}
 		}
-		return out
+		return &ListValue{ElemType: elemType, Elements: out}
 	default:
 		return x
 	}
@@ -1556,12 +1662,6 @@ func validateJSONEncodable(v Value) error {
 				return err
 			}
 		}
-	case []Value:
-		for _, el := range x {
-			if err := validateJSONEncodable(el); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }
@@ -1586,14 +1686,198 @@ func easeValueToJSON(v Value) any {
 			out[i] = easeValueToJSON(el)
 		}
 		return out
-	case []Value:
-		out := make([]any, len(x))
-		for i, el := range x {
-			out[i] = easeValueToJSON(el)
-		}
-		return out
 	default:
 		return x
+	}
+}
+
+func valueInUnion(v Value, union *UnionValue) bool {
+	for _, opt := range union.Values {
+		if ValuesEqual(v, opt) {
+			return true
+		}
+	}
+	return false
+}
+
+func lookupUnion(env *Env, name string) (*UnionValue, bool) {
+	if env == nil {
+		return nil, false
+	}
+	v, ok := env.Lookup(name)
+	if !ok {
+		return nil, false
+	}
+	u, isUnion := v.(*UnionValue)
+	return u, isUnion
+}
+
+func matchesListElemType(v Value, elemType string, env *Env) bool {
+	switch elemType {
+	case "number":
+		_, ok := v.(float64)
+		return ok
+	case "text":
+		_, ok := v.(string)
+		return ok
+	default:
+		if rec, ok := v.(*RecordValue); ok {
+			return rec.TypeName == elemType
+		}
+		if union, ok := lookupUnion(env, elemType); ok {
+			return valueInUnion(v, union)
+		}
+		return false
+	}
+}
+
+func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col int, env *Env) (Value, error) {
+	switch targetType {
+	case "number", "text":
+		if lv.ElemType != "" && lv.ElemType != targetType {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert list to %s: expected %s elements, got %s", targetType, targetType, lv.ElemType),
+				fmt.Sprintf("Every element of a list cast 'as %s' must be %s.", targetType, targetType),
+			)
+		}
+		elems := make([]Value, len(lv.Elements))
+		for idx, item := range lv.Elements {
+			if !matchesEaseType(item, targetType) {
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot convert list to %s: element %d expected %s, got %s (%s)", targetType, idx, targetType, structuredTypeName(item), FormatValue(item)),
+					fmt.Sprintf("Every element of a list cast 'as %s' must be %s.", targetType, targetType),
+				)
+			}
+			elems[idx] = item
+		}
+		return &ListValue{ElemType: targetType, Elements: elems}, nil
+
+	default:
+		protoVal, ok := env.Lookup(targetType)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Unknown type %q after 'as'", targetType),
+				"Only built-in types (text, number) or a previously defined/imported 'def' blueprint are allowed after 'as'.",
+			)
+		}
+
+		if union, isUnion := protoVal.(*UnionValue); isUnion {
+			if len(lv.Elements) == 0 && lv.ElemType != "" && lv.ElemType != targetType {
+				compatible := false
+				for _, opt := range union.Values {
+					if structuredTypeName(opt) == lv.ElemType {
+						compatible = true
+						break
+					}
+				}
+				if !compatible {
+					return nil, newError(
+						"TypeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Cannot validate list of %s as union %q", lv.ElemType, targetType),
+						fmt.Sprintf("List element type %q does not match any variant of %s.", lv.ElemType, targetType),
+					)
+				}
+			}
+			allowed := make([]string, len(union.Values))
+			for i, opt := range union.Values {
+				allowed[i] = FormatValue(opt)
+			}
+			elems := make([]Value, len(lv.Elements))
+			for idx, item := range lv.Elements {
+				if !valueInUnion(item, union) {
+					return nil, newError(
+						"TypeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Value %s at element %d is not valid for union %q", FormatValue(item), idx, targetType),
+						fmt.Sprintf("Allowed values for %s: %s.", targetType, strings.Join(allowed, ", ")),
+					)
+				}
+				elems[idx] = item
+			}
+			return &ListValue{ElemType: targetType, Elements: elems}, nil
+		}
+
+		proto, isRec := protoVal.(*RecordValue)
+		if !isRec || !proto.IsPrototype {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("%q is not a 'def' blueprint or built-in type", targetType),
+				"Only built-in types (text, number) or a 'def' blueprint can be used after 'as'.",
+			)
+		}
+
+		if len(lv.Elements) == 0 && lv.ElemType != "" && lv.ElemType != targetType {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot validate list as %s: expected structured map or %s record, got list of %s", targetType, targetType, lv.ElemType),
+				fmt.Sprintf("Expected a list of maps from 'do decode_json' or %s records.", targetType),
+			)
+		}
+
+		elems := make([]Value, 0, len(lv.Elements))
+		for idx, item := range lv.Elements {
+			if rec, ok := item.(*RecordValue); ok {
+				if rec.TypeName != targetType {
+					return nil, newError(
+						"TypeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Cannot validate list as %s: expected structured map or %s record (element %d is %s)", targetType, targetType, idx, rec.TypeName),
+						fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", targetType, targetType),
+					)
+				}
+				elems = append(elems, rec)
+				continue
+			}
+			mv, isMap := item.(*MapValue)
+			if !isMap || mv == nil {
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot validate list as %s: expected structured map or %s record (element %d is %s)", targetType, targetType, idx, structuredTypeName(item)),
+					fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", targetType, targetType),
+				)
+			}
+			mapped, mapErr := mapToRecord(mv.Fields, proto, env, fmt.Sprintf("%s.%d", targetType, idx))
+			if mapErr != nil {
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					mapErr.Error(),
+					fmt.Sprintf("Ensure all fields declared in 'def %s' are present with matching types and valid union values.", targetType),
+				)
+			}
+			elems = append(elems, mapped)
+		}
+		return &ListValue{ElemType: targetType, Elements: elems}, nil
 	}
 }
 
@@ -1603,6 +1887,10 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		line, col = e.Line, e.Col
 	}
 
+	if lv, isList := targetVal.(*ListValue); isList {
+		return ev.castListValue(lv, e.TypeName, line, col, env)
+	}
+
 	switch e.TypeName {
 	case "text":
 		switch v := targetVal.(type) {
@@ -1610,7 +1898,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 			return v, nil
 		case float64:
 			return FormatValue(v), nil
-		case *RecordValue, *MapValue, *ListValue, []Value:
+		case *RecordValue, *MapValue:
 			return nil, newError(
 				"TypeError",
 				line,
@@ -1819,12 +2107,21 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 		}
 		return mapToRecord(subMap.Fields, tmpl, env, path)
 	case *ListValue:
-		arr, _, ok := asListElements(val)
+		lv, ok := val.(*ListValue)
 		if !ok {
 			return nil, fmt.Errorf("Field '%s' expected list, got %s", path, structuredTypeName(val))
 		}
-		elems := make([]Value, 0, len(arr))
-		for idx, item := range arr {
+		if (tmpl.ElemType == "number" || tmpl.ElemType == "text") && lv.ElemType != "" && lv.ElemType != tmpl.ElemType {
+			return nil, fmt.Errorf("Field '%s' expected list of %s, got list of %s", path, tmpl.ElemType, lv.ElemType)
+		}
+		if tmpl.ElemType != "" && len(lv.Elements) == 0 && lv.ElemType != "" && lv.ElemType != tmpl.ElemType {
+			if _, isUnion := lookupUnion(env, tmpl.ElemType); !isUnion {
+				return nil, fmt.Errorf("Field '%s' expected list of %s, got list of %s", path, tmpl.ElemType, lv.ElemType)
+			}
+		}
+		elems := make([]Value, 0, len(lv.Elements))
+		outElemType := tmpl.ElemType
+		for idx, item := range lv.Elements {
 			elemPath := fmt.Sprintf("%s.%d", path, idx)
 			if tmpl.ElemType != "" {
 				switch tmpl.ElemType {
@@ -1841,6 +2138,17 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 					}
 					elems = append(elems, s)
 				default:
+					protoVal, found := env.Lookup(tmpl.ElemType)
+					if !found {
+						return nil, fmt.Errorf("Unknown list element blueprint %q for '%s'", tmpl.ElemType, elemPath)
+					}
+					if union, isUnion := protoVal.(*UnionValue); isUnion {
+						if !valueInUnion(item, union) {
+							return nil, fmt.Errorf("Invalid value %s for element '%s' of union %q", FormatValue(item), elemPath, tmpl.ElemType)
+						}
+						elems = append(elems, item)
+						continue
+					}
 					if subRec, ok := item.(*RecordValue); ok && subRec.TypeName == tmpl.ElemType {
 						elems = append(elems, subRec)
 						continue
@@ -1848,10 +2156,6 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 					subMap, ok := item.(*MapValue)
 					if !ok || subMap == nil {
 						return nil, fmt.Errorf("Element '%s' expected %s map/record, got %s", elemPath, tmpl.ElemType, structuredTypeName(item))
-					}
-					protoVal, found := env.Lookup(tmpl.ElemType)
-					if !found {
-						return nil, fmt.Errorf("Unknown list element blueprint %q for '%s'", tmpl.ElemType, elemPath)
 					}
 					proto, isRec := protoVal.(*RecordValue)
 					if !isRec || !proto.IsPrototype {
@@ -1864,10 +2168,16 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 					elems = append(elems, rec)
 				}
 			} else {
+				et := structuredTypeName(item)
+				if idx == 0 {
+					outElemType = et
+				} else if et != outElemType {
+					return nil, fmt.Errorf("Element '%s' expected %s, got %s", elemPath, outElemType, et)
+				}
 				elems = append(elems, item)
 			}
 		}
-		return &ListValue{ElemType: tmpl.ElemType, Elements: elems}, nil
+		return &ListValue{ElemType: outElemType, Elements: elems}, nil
 	default:
 		return val, nil
 	}
