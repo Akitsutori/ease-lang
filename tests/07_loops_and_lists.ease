@@ -19,7 +19,7 @@ to count_down start
     out = list as number
     cur = start
     repeat start
-        out = do push out, cur
+        out = do push out cur
         cur = cur - 1
     end
     out
@@ -56,7 +56,7 @@ test "Listen, Schleifen & Verzweigungen"
     end
     sum_x is 10
 
-    nums = do range 1, 4
+    nums = do range 1 4
     do sum_squares nums is 30
     do count_down 3 is list 3, 2, 1
     do classify 5 is "positiv"

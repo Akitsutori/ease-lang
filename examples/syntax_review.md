@@ -35,18 +35,18 @@ Diese Übersicht prüft jede Syntax-Behauptung in [`README.md`](../README.md) Ze
   9. Zuweisung ohne rechte Seite: `x =`
   10. Zuweisung an Literal: `1 = 2`
 
-## 3. Functions (`to ... end`) & Calls (`do`) (`README.md` L105–L128, L385–L388, L403–L404, L471, L483–L485)
-- **Happy Path**: `to add a, b ... end`, `to add_cf a b ... end`, `do add 2, 3`, `do add_cf 2 3`, `to ask client, path`
+## 3. Functions (`to ... end`) & Calls (`do`) (`README.md`)
+- **Happy Path**: `to add a b ... end`, `do add 2 3`, `to ask client path` (keine Kommas in Parameterlisten und Aufrufen)
 - **10 Negativtests**:
   1. Fehlendes `end` am Dateiende: `to f x\n x + 1`
   2. Fehlendes `end` vor `test`: `to f x\n x\ntest\n 1 is 1\nend`
   3. Legacy-Parameterklammern: `to f [a b]\n a\nend`
   4. Legacy-Funktionsaufruf mit Klammern: `add(1, 2)`
-  5. Legacy `report x` / `return x`
+  5. Kommas in Parametern/Aufrufen: `to f a, b` / `do f 1, 2`
   6. Verschachteltes `to` in `to`
   7. Keyword als Parametername: `to f if\n 1\nend`
   8. Zu wenige Argumente (`do add 1` -> `raises` in `.ease`)
-  9. Zu viele Argumente (`do add 1, 2, 3` -> `raises` in `.ease`)
+  9. Zu viele Argumente (`do add 1 2 3` -> `raises` in `.ease`)
   10. Unbekannte Funktion (`do unbekannt 1` -> `raises` in `.ease`)
 
 ## 4. Records (`def`), `with` Copies & Unions (`README.md` L134–L153, L390–L394, L459–L467)
@@ -77,22 +77,22 @@ Diese Übersicht prüft jede Syntax-Behauptung in [`README.md`](../README.md) Ze
   9. Nicht-wahrheitswertige `if`-Bedingung (`if 42` -> `raises` in `.ease`)
   10. Nicht-wahrheitswertige `check`-Bedingung (`check "yes" -> "ok"` -> `raises` in `.ease`)
 
-## 6. Type Checks (`is`, `is not`, `is-not`) & Logic (`README.md` L201, L445–L454)
-- **Happy Path**: `is`, `is not`, `is-not`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`, `is text`, `is number`, `is list`
+## 6. Type Checks (`is`, `is not`) & Logic (`README.md`)
+- **Happy Path**: `is`, `is not`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`, `is text`, `is number`, `is list`
 - **10 Negativtests**:
   1. `x is bool` (`bool` ist kein Typ)
   2. `x is not bool`
-  3. `x is` ohne rechte Seite
-  4. `x ==` ohne rechte Seite
-  5. `and true` ohne linke Seite
+  3. `x == 1` / `x != 1` / `x is-not 1` (entfernte Legacy-Operatoren)
+  4. `x is` ohne rechte Seite
+  5. `and (1 > 0)` ohne linke Seite
   6. `not 42` (`raises` in `.ease`)
-  7. `1 and true` (`raises` in `.ease`)
-  8. `true or 1` (`raises` in `.ease`)
+  7. `1 and (1 > 0)` (`raises` in `.ease`)
+  8. `(1 > 0) or 1` (`raises` in `.ease`)
   9. `"a" < 1` (`raises` in `.ease`)
-  10. `true < false` (`raises` in `.ease`)
+  10. `(1 > 0) < (1 < 0)` (`raises` in `.ease`)
 
-## 7. Strict `as` Casting (`README.md` L202–L228, L469, L495)
-- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `"{...}" as api_user`, `do ask client, "/x" as api_user`
+## 7. Strict `as` Casting (`README.md`)
+- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `"{...}" as api_user`, `do ask client "/x" as api_user`
 - **10 Negativtests**:
   1. Unbekannter Unicode-Typ: `x as ö` (Parse/TypeError)
   2. Tippfehler: `x as api_usre` (Parse/TypeError mit Vorschlag)
@@ -105,8 +105,8 @@ Diese Übersicht prüft jede Syntax-Behauptung in [`README.md`](../README.md) Ze
   9. Ungültiger Union-Wert: `"pending" as ticket` (`raises` in `.ease`)
   10. Ungültiges JSON / Feldtyp / `null` (`raises` in `.ease`)
 
-## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `repeat`, `for`) (`README.md` L234–L271, L419–L422, L460, L489–L492)
-- **Happy Path**: `list 10, 25, 40`, `scores.0`, `list as number`, `list as player with ... end`, `repeat 3`, `for i in do range 1, 10`, `for xs do say it end`
+## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `repeat`, `for`) (`README.md`)
+- **Happy Path**: `list 10, 25, 40`, `scores.0`, `list as number`, `list as player with ... end`, `repeat 3`, `for i in do range 1 10`, `for xs do say it end`
 - **10 Negativtests**:
   1. Legacy-Listenliteral `[1, 2, 3]`
   2. Legacy-Indexierung `scores[0]`

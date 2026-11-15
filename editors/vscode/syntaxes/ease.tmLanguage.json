@@ -78,7 +78,7 @@
         },
         {
           "name": "keyword.other.ease",
-          "match": "\\b(def|with|do|say|ask|as|is-not|is|raises)\\b"
+          "match": "\\b(def|with|do|say|ask|as|is|raises)\\b"
         },
         {
           "name": "keyword.operator.logical.ease",
@@ -94,19 +94,11 @@
         }
       ]
     },
-    "constants": {
-      "patterns": [
-        {
-          "name": "constant.language.boolean.ease",
-          "match": "\\b(true|false)\\b"
-        }
-      ]
-    },
     "numbers": {
       "patterns": [
         {
           "name": "constant.numeric.ease",
-          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+          "match": "(?<!\\w)-?\\d+(?:\\.\\d+)?\\b"
         }
       ]
     },
@@ -114,7 +106,7 @@
       "patterns": [
         {
           "name": "keyword.operator.ease",
-          "match": "(->|==|!=|<=|>=|<|>|\\+|-|\\*|/|%|=|\\|)"
+          "match": "(->|<=|>=|<|>|\\+|-|\\*|/|%|=|\\|)"
         }
       ]
     }

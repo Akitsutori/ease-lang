@@ -162,19 +162,15 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		case '=':
 			l.advance()
 			if l.peek() == '=' {
-				l.advance()
-				tokens = append(tokens, Token{Type: TOK_EQ, Lexeme: "==", Line: line, Col: col})
-			} else {
-				tokens = append(tokens, Token{Type: TOK_ASSIGN, Lexeme: "=", Line: line, Col: col})
+				return nil, newError("SyntaxError", line, col, l.source, "Unexpected '=='", "Ease uses 'is' for equality and type checks (e.g. x is 5).")
 			}
+			tokens = append(tokens, Token{Type: TOK_ASSIGN, Lexeme: "=", Line: line, Col: col})
 		case '!':
 			l.advance()
 			if l.peek() == '=' {
-				l.advance()
-				tokens = append(tokens, Token{Type: TOK_NEQ, Lexeme: "!=", Line: line, Col: col})
-			} else {
-				return nil, newError("SyntaxError", line, col, l.source, "Unexpected '!'", "Use 'not <expr>' for boolean negation, or '!=' for inequality.")
+				return nil, newError("SyntaxError", line, col, l.source, "Unexpected '!='", "Ease uses 'is not' for inequality checks (e.g. x is not 5).")
 			}
+			return nil, newError("SyntaxError", line, col, l.source, "Unexpected '!'", "Use 'not <expr>' or 'is not' for negation.")
 		case '<':
 			l.advance()
 			if l.peek() == '=' {
@@ -354,17 +350,6 @@ func (l *Lexer) scanIdentOrKeyword() Token {
 		b.WriteRune(l.advance())
 	}
 	word := b.String()
-
-	// Special cognitive-ease hyphenated keyword: `is-not`
-	if word == "is" && l.pos+3 < len(l.runes) && string(l.runes[l.pos:l.pos+4]) == "-not" {
-		afterIdx := l.pos + 4
-		if afterIdx >= len(l.runes) || !isIdentPart(l.runes[afterIdx]) {
-			for range 4 {
-				l.advance()
-			}
-			return Token{Type: TOK_IS_NOT, Lexeme: "is-not", Line: line, Col: col}
-		}
-	}
 
 	if kwType, ok := keywords[word]; ok {
 		return Token{Type: kwType, Lexeme: word, Line: line, Col: col}

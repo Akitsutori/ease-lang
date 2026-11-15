@@ -52,8 +52,8 @@ test "import network, ask/send Schnittstelle & Form vs. Inhalt"
     api.token is "demo-token"
 
     # Offline / nicht erreichbare Gegenstelle liefert ehrlich ""
-    raw_get  = do ask api, "/age"
-    raw_post = do send api, "/age", 42
+    raw_get  = do ask api "/age"
+    raw_post = do send api "/age" 42
     raw_get is ""
     raw_post is ""
 

@@ -5,7 +5,7 @@ def player
     state = "idle" | "running" | "KO"
 end
 
-to take_damage p, amount
+to take_damage p amount
     next_hp = p.hp - amount
     check next_hp <= 0 -> p with hp = 0, state = "KO"
     p with hp = next_hp
@@ -13,8 +13,8 @@ end
 
 test "Unveränderliche Records & with-Kopien"
     hero = player with name = "Aria", x = 10
-    injured = do take_damage hero, 35
-    defeated = do take_damage injured, 80
+    injured = do take_damage hero 35
+    defeated = do take_damage injured 80
 
     hero.hp is 100
     injured.hp is 65

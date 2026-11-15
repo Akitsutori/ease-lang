@@ -20,7 +20,7 @@ def http_response
     error  = ""
 end
 
-to ask target, path
+to ask target path
     req = http_request with
         method  = "GET"
         url     = "{target.url}{path}"
@@ -34,7 +34,7 @@ to ask target, path
     res.body
 end
 
-to send target, path, payload
+to send target path payload
     req = http_request with
         method  = "POST"
         url     = "{target.url}{path}"

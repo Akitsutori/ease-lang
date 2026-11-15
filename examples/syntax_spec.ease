@@ -11,16 +11,12 @@ counter = 10
 counter = counter + 5
 greeting = "Hallo \{Ease\}: {counter}"
 
-# 2. Funktionen (mit und ohne Komma) & `to ask`
-to add a, b
+# 2. Funktionen (ohne Kommas!) & `to ask`
+to add a b
     a + b
 end
 
-to add_cf a b
-    a + b
-end
-
-to ask client, path
+to ask client path
     "{client.url}{path}"
 end
 
@@ -44,7 +40,7 @@ ko   = hero with hp = 0, state = "KO"
 
 # 4. Guards (`check`) & Verzweigung (`if`)
 to classify n
-    check n == 0 -> "zero"
+    check n is 0 -> "zero"
     if n > 0
         "positive"
     else
@@ -68,15 +64,15 @@ to bad_not x
     not x
 end
 
-to bad_and a, b
+to bad_and a b
     a and b
 end
 
-to bad_or a, b
+to bad_or a b
     a or b
 end
 
-to bad_lt a, b
+to bad_lt a b
     a < b
 end
 
@@ -101,10 +97,9 @@ test "Happy Paths gemäß README"
     counter is 15
     greeting is "Hallo \{Ease\}: 15"
 
-    do add 2, 3 is 5
-    do add_cf 2 3 is 5
+    do add 2 3 is 5
     client = network with url = "https://example.test"
-    do ask client, "/posts/1" is "https://example.test/posts/1"
+    do ask client "/posts/1" is "https://example.test/posts/1"
 
     hero.hp is 80
     ko.state is "KO"
@@ -123,7 +118,7 @@ test "Happy Paths gemäß README"
     scores.0 is 10
     empty_nums = list as number
     do len empty_nums is 0
-    do range 1, 3 is list 1, 2, 3
+    do range 1 3 is list 1, 2, 3
 end
 
 # ============================================================================
@@ -131,42 +126,46 @@ end
 # ============================================================================
 test "Funktionen & Aufrufe: 10 Negativtests"
     do add 1 raises "expects 2 argument"
-    do add 1, 2, 3 raises "expects 2 argument"
-    do add_cf 1 raises "expects 2 argument"
-    do add_cf 1, 2, 3 raises "expects 2 argument"
+    do add 1 2 3 raises "expects 2 argument"
     do unbekannt 1 raises "Unknown function"
     do missing_fn raises "Unknown function"
-    do ask 123, "/x" raises "Cannot read field"
-    do add true, 1 raises "Cannot add"
-    do add true, false raises "Cannot add"
+    do ask 123 "/x" raises "Cannot read field"
+    cond_yes = 1 > 0
+    cond_no = 1 < 0
+    do add hero 1 raises "Cannot add"
+    do add cond_yes 1 raises "Cannot add"
+    do add cond_yes cond_no raises "Cannot add"
     one_list = list 1
-    do add one_list, 1 raises "Cannot add"
+    do add one_list 1 raises "Cannot add"
+    do add 1 one_list raises "Cannot add"
 end
 
 test "Records, with & Unions: 10 Negativtests"
     (42 with x = 1) raises "Cannot use 'with'"
     ("hi" with x = 1) raises "Cannot use 'with'"
-    (true with x = 1) raises "Cannot use 'with'"
+    ((1 > 0) with x = 1) raises "Cannot use 'with'"
     ((list 1) with x = 1) raises "Cannot use 'with'"
     (hero with mana = 50) raises "has no field"
     (hero with state = "flying") raises "Invalid value"
     (hero with state = 123) raises "Invalid value"
+    (hero with hp = "high") raises "expected number"
     (hero with id = 1) raises "has no field"
     hero.mana raises "has no field"
-    (42).mana raises "Cannot read field"
 end
 
 test "Guards, Verzweigungen, Logik & Vergleiche: 10 Negativtests"
-    do bad_if_cond 42 raises "must be a bool"
-    do bad_if_cond "yes" raises "must be a bool"
-    do bad_check_cond 42 raises "must be a bool"
-    do bad_check_cond "yes" raises "must be a bool"
-    do bad_not 42 raises "requires a bool"
-    do bad_not "no" raises "requires a bool"
-    do bad_and 1, true raises "requires bool"
-    do bad_or false, 1 raises "requires bool"
-    do bad_lt "a", 1 raises "requires numbers"
-    do bad_lt true, false raises "requires numbers"
+    do bad_if_cond 42 raises "must be a condition"
+    do bad_if_cond "yes" raises "must be a condition"
+    do bad_check_cond 42 raises "must be a condition"
+    do bad_check_cond "yes" raises "must be a condition"
+    do bad_not 42 raises "requires a condition"
+    do bad_not "no" raises "requires a condition"
+    cond_yes = 1 > 0
+    cond_no = 1 < 0
+    do bad_and 1 cond_yes raises "requires condition"
+    do bad_or cond_no 1 raises "requires condition"
+    do bad_lt "a" 1 raises "requires numbers"
+    do bad_lt cond_yes cond_no raises "requires numbers"
 end
 
 test "Striktes as Casting (Ausgang B): 10 Negativtests"
@@ -188,7 +187,7 @@ test "Listen, Schleifen & Built-ins: 10 Negativtests"
     xs.99 raises "out of bounds"
     (42).0 raises "Cannot index"
     (list 10, "hi") raises "Mixed types"
-    do push typed, "bad" raises "Cannot push"
+    do push typed "bad" raises "Cannot push"
     do bad_repeat -1 raises "non-negative integer"
     do bad_repeat 1.5 raises "non-negative integer"
     do bad_repeat "3" raises "non-negative integer"

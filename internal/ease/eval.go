@@ -112,11 +112,11 @@ func TypeName(v Value) string {
 	case nil:
 		return "none"
 	case bool:
-		return "bool"
+		return "condition"
 	case float64:
 		return "number"
 	case string:
-		return "string"
+		return "text"
 	case []Value, *ListValue:
 		return "list"
 	case *RecordValue:
@@ -130,7 +130,7 @@ func TypeName(v Value) string {
 
 func matchesEaseType(v Value, typeName string) bool {
 	switch typeName {
-	case "text", "string":
+	case "text":
 		_, ok := v.(string)
 		return ok
 	case "number":
@@ -529,8 +529,8 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("'if' condition must be a bool, got %s (%s)", TypeName(condVal), FormatValue(condVal)),
-				"Use comparisons like 'x > 0', 'name == \"Ada\"', or boolean values 'true'/'false'.",
+				fmt.Sprintf("'if' condition must be a condition, got %s (%s)", TypeName(condVal), FormatValue(condVal)),
+				"Use comparisons like 'x > 0', 'name is \"Ada\"', or 'status is \"open\"'.",
 			)
 		}
 		branchEnv := NewEnv(env)
@@ -620,7 +620,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			}
 			condBool, ok := condVal.(bool)
 			if !ok {
-				return nil, nil, newError("RuntimeError", rule.Line, rule.Col, ev.source, fmt.Sprintf("Check condition must be a bool, got %s", TypeName(condVal)), "")
+				return nil, nil, newError("RuntimeError", rule.Line, rule.Col, ev.source, fmt.Sprintf("Check condition must be a condition, got %s", TypeName(condVal)), "")
 			}
 			if rule.Action != nil {
 				if condBool {
@@ -789,7 +789,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		case "not":
 			b, ok := right.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'not' requires a bool, got %s", TypeName(right)), "Example: not (x == 0)")
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'not' requires a condition, got %s", TypeName(right)), "Example: not (x is 0)")
 			}
 			return !b, nil
 		}
@@ -802,7 +802,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			lb, ok := lv.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'and' requires bool values, got %s", TypeName(lv)), "")
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'and' requires condition values, got %s", TypeName(lv)), "")
 			}
 			if !lb {
 				return false, nil
@@ -813,7 +813,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			rb, ok := rv.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'and' requires bool values, got %s", TypeName(rv)), "")
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'and' requires condition values, got %s", TypeName(rv)), "")
 			}
 			return rb, nil
 		}
@@ -824,7 +824,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			lb, ok := lv.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'or' requires bool values, got %s", TypeName(lv)), "")
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'or' requires condition values, got %s", TypeName(lv)), "")
 			}
 			if lb {
 				return true, nil
@@ -835,7 +835,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			rb, ok := rv.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'or' requires bool values, got %s", TypeName(rv)), "")
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'or' requires condition values, got %s", TypeName(rv)), "")
 			}
 			return rb, nil
 		}
@@ -1009,6 +1009,15 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 					fmt.Sprintf("Allowed values: %s", strings.Join(optStrs, " | ")),
 				)
 			}
+		} else if origVal := cloned[upd.Name]; origVal != nil && TypeName(origVal) != TypeName(newVal) {
+			return nil, newError(
+				"TypeError",
+				upd.Line,
+				upd.Col,
+				ev.source,
+				fmt.Sprintf("Field '%s.%s' expected %s, got %s (%s)", rec.TypeName, upd.Name, TypeName(origVal), TypeName(newVal), FormatValue(newVal)),
+				fmt.Sprintf("Keep the field type of '%s.%s' (%s).", rec.TypeName, upd.Name, TypeName(origVal)),
+			)
 		}
 		cloned[upd.Name] = newVal
 	}
@@ -1438,11 +1447,6 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				)
 			}
 			return n, nil
-		case bool:
-			if v {
-				return float64(1), nil
-			}
-			return float64(0), nil
 		default:
 			return nil, newError(
 				"RuntimeError",

@@ -3,7 +3,7 @@
 to fib n
     check
         n <= 0 -> 0
-        n == 1 -> 1
+        n is 1 -> 1
     end
     left = do fib n - 1
     right = do fib n - 2

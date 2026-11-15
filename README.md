@@ -22,12 +22,13 @@
    - [Type Checks & Conversions (`is`, `is not`, `as`)](#type-checks--conversions-is-is-not-as)
    - [Lists & Loops (`list`, `repeat`, `for`)](#lists--loops-list-repeat-for)
    - [Built-in Tests (`test` & `check`)](#built-in-tests-test--check)
-4. [Standard Modules (`import`)](#standard-modules-import)
-5. [Built-in Verbs](#built-in-verbs)
-6. [Formal Grammar (BNF / EBNF Specification)](#formal-grammar-bnf--ebnf-specification)
-7. [Running Tests & Examples](#running-tests--examples)
-8. [Project Layout & Security](#project-layout--security)
-9. [Contributing & License](#contributing--license)
+4. [Why Ease Is Efficient for AI Agents](#why-ease-is-efficient-for-ai-agents)
+5. [Standard Modules (`import`)](#standard-modules-import)
+6. [Built-in Verbs](#built-in-verbs)
+7. [Formal Grammar (BNF / EBNF Specification)](#formal-grammar-bnf--ebnf-specification)
+8. [Running Tests & Examples](#running-tests--examples)
+9. [Project Layout & Security](#project-layout--security)
+10. [Contributing & License](#contributing--license)
 
 ---
 
@@ -81,7 +82,7 @@ Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <fi
 
 ### Variables, Constants & Types
 
-Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`. By design, **Boolean (`bool`) is not a built-in type in Ease**: instead of artificial true/false flags, domain states are modeled explicitly with union types (e.g. `def door_state = "open" | "locked"`).
+Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`. By design, **Boolean (`bool`) and `true`/`false` literals do not exist in Ease**: conditions (`x > 0`, `status is "open"`) are evaluated directly in `if`, `check`, and `test`, while domain states are always modeled explicitly with union types (e.g. `def door_state = "open" | "locked"`).
 
 ```ease
 # Mutable binding
@@ -102,14 +103,14 @@ Line comments start with `#`.
 
 ### Functions (`to ... end`) & Calls (`do`)
 
-Functions are declared with `to <name> <params...>` and implicitly return the value of their **last evaluated expression**. Functions are invoked without parentheses using `do`:
+Functions are declared with `to <name> <params...>` (space-separated, **no commas**) and implicitly return the value of their **last evaluated expression**. Functions are invoked without parentheses and without commas using `do`:
 
 ```ease
-to add a, b
+to add a b
     a + b
 end
 
-result = do add 2, 3
+result = do add 2 3
 say "Result: {result}"
 ```
 
@@ -119,7 +120,7 @@ Parentheses `(...)` are reserved for grouping sub-expressions (e.g., `total = to
 to fib n
     check
         n <= 0 -> 0
-        n == 1 -> 1
+        n is 1 -> 1
     end
     left = do fib n - 1
     right = do fib n - 2
@@ -159,7 +160,7 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 
 ```ease
 # 1. Arrow guard checklist: first matching condition returns or executes its action
-to allow_entry name, age
+to allow_entry name age
     check
         name is not text -> "Name must be text"
         age < 18         -> "Too young"
@@ -168,14 +169,14 @@ to allow_entry name, age
 end
 
 # 2. All-must-hold check block with shared else fallback
-to is_valid_vip code, age
+to is_valid_vip code age
     check
         code is "VIP2026"
         age >= 18
     else
-        false
+        "invalid"
     end
-    true
+    "valid"
 end
 
 # 3. Single-line guard
@@ -198,7 +199,7 @@ end
 
 ### Type Checks & Conversions (`is`, `is not`, `as`)
 
-- **Equality, type, and union checks**: `is`, `is-not` / `is not` (plus `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
+- **Equality, type, and union checks**: `is`, `is not` (plus `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
 - **Strict explicit casting with `as` (zero silent fallbacks)**:
   - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (such as `as ö`, `as bool`, or a typo like `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time with a clear error message and hint.
   - **Two-outcome rule**: Every `as` expression has **only two possible outcomes**:
@@ -257,7 +258,7 @@ repeat 3
 end
 
 # Inclusive range (1 through 10 inclusive)
-for i in do range 1, 10
+for i in do range 1 10
     say i
 end
 
@@ -267,26 +268,38 @@ for cloud do
 end
 
 # Single-line for loop
-for do range 1, 5 do say it end
+for do range 1 5 do say it end
 ```
 
 ---
 
 ### Built-in Tests (`test` & `check`)
 
-Every `to ... end` function closes with its own `end`. Assertions live in standalone `test ["label"] ... end` (or `check "label" ... end`) blocks executed by `ease test <file.ease>` using `is`, `is not` / `is-not`, and `raises`:
+Every `to ... end` function closes with its own `end`. Assertions live in standalone `test ["label"] ... end` (or `check "label" ... end`) blocks executed by `ease test <file.ease>` using `is`, `is not`, and `raises`:
 
 ```ease
-to safe_div a, b
-    check b == 0 -> do fail "Division by zero"
+to safe_div a b
+    check b is 0 -> do fail "Division by zero"
     a / b
 end
 
 test
-    do safe_div 10, 2 is 5
-    do safe_div 1, 0 raises "Division by zero"
+    do safe_div 10 2 is 5
+    do safe_div 1 0 raises "Division by zero"
 end
 ```
+
+---
+
+## Why Ease Is Efficient for AI Agents
+
+Ease is explicitly designed to minimize token ambiguity, context overhead, and repair loops when AI models generate, inspect, and verify code:
+
+1. **One-page learnable grammar ([`llms.txt`](llms.txt))**: A model with zero prior Ease training data can load the entire formal grammar and standard library in a single small prompt without conflicting dialects.
+2. **One canonical syntax per construct**: Function declarations (`to add a b`) and calls (`do add 2 3`) never use brackets or commas; equality and type assertions both use `is` / `is not` (no `==`/`!=`/`is-not` aliases); blocks always close with `end`. Commas appear only in `list` literals and single-line `with` updates.
+3. **Self-documenting states instead of `bool`**: Without `bool` or `true`/`false` literals, functions return explicit domain union values (`"valid" | "invalid"`, `"open" | "locked"`), eliminating boolean blindness across call boundaries.
+4. **Zero silent fallbacks + repairable diagnostics**: Unknown types (`as ö`, `as bool`) and mismatched JSON payloads abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
+5. **Built-in self-verification & machine interfaces**: Agents can verify their own output in one command with `ease test` (including `raises` error assertions) and inspect structure deterministically via `ease ast`, `ease tokens`, and `ease lsp`.
 
 ---
 
@@ -300,8 +313,8 @@ Wraps HTTP networking via the `http_call` host bridge:
 
 - **Blueprints**: `network` (`url`, `timeout = 5`, `token = ""`), `http_request` (`method`, `url`, `body`, `token`, `timeout`), `http_response` (`status`, `body`, `error`).
 - **Verbs**:
-  - `do ask target, path` — performs HTTP `GET` (`Content-Type: application/json`, optional Bearer token) and returns the response body or `""` on transport errors or HTTP status `>= 400`.
-  - `do send target, path, payload` — serializes `payload as text` and performs HTTP `POST` to `{target.url}{path}`.
+  - `do ask target path` — performs HTTP `GET` (`Content-Type: application/json`, optional Bearer token) and returns the response body or `""` on transport errors or HTTP status `>= 400`.
+  - `do send target path payload` — serializes `payload as text` and performs HTTP `POST` to `{target.url}{path}`.
 
 See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tests) and [`examples/051_network.ease`](examples/051_network.ease) (live REST example).
 
@@ -310,7 +323,7 @@ See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tes
 Wraps 2D rendering and window input (via Ebitengine and `screen_present`):
 
 - **Blueprints**: `screen` (`width = 800`, `height = 600`, `title = "Ease Window"`), `circle` (`x`, `y`, `size`, `color`), `box` (`x`, `y`, `width`, `height`, `color`), `scene` (`background`, `circles`, `boxes`), `frame_state` (`status = "open" | "closed"`, `key`, `mouse_x`, `mouse_y`).
-- **Verb**: `do send target, current_scene` — renders one frame (60 FPS) and returns the current `frame_state` serialized as JSON text (typically consumed via `as frame_state`).
+- **Verb**: `do send target current_scene` — renders one frame (60 FPS) and returns the current `frame_state` serialized as JSON text (typically consumed via `as frame_state`).
 - **Headless test mode (`--check`)**: Simulates deterministic frames without opening a graphical window so UI loops can run cleanly in CI/CD environments.
 
 See [`examples/06_window.ease`](examples/06_window.ease).
@@ -327,9 +340,9 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `do str val` | Converts a value to `text` |
 | `do num val` | Converts `number` or `text` to `number` (raises `RuntimeError` on invalid input) |
 | `do type val` | Returns the type name or `def` name as `text` |
-| `do range start, end` | Returns an inclusive list of numbers `[start .. end]` |
-| `do push xs, item` | Returns a new list with `item` appended (enforces element type on `list as <type>`) |
-| `do abs n` / `do min a, b` / `do max a, b` | Numeric math helpers |
+| `do range start end` | Returns an inclusive list of numbers `[start .. end]` |
+| `do push xs item` | Returns a new list with `item` appended (enforces element type on `list as <type>`) |
+| `do abs n` / `do min a b` / `do max a b` | Numeric math helpers |
 | `do fields rec` | Returns a list of field names in declaration order for a `def` record |
 | `do fail msg` | Raises an explicit `RuntimeError` (testable with `raises`) |
 
@@ -360,12 +373,12 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 
 ```text
 Keywords:
-  to  import  def  with  end  test  check  is  is-not  raises
-  do  say  ask  as  if  else  repeat  for  in  true  false
+  to  import  def  with  end  test  check  is  raises
+  do  say  ask  as  if  else  repeat  for  in
   and  or  not  text  number  list
 
 Operators & Punctuation:
-  ->  (  )  ,  .  |  =  ==  !=  <  <=  >  >=  +  -  *  /  %
+  ->  (  )  ,  .  |  =  <  <=  >  >=  +  -  *  /  %
 ```
 
 ### Program & Top-Level Declarations
@@ -382,7 +395,7 @@ top_item       ::= import_decl
 
 import_decl    ::= "import" IDENT stmt_end
 
-func_decl      ::= "to" ( IDENT | "ask" ) { IDENT [ "," ] }
+func_decl      ::= "to" ( IDENT | "ask" ) { IDENT }
                    ( NL | &"end" )
                    { stmt [NL] }
                    "end"
@@ -432,7 +445,7 @@ check_item     ::= if_stmt
                  | "do" "say" expr stmt_end
                  | assign_stmt
                  | expr "is" ["not"] ( "text" | "number" | "list" ) stmt_end
-                 | expr ( "is" "not" | "is" | "is-not" | "raises" ) expr stmt_end
+                 | expr ( "is" "not" | "is" | "raises" ) expr stmt_end
 
 stmt_end       ::= NL | EOF | &("end" | "else")
 ```
@@ -448,8 +461,8 @@ not_expr       ::= "not" not_expr | comparison
 
 comparison     ::= term { cmp_op term
                         | is_op ( type_kw | term ) }
-cmp_op         ::= "==" | "!=" | "<" | "<=" | ">" | ">="
-is_op          ::= "is" ["not"] | "is-not"
+cmp_op         ::= "<" | "<=" | ">" | ">="
+is_op          ::= "is" ["not"]
 type_kw        ::= "text" | "number" | "list"
 
 term           ::= factor { ( "+" | "-" ) factor }
@@ -468,19 +481,18 @@ with_field     ::= IDENT "=" expr
 
 cast_type      ::= "text" | "number" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
 
-bare_call_args ::= term { "," term }                     (* 'as' binds outside the full call *)
+bare_call_args ::= term { term }                         (* space-separated; 'as' binds outside the full call *)
 
 primary        ::= NUMBER
                  | STRING
                  | INTERP_STRING
-                 | "true" | "false"
                  | IDENT
                  | do_expr
                  | ask_expr
                  | "(" expr ")"
                  | list_expr
 
-do_expr        ::= "do" "ask" primary "," bare_call_args (* call to user `to ask ...` *)
+do_expr        ::= "do" "ask" primary bare_call_args     (* call to user `to ask ...` *)
                  | "do" "ask" [ primary ]                (* stdin prompt *)
                  | "do" postfix                          (* starting with IDENT *)
 
@@ -492,7 +504,7 @@ list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," wit
 list_elem_type ::= "text" | "number" | IDENT    (* must name a built-in type or previously defined/imported `def` blueprint *)
 ```
 
-> **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do ask client, "/users/1" as api_user` binds `(do ask client, "/users/1") as api_user` rather than casting only the final argument.
+> **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do ask client "/users/1" as api_user` binds `(do ask client "/users/1") as api_user` rather than casting only the final argument.
 
 ---
 

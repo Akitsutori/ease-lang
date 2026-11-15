@@ -36,6 +36,6 @@ end
 
 # Sendet eine fertige Szene an das Fenster, zeichnet 1 Frame (60 FPS)
 # und gibt den aktuellen Fenster- und Eingabezustand als Text/JSON zurück.
-to send target, current_scene
-    do screen_present target, current_scene
+to send target current_scene
+    do screen_present target current_scene
 end

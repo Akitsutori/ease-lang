@@ -8,12 +8,13 @@ import (
 
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
-	tokens          []Token
-	source          string
-	pos             int
-	disallowTopIs   bool
-	disallowAs      bool
-	disallowDoAsArg bool
+	tokens           []Token
+	source           string
+	pos              int
+	disallowTopIs    bool
+	disallowAs       bool
+	disallowDoAsArg  bool
+	disallowBareCall bool
 }
 
 // ParseProgram lexes and parses `source` into a complete Program AST.
@@ -88,13 +89,17 @@ func (p *Parser) expectStmtEnd(context string) error {
 		return nil
 	}
 	tok := p.current()
+	hint := "Put each statement on its own line."
+	if tok.Type == TOK_COMMA {
+		hint = "Commas are only used in lists (e.g. list 1, 2, 3), not in function calls or statements."
+	}
 	return newError(
 		"SyntaxError",
 		tok.Line,
 		tok.Col,
 		p.source,
 		fmt.Sprintf("Unexpected %q after %s", tok.Lexeme, context),
-		"Put each statement on its own line.",
+		hint,
 	)
 }
 
@@ -194,7 +199,17 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	var params []string
 	for p.check(TOK_IDENT) {
 		params = append(params, p.advance().Lexeme)
-		p.match(TOK_COMMA)
+		if p.check(TOK_COMMA) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Commas are not allowed in function parameter lists",
+				fmt.Sprintf("Write parameters separated by spaces: to %s param1 param2", nameTok.Lexeme),
+			)
+		}
 	}
 
 	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_END) {
@@ -205,7 +220,7 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 			tok.Col,
 			p.source,
 			fmt.Sprintf("Unexpected %q in function header", tok.Lexeme),
-			fmt.Sprintf("Write 'to %s param1, param2' followed by a new line.", nameTok.Lexeme),
+			fmt.Sprintf("Write 'to %s param1 param2' followed by a new line.", nameTok.Lexeme),
 		)
 	}
 	p.skipNewlines()
@@ -509,17 +524,6 @@ func (p *Parser) parseCheckItem() (Stmt, error) {
 			return nil, err
 		}
 		return &CheckIsStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Expected: expected}, nil
-	}
-
-	if p.match(TOK_IS_NOT) {
-		unexpected, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		if err := p.expectStmtEnd("'is-not' assertion"); err != nil {
-			return nil, err
-		}
-		return &CheckIsNotStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Unexpected: unexpected}, nil
 	}
 
 	if p.match(TOK_RAISES) {
@@ -985,7 +989,7 @@ func (p *Parser) parseComparison() (Expr, error) {
 		return nil, err
 	}
 	for {
-		if p.check(TOK_EQ) || p.check(TOK_NEQ) || p.check(TOK_LT) || p.check(TOK_LTE) || p.check(TOK_GT) || p.check(TOK_GTE) {
+		if p.check(TOK_LT) || p.check(TOK_LTE) || p.check(TOK_GT) || p.check(TOK_GTE) {
 			opTok := p.advance()
 			right, err := p.parseTerm()
 			if err != nil {
@@ -994,12 +998,9 @@ func (p *Parser) parseComparison() (Expr, error) {
 			left = &BinaryExpr{posInfo: posInfo{Line: opTok.Line, Col: opTok.Col}, Left: left, Op: opTok.Lexeme, Right: right}
 			continue
 		}
-		if !p.disallowTopIs && (p.check(TOK_IS) || p.check(TOK_IS_NOT)) {
+		if !p.disallowTopIs && p.check(TOK_IS) {
 			opTok := p.advance()
-			negated := opTok.Type == TOK_IS_NOT
-			if opTok.Type == TOK_IS && p.match(TOK_NOT) {
-				negated = true
-			}
+			negated := p.match(TOK_NOT)
 			isBareListType := p.check(TOK_LIST_KW) && p.isTypeAssertionEnd(p.peekNext().Type)
 			if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || isBareListType {
 				typeTok := p.advance()
@@ -1187,7 +1188,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			continue
 		}
 
-		if id, ok := expr.(*IdentExpr); ok && p.startsBareCallArg() {
+		if id, ok := expr.(*IdentExpr); ok && !p.disallowBareCall && p.startsBareCallArg() {
 			args, err := p.parseBareCallArgs(nil)
 			if err != nil {
 				return nil, err
@@ -1205,8 +1206,13 @@ func (p *Parser) parsePostfix() (Expr, error) {
 
 func (p *Parser) parseBareCallArgs(initial []Expr) ([]Expr, error) {
 	prevDisallowAs := p.disallowAs
+	prevDisallowBareCall := p.disallowBareCall
 	p.disallowAs = true
-	defer func() { p.disallowAs = prevDisallowAs }()
+	p.disallowBareCall = true
+	defer func() {
+		p.disallowAs = prevDisallowAs
+		p.disallowBareCall = prevDisallowBareCall
+	}()
 
 	args := initial
 	for {
@@ -1215,7 +1221,7 @@ func (p *Parser) parseBareCallArgs(initial []Expr) ([]Expr, error) {
 			return nil, err
 		}
 		args = append(args, arg)
-		if p.match(TOK_COMMA) || p.startsBareCallArg() {
+		if p.startsBareCallArg() {
 			continue
 		}
 		break
@@ -1225,7 +1231,7 @@ func (p *Parser) parseBareCallArgs(initial []Expr) ([]Expr, error) {
 
 func (p *Parser) startsBareCallArg() bool {
 	switch p.current().Type {
-	case TOK_NUMBER, TOK_STRING, TOK_INTERP_STRING, TOK_IDENT, TOK_LIST_KW, TOK_TRUE, TOK_FALSE, TOK_ASK:
+	case TOK_NUMBER, TOK_STRING, TOK_INTERP_STRING, TOK_IDENT, TOK_LIST_KW, TOK_ASK:
 		return true
 	case TOK_DO:
 		if p.disallowDoAsArg {
@@ -1284,12 +1290,6 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	case TOK_INTERP_STRING:
 		p.advance()
 		return p.parseInterpString(tok)
-	case TOK_TRUE:
-		p.advance()
-		return &BoolExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Value: true}, nil
-	case TOK_FALSE:
-		p.advance()
-		return &BoolExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Value: false}, nil
 	case TOK_IDENT:
 		p.advance()
 		return &IdentExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Name: tok.Lexeme}, nil
@@ -1299,14 +1299,14 @@ func (p *Parser) parsePrimary() (Expr, error) {
 			askTok := p.advance()
 			if p.check(TOK_LPAREN) {
 				cur := p.current()
-				return nil, newError("SyntaxError", cur.Line, cur.Col, p.source, "Parenthesized 'ask(...)' is not allowed", "Write: ask \"Prompt?\" or do ask net, \"/path\"")
+				return nil, newError("SyntaxError", cur.Line, cur.Col, p.source, "Parenthesized 'ask(...)' is not allowed", "Write: ask \"Prompt?\" or do ask net \"/path\"")
 			}
 			if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_RPAREN) && !p.check(TOK_COMMA) && !p.check(TOK_AS) {
 				firstArg, err := p.parsePrimary()
 				if err != nil {
 					return nil, err
 				}
-				if p.match(TOK_COMMA) || p.startsBareCallArg() {
+				if p.startsBareCallArg() {
 					args, err := p.parseBareCallArgs([]Expr{firstArg})
 					if err != nil {
 						return nil, err
@@ -1318,7 +1318,10 @@ func (p *Parser) parsePrimary() (Expr, error) {
 			return &AskExpr{posInfo: posInfo{Line: askTok.Line, Col: askTok.Col}}, nil
 		}
 		if p.check(TOK_IDENT) {
+			prevDisallowBareCall := p.disallowBareCall
+			p.disallowBareCall = false
 			expr, err := p.parsePostfix()
+			p.disallowBareCall = prevDisallowBareCall
 			if err != nil {
 				return nil, err
 			}

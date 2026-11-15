@@ -13,20 +13,24 @@ import (
 	"testing"
 )
 
-func TestLexerAndIsNotKeyword(t *testing.T) {
-	src := "# comment\nto check_eq a, b\n  a is-not b\nend\n"
+func TestLexerAndIsNotTokens(t *testing.T) {
+	src := "# comment\nto check_eq a b\n  a is not b\nend\n"
 	toks, err := NewLexer(src).Tokenize()
 	if err != nil {
 		t.Fatalf("unexpected lexer error: %v", err)
 	}
-	foundIsNot := false
+	foundIs := false
+	foundNot := false
 	for _, tok := range toks {
-		if tok.Type == TOK_IS_NOT {
-			foundIsNot = true
+		if tok.Type == TOK_IS {
+			foundIs = true
+		}
+		if tok.Type == TOK_NOT {
+			foundNot = true
 		}
 	}
-	if !foundIsNot {
-		t.Fatalf("expected TOK_IS_NOT token in %+v", toks)
+	if !foundIs || !foundNot {
+		t.Fatalf("expected TOK_IS and TOK_NOT tokens in %+v", toks)
 	}
 }
 
@@ -36,15 +40,15 @@ to double x
   x * 2
 end
 
-to divide a, b
+to divide a b
   a / b
 end
 
 test "functions"
   do double 4 is 8
-  do double 4 is-not 9
-  do divide 10, 2 is 5
-  do divide 1, 0 raises "Division by zero"
+  do double 4 is not 9
+  do divide 10 2 is 5
+  do divide 1 0 raises "Division by zero"
 end
 
 test "loops and mutability"
@@ -228,7 +232,7 @@ say "Hallo {name} aus {city}!"
 
 func TestEntryCheckFeatures(t *testing.T) {
 	src := `
-to allow_entry name, age
+to allow_entry name age
     check
         name is not text  -> "Name muss Text sein"
         name is ""        -> "Name darf nicht leer sein"
@@ -240,31 +244,31 @@ to allow_entry name, age
     "Willkommen {name}, du darfst rein!"
 end
 
-to is_valid_vip code, age
+to is_valid_vip code age
     check
         code is text
         code is "VIP2026"
         age is number
         age >= 18
     else
-        false
+        "invalid"
     end
 
-    true
+    "valid"
 end
 
 test
-    do allow_entry 123, 25      is "Name muss Text sein"
-    do allow_entry "", 25       is "Name darf nicht leer sein"
-    do allow_entry "Max", "abc" is "Alter muss eine Zahl sein"
-    do allow_entry "Max", 16    is "Du bist 16. Das ist jung"
-    do allow_entry "Max", 150   is "Ungültiges Alter"
-    do allow_entry "Max", 25    is "Willkommen Max, du darfst rein!"
+    do allow_entry 123 25      is "Name muss Text sein"
+    do allow_entry "" 25       is "Name darf nicht leer sein"
+    do allow_entry "Max" "abc" is "Alter muss eine Zahl sein"
+    do allow_entry "Max" 16    is "Du bist 16. Das ist jung"
+    do allow_entry "Max" 150   is "Ungültiges Alter"
+    do allow_entry "Max" 25    is "Willkommen Max, du darfst rein!"
 
-    do is_valid_vip "VIP2026", 20 is true
-    do is_valid_vip "VIP2026", 16 is false
-    do is_valid_vip "FALSCH", 25  is false
-    do is_valid_vip "VIP2026", "x" is false
+    do is_valid_vip "VIP2026" 20 is "valid"
+    do is_valid_vip "VIP2026" 16 is "invalid"
+    do is_valid_vip "FALSCH" 25  is "invalid"
+    do is_valid_vip "VIP2026" "x" is "invalid"
 end
 
 user_name = ask "Wie heißt du?"
@@ -401,7 +405,7 @@ func TestUnionTypesAndBareCalls(t *testing.T) {
 	src := `
 def ticket = "vip" | "standard" | "none"
 
-to check_access age, pass
+to check_access age pass
     check
         pass is not ticket -> "Ungültiges Ticket"
         age < 18           -> "Abgelehnt: zu jung"
@@ -412,11 +416,11 @@ to check_access age, pass
 end
 
 test
-    check_access 16, "vip" is "Abgelehnt: zu jung"
-    check_access 22, "none" is "Abgelehnt: kein Ticket"
-    check_access 22, "standard" is "Willkommen im Hauptbereich"
-    check_access 30, "vip" is "Willkommen in der Lounge"
-    check_access 30, "gold" is "Ungültiges Ticket"
+    check_access 16 "vip" is "Abgelehnt: zu jung"
+    check_access 22 "none" is "Abgelehnt: kein Ticket"
+    check_access 22 "standard" is "Willkommen im Hauptbereich"
+    check_access 30 "vip" is "Willkommen in der Lounge"
+    check_access 30 "gold" is "Ungültiges Ticket"
 end
 `
 	report, err := RunChecks(src)
@@ -437,7 +441,7 @@ def player
     state = "idle" | "running" | "KO"
 end
 
-to take_damage p, amount
+to take_damage p amount
     next_hp = p.hp - amount
     check next_hp <= 0 -> p with hp = 0, state = "KO"
     p with hp = next_hp
@@ -445,8 +449,8 @@ end
 
 test
     hero = player with name = "Aria", x = 10
-    injured = take_damage hero, 35
-    defeated = take_damage injured, 80
+    injured = take_damage hero 35
+    defeated = take_damage injured 80
 
     hero.hp is 100
     injured.hp is 65
@@ -498,13 +502,13 @@ say "Hello, {name}"
 def x = 1
 def y = 0.5
 
-to add a, b
+to add a b
     a + b
 end
 
 to start
     do say "Hello World"
-    sum = do add x, y
+    sum = do add x y
     do say "Sum of {x} and {y} is {sum}"
 
     age = do ask "Wie alt bist du?" as number
@@ -536,12 +540,12 @@ end
 empty_scores = list as number
 empty_cloud  = list as particle
 
-to update_particles items, dt
+to update_particles items dt
     total = do len items
     total + dt
 end
 
-stepped = do update_particles list as particle, 1
+stepped = do update_particles list as particle 1
 
 cloud = list as particle with
     x = 0, vx = 5, life = 20
@@ -585,8 +589,13 @@ end
 	}
 
 	// Pushing wrong type into `list as number` must fail
-	if _, err := EvalProgram("xs = list as number\nxs = do push xs, \"bad\"\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot push") {
+	if _, err := EvalProgram("xs = list as number\nxs = do push xs \"bad\"\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot push") {
 		t.Fatalf("expected push type error, got: %v", err)
+	}
+
+	// Strict field type check in `with`
+	if _, err := EvalProgram("def p\n    hp = 100\nend\nbad = p with hp = \"high\"\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Field 'p.hp' expected number, got text") {
+		t.Fatalf("expected strict 'with' field type error, got: %v", err)
 	}
 }
 
@@ -596,7 +605,12 @@ func TestLegacySyntaxRejected(t *testing.T) {
 		src  string
 	}{
 		{"param brackets", "to add [a b]\n  a + b\nend\n"},
-		{"report keyword", "to add a, b\n  report a + b\nend\n"},
+		{"param commas", "to add a, b\n  a + b\nend\n"},
+		{"call commas", "to add a b\n  a + b\nend\nx = do add 1, 2\n"},
+		{"double equals", "if 1 == 1\n  say 1\nend\n"},
+		{"not equals", "if 1 != 2\n  say 1\nend\n"},
+		{"hyphenated is-not", "if 1 is-not 2\n  say 1\nend\n"},
+		{"report keyword", "to add a b\n  report a + b\nend\n"},
 		{"test colon", "test:\n  1 is 1\nend\n"},
 		{"check colon", "check \"math\":\n  1 is 1\nend\n"},
 		{"bracket list literal", "xs = [1, 2, 3]\n"},
@@ -607,7 +621,7 @@ func TestLegacySyntaxRejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if tc.name == "report keyword" {
-			if _, err := EvalProgram(tc.src+"x = do add 1, 2\n", &bytes.Buffer{}); err == nil {
+			if _, err := EvalProgram(tc.src+"x = do add 1 2\n", &bytes.Buffer{}); err == nil {
 				t.Fatalf("%s: expected error, got nil", tc.name)
 			}
 			continue
@@ -628,18 +642,18 @@ def particle
     state = "active" | "dead"
 end
 
-to step_particle p, dt
+to step_particle p dt
     next_life = p.life - 10 * dt
     next_x = p.x + p.vx * dt
     check next_life <= 0 -> p with x = next_x, life = 0, state = "dead"
     p with x = next_x, life = next_life
 end
 
-to update_particles items, dt
+to update_particles items dt
     out = list as particle
     for items do
-        check state is "dead" -> out = do push out, it
-        check state is "active" -> out = do push out, do step_particle it, dt
+        check state is "dead" -> out = do push out it
+        check state is "active" -> out = do push out do step_particle it dt
     end
     out
 end
@@ -650,7 +664,7 @@ test "04_particles reference"
         x = 10, vx = 2, life = 5
     end
 
-    stepped = do update_particles cloud, 1
+    stepped = do update_particles cloud 1
 
     do len cloud is 2
     do len stepped is 2
@@ -760,10 +774,10 @@ test "std/network real HTTP GET/POST & Form/Inhalt"
     end
 
     # GET via do ask
-    raw_ok  = do ask api, "/age/ok"
-    raw_neg = do ask api, "/age/negative"
-    raw_bad = do ask api, "/age/bad"
-    raw_err = do ask api, "/fail"
+    raw_ok  = do ask api "/age/ok"
+    raw_neg = do ask api "/age/negative"
+    raw_bad = do ask api "/age/bad"
+    raw_err = do ask api "/fail"
 
     raw_ok is "25"
     raw_err is ""
@@ -776,7 +790,7 @@ test "std/network real HTTP GET/POST & Form/Inhalt"
     do validate_age do parse_age raw_neg is "Alter kann nicht negativ sein"
 
     # POST via do send
-    posted = do send api, "/submit", 42
+    posted = do send api "/submit" 42
     posted is "echo:42"
 end
 `, srv.URL)
@@ -838,11 +852,11 @@ def my_record
     second = ""
 end
 
-to some_func a, b
+to some_func a b
     "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
 end
 
-x = do some_func "a", "b" as my_record
+x = do some_func "a" "b" as my_record
 `
 	prog, err := ParseProgram(src)
 	if err != nil {
@@ -881,7 +895,7 @@ func TestInclusiveRangeAndHeadlessScreen(t *testing.T) {
 	src := `
 import screen
 
-to move_x x, key
+to move_x x key
     check
         key is "right" -> x + 6
         key is "left"  -> x - 6
@@ -899,10 +913,10 @@ to run_window
     pos_x = 400
     state = frame_state
 
-    for range 1, 10 do
+    for do range 1 10 do
         check state.status is "closed" -> "Fenster geschlossen:{pos_x}"
 
-        pos_x = do move_x pos_x, state.key
+        pos_x = do move_x pos_x state.key
         current = scene with
             background = "slate"
             circles = list as circle with
@@ -913,7 +927,7 @@ to run_window
             end
         end
 
-        state = do send win, current as frame_state
+        state = do send win current as frame_state
         check state is not frame_state -> "Fensterfehler"
     end
 
@@ -921,7 +935,7 @@ to run_window
 end
 
 test "inclusive range & headless screen"
-    do range 1, 4 is list 1, 2, 3, 4
+    do range 1 4 is list 1, 2, 3, 4
     do run_window is "Fenster geschlossen:406"
 end
 `
@@ -936,7 +950,7 @@ end
 
 func TestSingleLineForExpressions(t *testing.T) {
 	src := `
-for range 1, 10 do say it end
+for do range 1 10 do say it end
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(src, &out); err != nil {
@@ -949,7 +963,7 @@ for range 1, 10 do say it end
 
 	srcNamed := `
 sum = 0
-for x in range 1, 4 do sum = sum + x end
+for x in do range 1 4 do sum = sum + x end
 
 test "single-line for"
     sum is 10
@@ -1137,7 +1151,7 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 		{
 			name:    "wrong nested field type",
 			src:     "def user\n    id = 0\nend\nx = \"\\{\\\"id\\\": true\\}\" as user\n",
-			wantSub: `Field 'user.id' expected number, got bool`,
+			wantSub: `Field 'user.id' expected number, got condition`,
 		},
 	}
 

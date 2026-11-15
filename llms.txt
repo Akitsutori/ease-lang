@@ -1,0 +1,63 @@
+# Ease Language Reference (1-Page LLM Guide)
+
+Ease is a small, strict, bracket-free language implemented in Go.
+Every construct has **one canonical form** and **zero silent fallbacks**.
+
+## 1. Core Invariants
+- **No `bool`, no `true`/`false` literals**: Model states with explicit union types (`def state = "open" | "locked"`). Conditions (`x > 0`, `a is b`, `and`, `or`, `not`) are used directly in `if`, `check`, and `test`.
+- **No commas in function signatures or calls**: Declare `to add a b ... end` and call `do add 2 3`. Commas are only for `list 10, 25, 40` and single-line `with` updates.
+- **No `==`, `!=`, `is-not`**: Use `is` and `is not` for both equality and type checks (`x is 5`, `x is number`, `x is not text`).
+- **Atomic negative literals**: `-2` (no space) is a negative number literal (`do f -2`). `a - 2` (space after `-`) is subtraction (`do count - 2`).
+- **Built-in runtime types**: `number`, `text`, `list`, `nothing` (plus `def` records and unions).
+- **Strict `as` with zero silent fallbacks**: Only `text`, `number`, or a previously declared/imported `def` blueprint is valid after `as` and `list as`. Unknown types or mismatched JSON abort immediately.
+- **Logic-free `def` records & strict `with`**: `def` holds fields, defaults, and inline unions (`"a" | "b"`). `with` copies and enforces both union values and field types.
+
+## 2. Syntax Cheat Sheet
+```ease
+import network
+
+def pi = 3.14
+def role = "guest" | "admin"
+
+def user
+    id   = 0
+    name = "Guest"
+    role = "guest" | "admin"
+end
+
+to greet u
+    check
+        u is not user        -> "Invalid user"
+        u.role is "admin"    -> "Admin: {u.name}"
+    end
+    "Hello {u.name}"
+end
+
+to add a b
+    a + b
+end
+
+# Records, lists, loops, strict JSON cast
+ada = user with id = 1, name = "Ada", role = "admin"
+nums = list 10, 20, 30
+first = nums.0
+empty = list as number
+
+for i in do range 1 3
+    say "{i}: {do add i 10}"
+end
+
+parsed = "\{\"id\": 7, \"role\": \"admin\"\}" as user
+
+test "example"
+    do add 2 3 is 5
+    do greet ada is "Admin: Ada"
+    "abc" as number raises "Cannot convert text"
+    (ada with id = "bad") raises "expected number"
+end
+```
+
+## 3. Built-in Verbs & CLI
+- **Verbs**: `say expr`, `ask [prompt]`, `do len xs`, `do str val`, `do num val`, `do type val`, `do range start end`, `do push xs item`, `do abs n`, `do min a b`, `do max a b`, `do fields rec`, `do fail msg`
+- **Std modules**: `import network` (`network`, `do ask client path`, `do send client path payload`), `import screen` (`screen`, `circle`, `box`, `scene`, `frame_state`, `do send win current_scene`)
+- **CLI**: `ease run <file> [--check] [--trace]`, `ease test <file>`, `ease build <file> [-o out]`, `ease ast <file>`, `ease tokens <file>`, `ease lsp`

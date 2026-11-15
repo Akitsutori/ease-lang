@@ -3,7 +3,7 @@
 def ticket = "vip" | "standard" | "none"
 def door_state = "open" | "locked"
 
-to evaluate_entry pass, door
+to evaluate_entry pass door
     check
         pass is not ticket -> "Ungültiger Ticket-Typ"
         door is not door_state -> "Unbekannter Türzustand"
@@ -18,10 +18,10 @@ test "Union Types & Werteraum-Prüfung"
     "vip" is ticket
     "gold" is not ticket
     "open" is door_state
-    do evaluate_entry "vip", "open" is "VIP-Lounge geöffnet"
-    do evaluate_entry "standard", "open" is "Standard-Einlass gewährt"
-    do evaluate_entry "none", "open" is "Kein Einlass ohne Ticket"
-    do evaluate_entry "vip", "locked" is "Tür ist verschlossen"
-    do evaluate_entry "gold", "open" is "Ungültiger Ticket-Typ"
-    do evaluate_entry "vip", "broken" is "Unbekannter Türzustand"
+    do evaluate_entry "vip" "open" is "VIP-Lounge geöffnet"
+    do evaluate_entry "standard" "open" is "Standard-Einlass gewährt"
+    do evaluate_entry "none" "open" is "Kein Einlass ohne Ticket"
+    do evaluate_entry "vip" "locked" is "Tür ist verschlossen"
+    do evaluate_entry "gold" "open" is "Ungültiger Ticket-Typ"
+    do evaluate_entry "vip" "broken" is "Unbekannter Türzustand"
 end

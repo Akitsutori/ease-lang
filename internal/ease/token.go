@@ -21,7 +21,6 @@ const (
 	TOK_TEST   TokenType = "test"
 	TOK_CHECK  TokenType = "check"
 	TOK_IS     TokenType = "is"
-	TOK_IS_NOT TokenType = "is-not"
 	TOK_RAISES TokenType = "raises"
 	TOK_DO     TokenType = "do"
 	TOK_SAY    TokenType = "say"
@@ -32,8 +31,6 @@ const (
 	TOK_REPEAT TokenType = "repeat"
 	TOK_FOR    TokenType = "for"
 	TOK_IN     TokenType = "in"
-	TOK_TRUE   TokenType = "true"
-	TOK_FALSE  TokenType = "false"
 	TOK_AND    TokenType = "and"
 	TOK_OR     TokenType = "or"
 	TOK_NOT    TokenType = "not"
@@ -51,8 +48,6 @@ const (
 	TOK_PIPE     TokenType = "|"
 	TOK_ASSIGN   TokenType = "="
 
-	TOK_EQ  TokenType = "=="
-	TOK_NEQ TokenType = "!="
 	TOK_LT  TokenType = "<"
 	TOK_LTE TokenType = "<="
 	TOK_GT  TokenType = ">"
@@ -74,7 +69,6 @@ var keywords = map[string]TokenType{
 	"test":   TOK_TEST,
 	"check":  TOK_CHECK,
 	"is":     TOK_IS,
-	"is-not": TOK_IS_NOT,
 	"raises": TOK_RAISES,
 	"do":     TOK_DO,
 	"say":    TOK_SAY,
@@ -85,8 +79,6 @@ var keywords = map[string]TokenType{
 	"repeat": TOK_REPEAT,
 	"for":    TOK_FOR,
 	"in":     TOK_IN,
-	"true":   TOK_TRUE,
-	"false":  TOK_FALSE,
 	"and":    TOK_AND,
 	"or":     TOK_OR,
 	"not":    TOK_NOT,

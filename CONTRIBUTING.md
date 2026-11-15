@@ -86,7 +86,7 @@ Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 
 Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. Please uphold these invariants across all contributions:
 
-1. **Uniform Bracket-Free Calls**: Call verbs with `do <verb> arg1, arg2` — never introduce `fn(...)` call syntax or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping (e.g., `total = total + (n * n)`).
+1. **Uniform Bracket-Free, Comma-Free Calls**: Call verbs with `do <verb> arg1 arg2` and declare parameters with `to <verb> param1 param2` — never introduce `fn(...)` call syntax, commas between arguments/parameters, or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping (e.g., `total = total + (n * n)`). Commas are reserved for `list` literals (`list 1, 2, 3`) and single-line `with` updates.
 2. **Dot Notation Only for Lists and Records**: Index lists and access fields consistently with `.` (`cloud.0.vx`, `player.hp`). Build lists with `list 1, 2, 3` or `list as <type>`.
 3. **Logic-Free Data Blueprints (`def`)**: Keep `def` declarations pure data structures with defaults and union constraints (`"a" | "b"`). Behavior belongs exclusively in verbs (`to ... end`).
 4. **Strict Boundary Between Shape and Meaning (Zero Silent Fallbacks)**:

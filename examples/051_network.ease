@@ -28,9 +28,9 @@ def fetch_report
 end
 
 # 2. Verben mit zweistufiger Grenzprüfung
-to load_verified_user client, user_id
+to load_verified_user client user_id
     # Stufe 1: Echter HTTP-GET + Leerantwort prüfen + strikte Typ-Konformität (`as api_user`)
-    raw_json = do ask client, "/users/{user_id}"
+    raw_json = do ask client "/users/{user_id}"
     check raw_json is "" -> fetch_report with status = "transport_or_format_error", note = "HTTP 404, Timeout oder leere Antwort"
     raw = raw_json as api_user
 
@@ -43,12 +43,12 @@ to load_verified_user client, user_id
     fetch_report with status = "ok", user = raw, note = "Verifiziert"
 end
 
-to publish_article client, draft
+to publish_article client draft
     check draft.title is "" -> post_receipt with id = 0
     check draft.userId <= 0 -> post_receipt with id = 0
 
     # Echter HTTP-POST gegen /posts
-    resp_json = do send client, "/posts", draft
+    resp_json = do send client "/posts" draft
     check resp_json is "" -> post_receipt with id = 0
     resp_json as post_receipt
 end
@@ -63,17 +63,17 @@ end
 
 # Schritt 1: Echten Nutzer #1 abrufen (HTTP 200 -> Leanne Graham)
 say "[1/4] GET /users/1 ..."
-r1 = do load_verified_user api, 1
+r1 = do load_verified_user api 1
 say " -> Status: {r1.status} | Name: {r1.user.name} ({r1.user.email})"
 
 # Schritt 2: Nutzer #8 abrufen (HTTP 200, wird aber von Fachregel in Stufe 2 abgewiesen)
 say "[2/4] GET /users/8 (Fachregel-Test) ..."
-r2 = do load_verified_user api, 8
+r2 = do load_verified_user api 8
 say " -> Status: {r2.status} | Grund: {r2.note}"
 
 # Schritt 3: Nicht existierenden Nutzer #999 abrufen (echtes HTTP 404 -> Stufe 1 greift)
 say "[3/4] GET /users/999 (404-Fehler-Test) ..."
-r3 = do load_verified_user api, 999
+r3 = do load_verified_user api 999
 say " -> Status: {r3.status} | Grund: {r3.note}"
 
 # Schritt 4: Echten POST-Request an /posts absenden (HTTP 201 Created)
@@ -84,6 +84,6 @@ article = new_post with
     userId = r1.user.id
 end
 
-created = do publish_article api, article
+created = do publish_article api article
 say " -> Gespeichert mit Server-ID: {created.id} | Titel: {created.title}"
 say "=== Alle Live-Requests abgeschlossen ==="
