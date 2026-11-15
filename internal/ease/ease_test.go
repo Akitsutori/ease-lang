@@ -1270,3 +1270,18 @@ end
 		t.Fatalf("expected Unterminated raw string literal error, got: %v", err)
 	}
 }
+
+func TestCheckRaisesMatchesMessageOnlyNotSourceLine(t *testing.T) {
+	src := `
+test "raises must match error message only"
+    10 / 0 raises " bogus_substring_on_same_line "
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 0 || report.Failed != 1 {
+		t.Fatalf("expected 0 passed / 1 failed, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+}

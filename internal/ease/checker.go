@@ -1,6 +1,7 @@
 package ease
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -187,7 +188,12 @@ func runCheckList(ev *Evaluator, scope string, items []Stmt, env *Env, report *C
 				})
 				continue
 			}
-			if strings.Contains(strings.ToLower(actualErr.Error()), strings.ToLower(expectedSub)) {
+			actualMsg := actualErr.Error()
+			var easeErr *EaseError
+			if errors.As(actualErr, &easeErr) {
+				actualMsg = easeErr.Message
+			}
+			if strings.Contains(strings.ToLower(actualMsg), strings.ToLower(expectedSub)) {
 				report.Passed++
 				report.Results = append(report.Results, CheckOutcome{
 					Scope:   scope,
@@ -201,7 +207,7 @@ func runCheckList(ev *Evaluator, scope string, items []Stmt, env *Env, report *C
 					Scope:   scope,
 					Line:    c.Line,
 					Passed:  false,
-					Message: fmt.Sprintf("Line %d: raised %q, expected substring %q", c.Line, actualErr.Error(), expectedSub),
+					Message: fmt.Sprintf("Line %d: raised %q, expected substring %q", c.Line, actualMsg, expectedSub),
 				})
 			}
 		}

@@ -193,7 +193,7 @@ end
 test "Listen, Schleifen & Built-ins: 10 Negativtests"
     xs = list 10, 20
     typed = list as number
-    xs.99 raises "out of bounds"
+    xs.99 raises "out of range"
     (42).0 raises "Cannot index"
     (list 10, "hi") raises "Mixed types"
     do push typed "bad" raises "Cannot push"
