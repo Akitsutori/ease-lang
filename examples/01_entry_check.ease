@@ -15,7 +15,7 @@ to allow_entry name age
     "Willkommen {name}, du darfst rein!"
 end
 
-to is_valid_vip code age
+to validate_vip code age
     check
         code is text
         code is "VIP2026"
@@ -36,10 +36,10 @@ test "Einlassregeln & VIP-Prüfung"
     do allow_entry "Max" 150   is "Ungültiges Alter"
     do allow_entry "Max" 25    is "Willkommen Max, du darfst rein!"
 
-    do is_valid_vip "VIP2026" 20  is "valid"
-    do is_valid_vip "VIP2026" 16  is "invalid"
-    do is_valid_vip "FALSCH" 25   is "invalid"
-    do is_valid_vip "VIP2026" "x" is "invalid"
+    do validate_vip "VIP2026" 20  is "valid"
+    do validate_vip "VIP2026" 16  is "invalid"
+    do validate_vip "FALSCH" 25   is "invalid"
+    do validate_vip "VIP2026" "x" is "invalid"
 end
 
 # Interaktiver Hauptablauf mit Tastatureingabe (ask)

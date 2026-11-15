@@ -1,7 +1,14 @@
 # Feature 04: Union Types (explizite Werteräume statt Boolean)
+# Warum kein bool / true / false?
+# Anonyme Wahrheitswerte verbergen am Aufrufort, WAS und WARUM entschieden wurde.
+# Mit benannten Union-Werten trägt jedes Ergebnis seine Fachbedeutung direkt im Wert.
 
 def ticket = "vip" | "standard" | "none"
 def door_state = "open" | "locked"
+
+def entry_gate
+    door = "open" | "locked"
+end
 
 to evaluate_entry pass door
     check
@@ -24,4 +31,6 @@ test "Union Types & Werteraum-Prüfung"
     do evaluate_entry "vip" "locked" is "Tür ist verschlossen"
     do evaluate_entry "gold" "open" is "Ungültiger Ticket-Typ"
     do evaluate_entry "vip" "broken" is "Unbekannter Türzustand"
+    (entry_gate with door = "true") raises "Invalid value"
+    (entry_gate with door = "ajar") raises "Invalid value"
 end

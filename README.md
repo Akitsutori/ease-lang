@@ -82,7 +82,11 @@ Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <fi
 
 ### Variables, Constants & Types
 
-Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`. By design, **Boolean (`bool`) and `true`/`false` literals do not exist in Ease**: conditions (`x > 0`, `status is "open"`) are evaluated directly in `if`, `check`, and `test`, while domain states are always modeled explicitly with union types (e.g. `def door_state = "open" | "locked"`).
+Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`.
+
+By design, **Boolean (`bool`) and `true`/`false` literals do not exist in Ease** — omitting `bool` eliminates *boolean blindness* and makes code simpler to reason about:
+1. **Conditions stay inside control flow**: Comparisons (`amount >= 50`, `status is "open"`) and combinators (`and`, `or`, `not`) evaluate directly in `check`, `if`, and `test` instead of being passed around as raw flags.
+2. **Stored or returned outcomes use explicit `def` states**: Instead of returning anonymous `true`/`false`, you name what was decided (`def decision` with `answer = "yes" | "no"`, or domain variants like `def door_state = "open" | "locked"`). Every state documents itself at the call site and rejects invalid values automatically.
 
 ```ease
 # Mutable binding
@@ -128,6 +132,43 @@ to fib n
 end
 ```
 
+#### Why `to`? The Grammatical Guardrail (`def` / `to` / `do`)
+
+In languages with neutral declaration keywords like `def` (Python) or `func` (Go), sloppy naming sneaks in unnoticed: developers write `def user_data()` (a noun) or `def can_ship()` (a yes/no question without an action).
+
+In Ease, `to` acts as a **grammatical guardrail** (the English **infinitive**):
+- Reading `to user_data` ("to user data") or `to can_ship` ("to can ship") aloud immediately sounds wrong.
+- `to` naturally pushes you toward a genuine **action verb**: `to decide_if_to_ship`, `to calculate_discount`, `to validate_order`.
+
+Together with `def` and `do`, Ease enforces a seamless linguistic role split — **Noun / Infinitive / Imperative** — and replaces anonymous `true`/`false` booleans with explicit decision blueprints:
+
+```ease
+# Awkward with `to`:  "to can_ship" ("to can ship") -> boolean question smell
+# Clear with `to`:    def = Noun, to = Infinitive, do = Imperative
+
+def decision                         # Noun: the passive data blueprint
+    answer = "yes" | "no"
+end
+
+to decide_if_to_ship amount          # Infinitive: "to decide if to ship"
+    check amount >= 50 -> decision with answer = "yes"
+    decision with answer = "no"
+end
+
+test "def / to / do triad without booleans"
+    d1 = do decide_if_to_ship 80     # Imperative: concrete execution
+    d1.answer is "yes"
+
+    d2 = do decide_if_to_ship 20
+    d2.answer is "no"
+
+    # Unlike an unguarded string, `def decision` rejects invalid variants:
+    (decision with answer = "maybe") raises "Invalid value"
+end
+```
+
+And whenever `"yes" | "no"` grows into richer domain logic, switching to `status = "ship" | "below_minimum" | "manual_review"` works seamlessly without breaking callers on raw `true`/`false` assumptions.
+
 ---
 
 ### Records (`def`), `with` Copies & Union Types
@@ -169,7 +210,7 @@ to allow_entry name age
 end
 
 # 2. All-must-hold check block with shared else fallback
-to is_valid_vip code age
+to validate_vip code age
     check
         code is "VIP2026"
         age >= 18
@@ -297,7 +338,7 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 
 1. **One-page learnable grammar ([`llms.txt`](llms.txt))**: A model with zero prior Ease training data can load the entire formal grammar and standard library in a single small prompt without conflicting dialects.
 2. **One canonical syntax per construct**: Function declarations (`to add a b`) and calls (`do add 2 3`) never use brackets or commas; equality and type assertions both use `is` / `is not` (no `==`/`!=`/`is-not` aliases); blocks always close with `end`. Commas appear only in `list` literals and single-line `with` updates.
-3. **Self-documenting states instead of `bool`**: Without `bool` or `true`/`false` literals, functions return explicit domain union values (`"valid" | "invalid"`, `"open" | "locked"`), eliminating boolean blindness across call boundaries.
+3. **Self-documenting states instead of `bool`, enforced by `def`/`to`/`do`**: Removing `bool` eliminates boolean blindness — conditions (`amount >= 50`) live inside `check`/`if`/`test`, while returned states use explicit `def` union types (`"yes" | "no"`, `"open" | "locked"`). At the same time, the `def` (noun) / `to` (infinitive verb) / `do` (imperative call) triad exposes sloppy names like `to can_ship` immediately when read aloud.
 4. **Zero silent fallbacks + repairable diagnostics**: Unknown types (`as ö`, `as bool`) and mismatched JSON payloads abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
 5. **Built-in self-verification & machine interfaces**: Agents can verify their own output in one command with `ease test` (including `raises` error assertions) and inspect structure deterministically via `ease ast`, `ease tokens`, and `ease lsp`.
 
@@ -532,7 +573,7 @@ for f in tests/*.ease; do ./ease test "$f"; done
 cmd/ease/           CLI entrypoint
 internal/ease/      Lexer, Parser, AST, Checker, Evaluator, Screen, Bundle & Stdlib
 examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–07)
+tests/              Language feature test files (01–08)
 .github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
 ```
 

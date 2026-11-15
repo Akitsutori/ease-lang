@@ -10,7 +10,7 @@ to validate_score name score
     "OK: {name} hat {score} Punkte"
 end
 
-to can_publish title words
+to review_article title words
     check
         title is text
         title is not ""
@@ -31,8 +31,8 @@ test "Check-Guards"
     do validate_score "Ada" "ten" is "Punktzahl muss Zahl sein"
     do validate_score "Ada" -5 is "Punktzahl darf nicht negativ sein"
     do validate_score "Ada" 99 is "OK: Ada hat 99 Punkte"
-    do can_publish "Guide" 150 is "published"
-    do can_publish "" 150 is "rejected"
-    do can_publish "Guide" 20 is "rejected"
+    do review_article "Guide" 150 is "published"
+    do review_article "" 150 is "rejected"
+    do review_article "Guide" 20 is "rejected"
     status_msg is "checked"
 end

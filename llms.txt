@@ -4,7 +4,8 @@ Ease is a small, strict, bracket-free language implemented in Go.
 Every construct has **one canonical form** and **zero silent fallbacks**.
 
 ## 1. Core Invariants
-- **No `bool`, no `true`/`false` literals**: Model states with explicit union types (`def state = "open" | "locked"`). Conditions (`x > 0`, `a is b`, `and`, `or`, `not`) are used directly in `if`, `check`, and `test`.
+- **No `bool`, no `true`/`false` literals**: Keep conditions (`x > 0`, `a is b`, `and`, `or`, `not`) inside `if`, `check`, and `test`. Return or store outcomes via explicit `def` union types/records (`def decision` with `answer = "yes" | "no"`, `def state = "open" | "locked"`).
+- **Grammatical triad (`def` / `to` / `do`)**: `def` = noun blueprint (`def decision`), `to` = English infinitive action verb (`to decide_if_to_ship amount` — avoid nouns/questions like `to user_data` or `to can_ship`), `do` = imperative call (`do decide_if_to_ship 80`).
 - **No commas in function signatures or calls**: Declare `to add a b ... end` and call `do add 2 3`. Commas are only for `list 10, 25, 40` and single-line `with` updates.
 - **No `==`, `!=`, `is-not`**: Use `is` and `is not` for both equality and type checks (`x is 5`, `x is number`, `x is not text`).
 - **Atomic negative literals**: `-2` (no space) is a negative number literal (`do f -2`). `a - 2` (space after `-`) is subtraction (`do count - 2`).
