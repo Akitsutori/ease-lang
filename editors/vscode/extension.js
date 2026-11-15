@@ -189,6 +189,47 @@ async function runEaseSubcommand(subcommand, targetPath) {
   await vscode.tasks.executeTask(task);
 }
 
+class EaseDebugAdapter {
+  constructor() {
+    this._onDidSendMessage = new vscode.EventEmitter();
+    this.onDidSendMessage = this._onDidSendMessage.event;
+  }
+
+  handleMessage(message) {
+    if (message.type !== "request") return;
+    const sendResponse = (body = {}) => {
+      this._onDidSendMessage.fire({
+        seq: 0,
+        type: "response",
+        request_seq: message.seq,
+        success: true,
+        command: message.command,
+        body,
+      });
+    };
+
+    switch (message.command) {
+      case "initialize":
+        sendResponse({});
+        this._onDidSendMessage.fire({ seq: 0, type: "event", event: "initialized" });
+        break;
+      case "launch":
+        sendResponse({});
+        runEaseSubcommand("run", message.arguments && message.arguments.program).finally(() => {
+          this._onDidSendMessage.fire({ seq: 0, type: "event", event: "terminated" });
+        });
+        break;
+      default:
+        sendResponse({});
+        break;
+    }
+  }
+
+  dispose() {
+    this._onDidSendMessage.dispose();
+  }
+}
+
 async function activate(context) {
   const output = vscode.window.createOutputChannel("Ease Language");
   const diagnostics = vscode.languages.createDiagnosticCollection("ease");
@@ -200,6 +241,11 @@ async function activate(context) {
     { dispose: () => client.stop() },
     vscode.commands.registerCommand("ease.runFile", () => runEaseSubcommand("run")),
     vscode.commands.registerCommand("ease.testFile", () => runEaseSubcommand("test")),
+    vscode.debug.registerDebugAdapterDescriptorFactory("ease", {
+      createDebugAdapterDescriptor() {
+        return new vscode.DebugAdapterInlineImplementation(new EaseDebugAdapter());
+      },
+    }),
     vscode.debug.registerDebugConfigurationProvider("ease", {
       provideDebugConfigurations() {
         return [
@@ -213,16 +259,23 @@ async function activate(context) {
       },
       resolveDebugConfiguration(folder, config) {
         const active = vscode.window.activeTextEditor;
-        let program = config && config.program;
-        if (!program || program === "${file}") {
+        const resolved = Object.assign(
+          {
+            type: "ease",
+            request: "launch",
+            name: "Run Ease File",
+            program: "${file}",
+          },
+          config || {}
+        );
+        if (!resolved.program || resolved.program === "${file}") {
           if (active && active.document.languageId === "ease") {
-            program = active.document.uri.fsPath;
+            resolved.program = active.document.uri.fsPath;
           }
-        } else if (folder && program.includes("${workspaceFolder}")) {
-          program = program.replace("${workspaceFolder}", folder.uri.fsPath);
+        } else if (folder && resolved.program.includes("${workspaceFolder}")) {
+          resolved.program = resolved.program.replace("${workspaceFolder}", folder.uri.fsPath);
         }
-        runEaseSubcommand("run", program);
-        return null;
+        return resolved;
       },
     })
   );

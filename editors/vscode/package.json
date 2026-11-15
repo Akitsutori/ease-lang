@@ -2,7 +2,7 @@
   "name": "ease-lang",
   "displayName": "Ease Language",
   "description": "Syntax highlighting, live diagnostics, outline symbols, autocomplete, and direct run/test support for Ease (.ease)",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "ease-lang",
   "engines": {
     "vscode": "^1.80.0"
