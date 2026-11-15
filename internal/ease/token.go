@@ -40,7 +40,6 @@ const (
 
 	TOK_TEXT      TokenType = "text"
 	TOK_NUMBER_KW TokenType = "number"
-	TOK_BOOL_KW   TokenType = "bool"
 	TOK_LIST_KW   TokenType = "list"
 
 	// Punctuation & Operators
@@ -93,7 +92,6 @@ var keywords = map[string]TokenType{
 	"not":    TOK_NOT,
 	"text":   TOK_TEXT,
 	"number": TOK_NUMBER_KW,
-	"bool":   TOK_BOOL_KW,
 	"list":   TOK_LIST_KW,
 }
 

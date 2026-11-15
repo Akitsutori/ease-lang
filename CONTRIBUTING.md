@@ -90,7 +90,7 @@ Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. 
 2. **Dot Notation Only for Lists and Records**: Index lists and access fields consistently with `.` (`cloud.0.vx`, `player.hp`). Build lists with `list 1, 2, 3` or `list as <type>`.
 3. **Logic-Free Data Blueprints (`def`)**: Keep `def` declarations pure data structures with defaults and union constraints (`"a" | "b"`). Behavior belongs exclusively in verbs (`to ... end`).
 4. **Strict Boundary Between Shape and Meaning (Zero Silent Fallbacks)**:
-   - `as <type>` enforces **shape / type conformity** with **no silent fallbacks**: the target must be a built-in base type (`text`, `number`, `bool`) or a previously declared/imported `def` blueprint, and any invalid cast or JSON mismatch aborts immediately with a clear error.
+   - `as <type>` enforces **shape / type conformity** with **no silent fallbacks**: the target must be a built-in base type (`text`, `number`) or a previously declared/imported `def` blueprint, and any invalid cast or JSON mismatch aborts immediately with a clear error.
    - `to ...` + `check` handles **domain validity** (business rules, ranges, invariants).
 5. **No Legacy Syntax Regressions**: Do not reintroduce `let`, `var`, `set`, `report`, `test:`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing.
 6. **Tests & Docs Ship Together**: Every change to lexing, parsing, evaluation, or standard modules must include Go unit tests in `internal/ease/ease_test.go`, corresponding `.ease` coverage in `tests/` or `examples/`, and an exact update to the BNF grammar and docs in `README.md` if syntax changed.

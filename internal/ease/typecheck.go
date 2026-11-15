@@ -229,7 +229,7 @@ func (v *typeValidator) checkExpr(e Expr) error {
 
 func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx string, requireRecord bool) error {
 	switch typeName {
-	case "text", "number", "bool":
+	case "text", "number":
 		if requireRecord {
 			return newError(
 				"TypeError",
@@ -241,6 +241,15 @@ func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx s
 			)
 		}
 		return nil
+	case "bool", "boolean":
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Boolean (%q) is not a built-in type in Ease", typeName),
+			"Ease models states with explicit domain union types instead of booleans, e.g.: def status = \"active\" | \"inactive\".",
+		)
 	case "string":
 		return newError(
 			"TypeError",
@@ -283,12 +292,12 @@ func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx s
 			col,
 			v.source,
 			fmt.Sprintf("Constant %q (defined on line %d) is not a type or 'def' blueprint", typeName, constLine),
-			fmt.Sprintf("After '%s', only built-in types (text, number, bool) or a 'def' blueprint are allowed.", ctx),
+			fmt.Sprintf("After '%s', only built-in types (text, number) or a 'def' blueprint are allowed.", ctx),
 		)
 	}
 
 	candidates := v.availableTypeNames(requireRecord)
-	hint := fmt.Sprintf("After '%s', only built-in types (text, number, bool) or a previously defined/imported 'def' blueprint are allowed.", ctx)
+	hint := fmt.Sprintf("After '%s', only built-in types (text, number) or a previously defined/imported 'def' blueprint are allowed.", ctx)
 	if suggestion := closestTypeName(typeName, candidates); suggestion != "" {
 		hint = fmt.Sprintf("Did you mean %q? %s", suggestion, hint)
 	} else if len(candidates) > 0 {
@@ -308,7 +317,7 @@ func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx s
 func (v *typeValidator) availableTypeNames(recordsOnly bool) []string {
 	var out []string
 	if !recordsOnly {
-		out = append(out, "text", "number", "bool")
+		out = append(out, "text", "number")
 	}
 	var defs []string
 	for name, info := range v.known {

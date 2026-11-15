@@ -474,7 +474,7 @@ func (p *Parser) parseCheckItem() (Stmt, error) {
 	if p.match(TOK_IS) {
 		negated := p.match(TOK_NOT)
 		isBareListType := p.check(TOK_LIST_KW) && p.isTypeAssertionEnd(p.peekNext().Type)
-		if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || p.check(TOK_BOOL_KW) || isBareListType {
+		if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || isBareListType {
 			typeTok := p.advance()
 			if err := p.expectStmtEnd("'is' type assertion"); err != nil {
 				return nil, err
@@ -1001,7 +1001,7 @@ func (p *Parser) parseComparison() (Expr, error) {
 				negated = true
 			}
 			isBareListType := p.check(TOK_LIST_KW) && p.isTypeAssertionEnd(p.peekNext().Type)
-			if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || p.check(TOK_BOOL_KW) || isBareListType {
+			if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || isBareListType {
 				typeTok := p.advance()
 				left = &TypeCheckExpr{
 					posInfo:  posInfo{Line: opTok.Line, Col: opTok.Col},
@@ -1164,14 +1164,14 @@ func (p *Parser) parsePostfix() (Expr, error) {
 		}
 
 		if !p.disallowAs && p.match(TOK_AS) {
-			if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_BOOL_KW) && !p.check(TOK_IDENT) {
+			if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
 				tok := p.current()
 				return nil, newError(
 					"SyntaxError",
 					tok.Line,
 					tok.Col,
 					p.source,
-					fmt.Sprintf("Expected target type ('number', 'text', 'bool', or a 'def' type) after 'as', got %q", tok.Lexeme),
+					fmt.Sprintf("Expected target type ('number', 'text', or a 'def' type) after 'as', got %q", tok.Lexeme),
 					"Example: ask \"Age?\" as number or raw as api_user",
 				)
 			}
@@ -1420,14 +1420,14 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 	listTok := p.advance() // consume `list`
 	if p.match(TOK_AS) {
-		if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_BOOL_KW) && !p.check(TOK_IDENT) {
+		if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
 			tok := p.current()
 			return nil, newError(
 				"SyntaxError",
 				tok.Line,
 				tok.Col,
 				p.source,
-				fmt.Sprintf("Expected element type ('number', 'text', 'bool', or a 'def' record) after 'list as', got %q", tok.Lexeme),
+				fmt.Sprintf("Expected element type ('number', 'text', or a 'def' record) after 'list as', got %q", tok.Lexeme),
 				"Example: list as number, or list as particle",
 			)
 		}

@@ -1047,9 +1047,27 @@ func TestStrictAsRejectsUnknownTypes(t *testing.T) {
 			wantLine: 1,
 		},
 		{
+			name:     "bool is not a built-in type",
+			src:      "x = \"true\" as bool\n",
+			wantSub:  `Boolean ("bool") is not a built-in type in Ease`,
+			wantLine: 1,
+		},
+		{
+			name:     "boolean is not a built-in type",
+			src:      "x = \"true\" as boolean\n",
+			wantSub:  `Boolean ("boolean") is not a built-in type in Ease`,
+			wantLine: 1,
+		},
+		{
 			name:     "unknown type in list as",
 			src:      "xs = list as unknown_item\n",
 			wantSub:  `Unknown type "unknown_item" after 'list as'`,
+			wantLine: 1,
+		},
+		{
+			name:     "bool not allowed in list as",
+			src:      "xs = list as bool\n",
+			wantSub:  `Boolean ("bool") is not a built-in type in Ease`,
 			wantLine: 1,
 		},
 	}
@@ -1073,7 +1091,7 @@ func TestStrictAsRejectsUnknownTypes(t *testing.T) {
 		})
 	}
 
-	// Valid cases: built-in types, prior def, imported std module blueprint, and union def.
+	// Valid cases: built-in types (text, number), prior def, imported std module blueprint, and union def.
 	validSrc := `
 import network
 
@@ -1085,11 +1103,10 @@ def ticket = "open" | "closed"
 
 a = 42 as text
 b = "12" as number
-c = "true" as bool
 d = "open" as ticket
 e = "\{\"name\": \"Ada\"\}" as custom_user
 f = "\{\"status\": 200, \"body\": \"ok\"\}" as http_response
-g = list as bool
+g = list as number
 `
 	if _, err := ParseProgram(validSrc); err != nil {
 		t.Fatalf("expected valid strict 'as' usages to parse cleanly, got: %v", err)
@@ -1106,11 +1123,6 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 			name:    "invalid number text",
 			src:     `x = "not-a-num" as number`,
 			wantSub: `Cannot convert text "not-a-num" to number`,
-		},
-		{
-			name:    "invalid bool text",
-			src:     `x = "maybe" as bool`,
-			wantSub: `Cannot convert text "maybe" to bool`,
 		},
 		{
 			name:    "disallowed union value",

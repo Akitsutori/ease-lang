@@ -90,7 +90,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.ease",
-          "match": "\\b(text|number|bool|list)\\b"
+          "match": "\\b(text|number|list)\\b"
         }
       ]
     },

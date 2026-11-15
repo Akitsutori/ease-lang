@@ -136,9 +136,6 @@ func matchesEaseType(v Value, typeName string) bool {
 	case "number":
 		_, ok := v.(float64)
 		return ok
-	case "bool":
-		_, ok := v.(bool)
-		return ok
 	case "list":
 		_, _, ok := asListElements(v)
 		return ok
@@ -748,13 +745,13 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 
 	case *TypedListExpr:
 		if len(e.Rows) == 0 {
-			if e.ElemType != "number" && e.ElemType != "text" && e.ElemType != "bool" {
+			if e.ElemType != "number" && e.ElemType != "text" {
 				protoVal, ok := ev.global.Lookup(e.ElemType)
 				if !ok {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def' or use 'number' / 'text' / 'bool'.")
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def' or use 'number' / 'text'.")
 				}
 				if _, isRec := protoVal.(*RecordValue); !isRec {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text' / 'list as bool'.")
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text'.")
 				}
 			}
 			return &ListValue{ElemType: e.ElemType}, nil
@@ -1412,7 +1409,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				"Cannot convert nothing to text",
-				"Provide a text, number, bool, list, or 'def' record value.",
+				"Provide a text, number, list, or 'def' record value.",
 			)
 		}
 		if rec, ok := targetVal.(*RecordValue); ok {
@@ -1453,40 +1450,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot convert %s to number", TypeName(targetVal)),
-				"Only number, numeric text, or bool can be converted with 'as number'.",
-			)
-		}
-
-	case "bool":
-		switch v := targetVal.(type) {
-		case bool:
-			return v, nil
-		case string:
-			low := strings.ToLower(strings.TrimSpace(v))
-			if low == "true" {
-				return true, nil
-			}
-			if low == "false" {
-				return false, nil
-			}
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Cannot convert text %q to bool", v),
-				"Expected \"true\" or \"false\".",
-			)
-		case float64:
-			return v != 0, nil
-		default:
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Cannot convert %s to bool", TypeName(targetVal)),
-				"Only bool, \"true\"/\"false\" text, or number can be converted with 'as bool'.",
+				"Only number or numeric text can be converted with 'as number'.",
 			)
 		}
 
@@ -1499,7 +1463,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Unknown type %q after 'as'", e.TypeName),
-				"Only built-in types (text, number, bool) or a previously defined/imported 'def' blueprint are allowed after 'as'.",
+				"Only built-in types (text, number) or a previously defined/imported 'def' blueprint are allowed after 'as'.",
 			)
 		}
 

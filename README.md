@@ -81,7 +81,7 @@ Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <fi
 
 ### Variables, Constants & Types
 
-Ease has five built-in runtime types — `number`, `text`, `bool`, `list`, `nothing` — plus user-defined records and union types declared with `def`.
+Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`. By design, **Boolean (`bool`) is not a built-in type in Ease**: instead of artificial true/false flags, domain states are modeled explicitly with union types (e.g. `def door_state = "open" | "locked"`).
 
 ```ease
 # Mutable binding
@@ -200,13 +200,13 @@ end
 
 - **Equality, type, and union checks**: `is`, `is-not` / `is not` (plus `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
 - **Strict explicit casting with `as` (zero silent fallbacks)**:
-  - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`, `bool`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (such as `as ö` or a typo like `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time with a clear error message and "Did you mean ...?" hint.
+  - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (such as `as ö`, `as bool`, or a typo like `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time with a clear error message and hint.
   - **Two-outcome rule**: Every `as` expression has **only two possible outcomes**:
     - **A)** The target type exists and the value/data conforms to all fields, types, and union rules -> Ease returns the validated value/object.
-    - **B)** The target type does not exist, or the data deviates (e.g. `"abc" as number`, `"maybe" as bool`, `"" as api_user`, invalid JSON, `null`, wrong field type, or invalid union variant) -> Ease **aborts immediately** with a descriptive error (`TypeError` / `RuntimeError`).
+    - **B)** The target type does not exist, or the data deviates (e.g. `"abc" as number`, `"" as api_user`, invalid JSON, `null`, wrong field type, or invalid union variant) -> Ease **aborts immediately** with a descriptive error (`TypeError` / `RuntimeError`).
   - **Conversions**:
     - `val as text` formats primitives or serializes a `def` record to JSON text.
-    - `val as number` / `val as bool` converts numbers, booleans, or valid numeric/boolean strings strictly.
+    - `val as number` converts numbers or valid numeric strings strictly.
     - `<text> as <def_union>` validates that the string matches one of the union's allowed literals (`"guest" | "admin"`).
     - `<text> as <def_record>` parses a JSON object into a copy of the `<def_record>` blueprint, keeping omitted default fields, ignoring extra JSON keys, and strictly validating every present field's type and union constraint:
 
@@ -325,7 +325,7 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `ask` / `ask "Prompt"` | Reads a line of input from `stdin` (optional prompt) |
 | `do len xs` | Returns length of `text` (runes) or `list` |
 | `do str val` | Converts a value to `text` |
-| `do num val` | Converts `number`, `text`, or `bool` to `number` (raises `RuntimeError` on invalid input) |
+| `do num val` | Converts `number` or `text` to `number` (raises `RuntimeError` on invalid input) |
 | `do type val` | Returns the type name or `def` name as `text` |
 | `do range start, end` | Returns an inclusive list of numbers `[start .. end]` |
 | `do push xs, item` | Returns a new list with `item` appended (enforces element type on `list as <type>`) |
@@ -362,7 +362,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 Keywords:
   to  import  def  with  end  test  check  is  is-not  raises
   do  say  ask  as  if  else  repeat  for  in  true  false
-  and  or  not  text  number  bool  list
+  and  or  not  text  number  list
 
 Operators & Punctuation:
   ->  (  )  ,  .  |  =  ==  !=  <  <=  >  >=  +  -  *  /  %
@@ -431,7 +431,7 @@ check_item     ::= if_stmt
                  | for_stmt
                  | "do" "say" expr stmt_end
                  | assign_stmt
-                 | expr "is" ["not"] ( "text" | "number" | "bool" | "list" ) stmt_end
+                 | expr "is" ["not"] ( "text" | "number" | "list" ) stmt_end
                  | expr ( "is" "not" | "is" | "is-not" | "raises" ) expr stmt_end
 
 stmt_end       ::= NL | EOF | &("end" | "else")
@@ -450,7 +450,7 @@ comparison     ::= term { cmp_op term
                         | is_op ( type_kw | term ) }
 cmp_op         ::= "==" | "!=" | "<" | "<=" | ">" | ">="
 is_op          ::= "is" ["not"] | "is-not"
-type_kw        ::= "text" | "number" | "bool" | "list"
+type_kw        ::= "text" | "number" | "list"
 
 term           ::= factor { ( "+" | "-" ) factor }
 factor         ::= unary  { ( "*" | "/" | "%" ) unary }
@@ -466,7 +466,7 @@ with_clause    ::= "with" NL { with_field stmt_end [NL] } "end"
                  | "with" with_field { "," with_field }
 with_field     ::= IDENT "=" expr
 
-cast_type      ::= "text" | "number" | "bool" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
+cast_type      ::= "text" | "number" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
 
 bare_call_args ::= term { "," term }                     (* 'as' binds outside the full call *)
 
@@ -489,7 +489,7 @@ ask_expr       ::= "ask" [ primary ]                     (* single-token prompt 
 list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," with_field } stmt_end [NL] } "end" ]
                  | "list" expr { "," expr }
 
-list_elem_type ::= "text" | "number" | "bool" | IDENT    (* must name a built-in type or previously defined/imported `def` blueprint *)
+list_elem_type ::= "text" | "number" | IDENT    (* must name a built-in type or previously defined/imported `def` blueprint *)
 ```
 
 > **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do ask client, "/users/1" as api_user` binds `(do ask client, "/users/1") as api_user` rather than casting only the final argument.
