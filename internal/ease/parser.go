@@ -1382,6 +1382,34 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	}
 }
 
+func offsetSourcePos(line, col, baseLine, baseCol int) (int, int) {
+	if line <= 0 {
+		line = 1
+	}
+	if col <= 0 {
+		col = 1
+	}
+	if line == 1 {
+		col += baseCol - 1
+	}
+	line += baseLine - 1
+	return line, col
+}
+
+func offsetTokenPositions(tokens []Token, baseLine, baseCol int) {
+	for i := range tokens {
+		tokens[i].Line, tokens[i].Col = offsetSourcePos(tokens[i].Line, tokens[i].Col, baseLine, baseCol)
+		for j := range tokens[i].Segments {
+			tokens[i].Segments[j].Line, tokens[i].Segments[j].Col = offsetSourcePos(
+				tokens[i].Segments[j].Line,
+				tokens[i].Segments[j].Col,
+				baseLine,
+				baseCol,
+			)
+		}
+	}
+}
+
 func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 	parts := make([]InterpPart, 0, len(tok.Segments))
 	for _, seg := range tok.Segments {
@@ -1392,24 +1420,23 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 		subTokens, err := NewLexer(seg.Text).Tokenize()
 		if err != nil {
 			if eErr, ok := err.(*EaseError); ok {
-				return nil, newError("SyntaxError", seg.Line, seg.Col, p.source, eErr.Message, eErr.Hint)
+				errLine, errCol := offsetSourcePos(eErr.Line, eErr.Col, seg.Line, seg.Col)
+				return nil, newError("SyntaxError", errLine, errCol, p.source, eErr.Message, eErr.Hint)
 			}
 			return nil, err
 		}
-		subParser := &Parser{tokens: subTokens, source: seg.Text}
+		offsetTokenPositions(subTokens, seg.Line, seg.Col)
+		subParser := &Parser{tokens: subTokens, source: p.source}
 		expr, err := subParser.parseExpr()
 		if err != nil {
-			if eErr, ok := err.(*EaseError); ok {
-				return nil, newError("SyntaxError", seg.Line, seg.Col, p.source, eErr.Message, eErr.Hint)
-			}
 			return nil, err
 		}
 		if !subParser.check(TOK_EOF) {
 			extra := subParser.current()
 			return nil, newError(
 				"SyntaxError",
-				seg.Line,
-				seg.Col,
+				extra.Line,
+				extra.Col,
 				p.source,
 				fmt.Sprintf("Unexpected %q inside string interpolation", extra.Lexeme),
 				"Use a single expression inside '{...}', e.g. \"Sum is {x + y}\".",

@@ -1339,3 +1339,67 @@ end
 		t.Fatalf("expected 5 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
 	}
 }
+
+func TestInterpStringErrorLineAndColOffset(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		wantSub  string
+		wantLine int
+		wantCol  int
+	}{
+		{
+			name: "division by zero inside interpolation",
+			src: `a = 1
+b = 2
+c = 3
+say "result={10 / 0}"
+`,
+			wantSub:  "Division by zero",
+			wantLine: 4,
+			wantCol:  17,
+		},
+		{
+			name: "non-atomic record interpolated on later line",
+			src: `def hero
+    hp = 100
+end
+say "hero={hero}"
+`,
+			wantSub:  "Cannot interpolate hero into text",
+			wantLine: 4,
+			wantCol:  12,
+		},
+		{
+			name: "unknown variable inside interpolation",
+			src: `x = 1
+y = 2
+say "val={missing_var}"
+`,
+			wantSub:  `Unknown variable "missing_var"`,
+			wantLine: 3,
+			wantCol:  11,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			_, err := EvalProgram(tc.src, &out)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			var easeErr *EaseError
+			if !errors.As(err, &easeErr) {
+				t.Fatalf("expected *EaseError, got %T: %v", err, err)
+			}
+			if easeErr.Line != tc.wantLine || easeErr.Col != tc.wantCol {
+				t.Fatalf("position mismatch for %s: got line %d col %d, want line %d col %d\nerr:\n%v",
+					tc.name, easeErr.Line, easeErr.Col, tc.wantLine, tc.wantCol, err)
+			}
+			if !strings.Contains(easeErr.Message, tc.wantSub) {
+				t.Fatalf("expected message containing %q, got %q", tc.wantSub, easeErr.Message)
+			}
+		})
+	}
+}
