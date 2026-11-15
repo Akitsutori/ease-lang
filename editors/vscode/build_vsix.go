@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ease-lang/internal/ease"
 )
 
 type vsCodePackage struct {
@@ -48,6 +50,11 @@ func main() {
 		pkgBytes = append(patched, '\n')
 	}
 
+	iconPNG, err := ease.EncodeLogoPNG(128)
+	if err != nil {
+		fatalf("render icon.png: %v", err)
+	}
+
 	outPath := filepath.Join(extDir, fmt.Sprintf("%s-%s.vsix", pkg.Name, version))
 	f, err := os.Create(outPath)
 	if err != nil {
@@ -63,6 +70,8 @@ func main() {
   <Default Extension=".json" ContentType="application/json"/>
   <Default Extension=".js" ContentType="application/javascript"/>
   <Default Extension=".md" ContentType="text/markdown"/>
+  <Default Extension=".png" ContentType="image/png"/>
+  <Default Extension=".svg" ContentType="image/svg+xml"/>
   <Default Extension=".vsixmanifest" ContentType="text/xml"/>
 </Types>
 `
@@ -73,6 +82,7 @@ func main() {
     <DisplayName>%s</DisplayName>
     <Description xml:space="preserve">%s</Description>
     <Categories>Programming Languages</Categories>
+    <Icon>extension/images/icon.png</Icon>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Code" Version="[1.80.0,)"/>
@@ -80,24 +90,30 @@ func main() {
   <Dependencies/>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/>
+    <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/images/icon.png" Addressable="true"/>
   </Assets>
 </PackageManifest>
 `, pkg.Name, version, pkg.Publisher, pkg.DisplayName, pkg.Description)
 
-	if err := writeZipString(zw, "[Content_Types].xml", contentTypes); err != nil {
+	if err := writeZipBytes(zw, "[Content_Types].xml", []byte(contentTypes)); err != nil {
 		fatalf("write [Content_Types].xml: %v", err)
 	}
-	if err := writeZipString(zw, "extension.vsixmanifest", manifest); err != nil {
+	if err := writeZipBytes(zw, "extension.vsixmanifest", []byte(manifest)); err != nil {
 		fatalf("write extension.vsixmanifest: %v", err)
 	}
-	if err := writeZipString(zw, "extension/package.json", string(pkgBytes)); err != nil {
+	if err := writeZipBytes(zw, "extension/package.json", pkgBytes); err != nil {
 		fatalf("pack package.json: %v", err)
+	}
+	if err := writeZipBytes(zw, "extension/images/icon.png", iconPNG); err != nil {
+		fatalf("pack images/icon.png: %v", err)
 	}
 
 	files := []string{
 		"extension.js",
 		"language-configuration.json",
 		filepath.Join("syntaxes", "ease.tmLanguage.json"),
+		filepath.Join("images", "icon.svg"),
+		filepath.Join("icons", "ease-icon-theme.json"),
 	}
 	for _, rel := range files {
 		src := filepath.Join(extDir, rel)
@@ -113,12 +129,12 @@ func main() {
 	fmt.Printf("Created %s\n", outPath)
 }
 
-func writeZipString(zw *zip.Writer, name, content string) error {
+func writeZipBytes(zw *zip.Writer, name string, data []byte) error {
 	w, err := zw.Create(name)
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(w, content)
+	_, err = w.Write(data)
 	return err
 }
 

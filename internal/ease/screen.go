@@ -2,6 +2,7 @@ package ease
 
 import (
 	"encoding/json"
+	"image"
 	"image/color"
 	"strings"
 	"sync"
@@ -187,6 +188,7 @@ func startScreenSession(width, height int, title string) *screenSession {
 		defer close(sess.exited)
 		ebiten.SetWindowSize(width, height)
 		ebiten.SetWindowTitle(title)
+		ebiten.SetWindowIcon([]image.Image{NewLogoImage(48), NewLogoImage(16)})
 		ebiten.SetWindowClosingHandled(true)
 		_ = ebiten.RunGame(g)
 	}

@@ -2,8 +2,9 @@
   "name": "ease-lang",
   "displayName": "Ease Language",
   "description": "Syntax highlighting, live diagnostics, outline symbols, autocomplete, and direct run/test support for Ease (.ease)",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "ease-lang",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -79,7 +80,18 @@
         "extensions": [
           ".ease"
         ],
+        "icon": {
+          "light": "./images/icon.svg",
+          "dark": "./images/icon.svg"
+        },
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "ease-icons",
+        "label": "Ease File Icons",
+        "path": "./icons/ease-icon-theme.json"
       }
     ],
     "grammars": [

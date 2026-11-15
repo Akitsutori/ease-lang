@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Ease Logo" width="96" />
+</p>
+
 # Ease
 
 **Ease** is a compact, cognitively simple programming language implemented in Go, designed around readable bracket-free verbs (`to` / `do`), logic-free data blueprints (`def`), explicit value spaces (union types), declarative guards (`check`), and built-in unit tests (`test`).

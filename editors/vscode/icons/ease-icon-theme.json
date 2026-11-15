@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "_ease": {
+      "iconPath": "../images/icon.svg"
+    }
+  },
+  "fileExtensions": {
+    "ease": "_ease"
+  }
+}
