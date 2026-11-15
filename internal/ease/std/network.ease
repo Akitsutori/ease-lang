@@ -1,0 +1,50 @@
+# std/network.ease
+
+def network
+    url     = ""
+    timeout = 5
+    token   = ""
+end
+
+def http_request
+    method  = "GET" | "POST" | "PUT" | "DELETE"
+    url     = ""
+    body    = ""
+    token   = ""
+    timeout = 5
+end
+
+def http_response
+    status = 0
+    body   = ""
+    error  = ""
+end
+
+to ask target, path
+    req = http_request with
+        method  = "GET"
+        url     = "{target.url}{path}"
+        token   = target.token
+        timeout = target.timeout
+    end
+
+    res = do http_call req
+    check res.error is not "" -> ""
+    check res.status >= 400   -> ""
+    res.body
+end
+
+to send target, path, payload
+    req = http_request with
+        method  = "POST"
+        url     = "{target.url}{path}"
+        body    = payload as text
+        token   = target.token
+        timeout = target.timeout
+    end
+
+    res = do http_call req
+    check res.error is not "" -> ""
+    check res.status >= 400   -> ""
+    res.body
+end

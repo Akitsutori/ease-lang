@@ -1,6 +1,6 @@
 # Compiled binaries
-ease
-ease.exe
+/ease
+/ease.exe
 *.exe
 *.out
 *.test

@@ -1,0 +1,41 @@
+# std/screen.ease
+
+def screen
+    width  = 800
+    height = 600
+    title  = "Ease Window"
+end
+
+def circle
+    x     = 0
+    y     = 0
+    size  = 20
+    color = "red"
+end
+
+def box
+    x      = 0
+    y      = 0
+    width  = 40
+    height = 40
+    color  = "blue"
+end
+
+def scene
+    background = "black"
+    circles    = list as circle
+    boxes      = list as box
+end
+
+def frame_state
+    status  = "open" | "closed"
+    key     = ""
+    mouse_x = 0
+    mouse_y = 0
+end
+
+# Sendet eine fertige Szene an das Fenster, zeichnet 1 Frame (60 FPS)
+# und gibt den aktuellen Fenster- und Eingabezustand als Text/JSON zurück.
+to send target, current_scene
+    do screen_present target, current_scene
+end
