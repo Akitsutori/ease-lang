@@ -8,6 +8,8 @@ to fib n
     left = do fib n - 1
     right = do fib n - 2
     left + right
+end
+
 test
     do fib 0 is 0
     do fib 1 is 1

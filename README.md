@@ -259,12 +259,14 @@ for do range 1, 5 do say it end
 
 ### Built-in Tests (`test` & `check`)
 
-Assertions can live inline inside a function (`test ... end`) or at the top level (`test ["label"] ... end` / `check "label" ... end`) using `is`, `is not` / `is-not`, and `raises`:
+Every `to ... end` function closes with its own `end`. Assertions live in standalone `test ["label"] ... end` (or `check "label" ... end`) blocks executed by `ease test <file.ease>` using `is`, `is not` / `is-not`, and `raises`:
 
 ```ease
 to safe_div a, b
     check b == 0 -> do fail "Division by zero"
     a / b
+end
+
 test
     do safe_div 10, 2 is 5
     do safe_div 1, 0 raises "Division by zero"
@@ -366,9 +368,8 @@ top_item       ::= import_decl
 import_decl    ::= "import" IDENT stmt_end
 
 func_decl      ::= "to" ( IDENT | "ask" ) { IDENT [ "," ] }
-                   ( NL | &( "test" | "end" ) )
+                   ( NL | &"end" )
                    { stmt [NL] }
-                   [ "test" [NL] { check_item [NL] } ]
                    "end"
 
 def_decl       ::= "def" IDENT "=" expr "|" term { "|" term } stmt_end    (* union decl *)
@@ -418,7 +419,7 @@ check_item     ::= if_stmt
                  | expr "is" ["not"] ( "text" | "number" | "bool" | "list" ) stmt_end
                  | expr ( "is" "not" | "is" | "is-not" | "raises" ) expr stmt_end
 
-stmt_end       ::= NL | EOF | &("end" | "else" | "test")
+stmt_end       ::= NL | EOF | &("end" | "else")
 ```
 
 ### Expressions (Precedence Low to High)

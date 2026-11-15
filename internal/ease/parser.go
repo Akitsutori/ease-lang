@@ -79,7 +79,7 @@ func (p *Parser) skipNewlines() {
 }
 
 func (p *Parser) expectStmtEnd(context string) error {
-	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) || p.check(TOK_ELSE) || p.check(TOK_TEST) {
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) || p.check(TOK_ELSE) {
 		p.skipNewlines()
 		return nil
 	}
@@ -193,7 +193,7 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 		p.match(TOK_COMMA)
 	}
 
-	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_TEST) && !p.check(TOK_END) {
+	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_END) {
 		tok := p.current()
 		return nil, newError(
 			"SyntaxError",
@@ -207,7 +207,7 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	p.skipNewlines()
 
 	var body []Stmt
-	for !p.check(TOK_TEST) && !p.check(TOK_END) {
+	for !p.check(TOK_END) {
 		if p.check(TOK_EOF) {
 			return nil, newError(
 				"SyntaxError",
@@ -226,29 +226,6 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 		p.skipNewlines()
 	}
 
-	var whereChecks []Stmt
-	if p.match(TOK_TEST) {
-		p.skipNewlines()
-		for !p.check(TOK_END) {
-			if p.check(TOK_EOF) {
-				return nil, newError(
-					"SyntaxError",
-					toTok.Line,
-					toTok.Col,
-					p.source,
-					fmt.Sprintf("Function 'to %s' is missing 'end' after 'test' block", nameTok.Lexeme),
-					"Close the function and its 'test' block with 'end'.",
-				)
-			}
-			chk, err := p.parseCheckItem()
-			if err != nil {
-				return nil, err
-			}
-			whereChecks = append(whereChecks, chk)
-			p.skipNewlines()
-		}
-	}
-
 	if !p.match(TOK_END) {
 		tok := p.current()
 		return nil, newError(
@@ -262,11 +239,10 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	}
 
 	return &FuncDecl{
-		posInfo:     posInfo{Line: toTok.Line, Col: toTok.Col},
-		Name:        nameTok.Lexeme,
-		Params:      params,
-		Body:        body,
-		WhereChecks: whereChecks,
+		posInfo: posInfo{Line: toTok.Line, Col: toTok.Col},
+		Name:    nameTok.Lexeme,
+		Params:  params,
+		Body:    body,
 	}, nil
 }
 
@@ -619,6 +595,15 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			p.source,
 			"Nested 'def' record definitions are not allowed inside blocks",
 			"Define records with 'def ... end' at the top level of the file.",
+		)
+	case TOK_TEST:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Nested 'test' blocks are not allowed inside functions or statements",
+			"Close the enclosing block with 'end' before starting a 'test ... end' block.",
 		)
 	default:
 		if tok.Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {

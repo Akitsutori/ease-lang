@@ -255,8 +255,8 @@ func cmdAst(args []string) int {
 		fmt.Printf("  - def %s (%s)\n", d.Name, strings.Join(names, ", "))
 	}
 	for _, fn := range prog.Functions {
-		fmt.Printf("  - to %s %s (body=%d stmts, test=%d checks)\n",
-			fn.Name, strings.Join(fn.Params, ", "), len(fn.Body), len(fn.WhereChecks))
+		fmt.Printf("  - to %s %s (body=%d stmts)\n",
+			fn.Name, strings.Join(fn.Params, ", "), len(fn.Body))
 	}
 	for _, blk := range prog.Checks {
 		fmt.Printf("  - check %q (%d items)\n", blk.Title, len(blk.Body))

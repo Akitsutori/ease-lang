@@ -33,14 +33,15 @@ func TestToWhereAndCheckBlockExecution(t *testing.T) {
 	src := `
 to double x
   x * 2
-test
-  do double 4 is 8
-  do double 4 is-not 9
 end
 
 to divide a, b
   a / b
-test
+end
+
+test "functions"
+  do double 4 is 8
+  do double 4 is-not 9
   do divide 10, 2 is 5
   do divide 1, 0 raises "Division by zero"
 end
@@ -78,6 +79,8 @@ func TestCheckFailureAndImmutabilityHint(t *testing.T) {
 	badCheck := `
 to square n
   n * n
+end
+
 test
   do square 3 is 10
 end
@@ -601,6 +604,7 @@ func TestLegacySyntaxRejected(t *testing.T) {
 		{"bracket indexing", "xs = list 1, 2\ny = xs[0]\n"},
 		{"paren function call", "to inc x\n  x + 1\nend\ny = inc(1)\n"},
 		{"paren ask call", "x = ask(\"Name?\")\n"},
+		{"inline test inside function", "to greet name\n  \"Hi {name}\"\ntest\n  do greet \"World\" is \"Hi World\"\nend\n"},
 	}
 	for _, tc := range cases {
 		if tc.name == "report keyword" {

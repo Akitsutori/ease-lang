@@ -34,13 +34,12 @@ type posInfo struct {
 
 func (p posInfo) Pos() (int, int) { return p.Line, p.Col }
 
-// FuncDecl defines a NetLogo-style `to <name> <params> ... test ... end` function.
+// FuncDecl defines a `to <name> <params> ... end` function.
 type FuncDecl struct {
 	posInfo
-	Name        string
-	Params      []string
-	Body        []Stmt
-	WhereChecks []Stmt
+	Name   string
+	Params []string
+	Body   []Stmt
 }
 
 // DefField defines a field and its default value (plus optional union allowed values) inside a `def <name> ... end` record.

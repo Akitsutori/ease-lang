@@ -51,16 +51,6 @@ func RunChecksWithTrace(source string, trace io.Writer) (*CheckReport, error) {
 
 	report := &CheckReport{}
 
-	for _, fn := range prog.Functions {
-		if len(fn.WhereChecks) == 0 {
-			continue
-		}
-		scopeName := fmt.Sprintf("to %s -> test", fn.Name)
-		ev.logTrace("running %s (%d assertion(s))", scopeName, len(fn.WhereChecks))
-		scopeEnv := NewEnv(ev.global)
-		runCheckList(ev, scopeName, fn.WhereChecks, scopeEnv, report)
-	}
-
 	for _, blk := range prog.Checks {
 		scopeName := fmt.Sprintf("check %q", blk.Title)
 		ev.logTrace("running %s (%d assertion(s))", scopeName, len(blk.Body))

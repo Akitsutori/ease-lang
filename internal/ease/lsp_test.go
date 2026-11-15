@@ -13,12 +13,25 @@ func TestDiagnoseSourceValidAndInvalid(t *testing.T) {
 	valid := `
 to greet name
     "Hello {name}"
+end
+
 test
     do greet "World" is "Hello World"
 end
 `
 	if diags := DiagnoseSource(valid); len(diags) != 0 {
 		t.Fatalf("expected 0 diagnostics for valid Ease code, got %+v", diags)
+	}
+
+	nestedTest := `
+to greet name
+    "Hello {name}"
+test
+    do greet "World" is "Hello World"
+end
+`
+	if diags := DiagnoseSource(nestedTest); len(diags) == 0 {
+		t.Fatalf("expected diagnostic when 'to' is not closed with 'end' before 'test'")
 	}
 
 	invalid := `

@@ -2,8 +2,10 @@
 
 to greet name
     "Hallo {name}, willkommen bei ease!"
+end
+
 test
     do greet "Welt" is "Hallo Welt, willkommen bei ease!"
 end
 
-say do greet "Welt" 
+say do greet "Welt"
