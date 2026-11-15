@@ -54,8 +54,9 @@ type DefField struct {
 // DefDecl defines a data record/prototype with `def <name> ... end`.
 type DefDecl struct {
 	posInfo
-	Name   string
-	Fields []DefField
+	Name     string
+	Fields   []DefField
+	Imported bool
 }
 
 // UnionDecl defines a union type value-space with `def <name> = v1 | v2 | ...`.
@@ -63,6 +64,7 @@ type UnionDecl struct {
 	posInfo
 	Name     string
 	Variants []Expr
+	Imported bool
 }
 
 // CheckBlock defines a top-level Pyret-style `check "label": ... end` block.
@@ -238,6 +240,8 @@ func (*ListExpr) exprNode() {}
 type TypedListExpr struct {
 	posInfo
 	ElemType string
+	TypeLine int
+	TypeCol  int
 	Rows     [][]WithFieldUpdate
 }
 
@@ -266,6 +270,8 @@ type CastExpr struct {
 	posInfo
 	Target   Expr
 	TypeName string
+	TypeLine int
+	TypeCol  int
 }
 
 func (*CastExpr) exprNode() {}

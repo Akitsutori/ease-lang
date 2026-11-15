@@ -2,6 +2,7 @@ package ease
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,7 +151,7 @@ func TestStandaloneBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	programSrc := "to greet who\n  \"Hi \" + who\ntest\n  do greet \"Ease\" is \"Hi Ease\"\nend\nsay do greet \"Go\"\n"
+	programSrc := "to greet who\n  \"Hi \" + who\nend\ntest\n  do greet \"Ease\" is \"Hi Ease\"\nend\nsay do greet \"Go\"\n"
 	if err := BuildStandaloneExe(hostPath, programSrc, outPath); err != nil {
 		t.Fatalf("BuildStandaloneExe failed: %v", err)
 	}
@@ -375,10 +376,7 @@ say name
 func TestExplicitAsCast(t *testing.T) {
 	src := `
 user_age = ask "Age?" as number
-check user_age is not number -> say "not a number"
-if user_age is number
-  say "next={user_age + 1}"
-end
+say "next={user_age + 1}"
 say 42 as text + "!"
 `
 	var out1 bytes.Buffer
@@ -390,11 +388,12 @@ say 42 as text + "!"
 	}
 
 	var out2 bytes.Buffer
-	if _, err := EvalProgramWithInput(src, strings.NewReader("abc\n"), &out2); err != nil {
-		t.Fatalf("non-numeric input failed: %v", err)
+	_, err := EvalProgramWithInput(src, strings.NewReader("abc\n"), &out2)
+	if err == nil {
+		t.Fatalf("expected error on non-numeric input with strict 'as number', got output: %q", out2.String())
 	}
-	if out2.String() != "Age? not a number\n42!\n" {
-		t.Fatalf("unexpected non-numeric output: %q", out2.String())
+	if !strings.Contains(err.Error(), `Cannot convert text "abc" to number`) {
+		t.Fatalf("unexpected error message for 'as number': %v", err)
 	}
 }
 
@@ -741,9 +740,7 @@ func TestStdNetworkImportAndHTTPCall(t *testing.T) {
 import network
 
 to parse_age raw
-    age = raw as number
-    check age is not number -> "Ungültiges Zahlenformat"
-    age
+    raw as number
 end
 
 to validate_age age
@@ -774,7 +771,7 @@ test "std/network real HTTP GET/POST & Form/Inhalt"
     # Typ-Konformität (as) vs. Inhaltsvalidität (to + check)
     do parse_age raw_ok is 25
     do parse_age raw_neg is -5
-    do parse_age raw_bad is "Ungültiges Zahlenformat"
+    do parse_age raw_bad raises "Cannot convert text"
     do validate_age do parse_age raw_ok is 25
     do validate_age do parse_age raw_neg is "Alter kann nicht negativ sein"
 
@@ -816,24 +813,21 @@ test "Record <-> JSON via as"
     decoded.id is 7
     decoded.role is "admin"
 
-    # Non-match cases -> is not api_user
-    empty = "" as api_user
-    bad_json = "\{broken" as api_user
-    bad_type = "\{\"id\": \"not-a-num\"\}" as api_user
-    bad_union = "\{\"role\": \"superuser\"\}" as api_user
-
-    empty is not api_user
-    bad_json is not api_user
-    bad_type is not api_user
-    bad_union is not api_user
+    # Non-match cases -> immediate error (Outcome B, zero silent fallbacks)
+    "" as api_user raises "empty text"
+    "\{broken" as api_user raises "invalid JSON"
+    "null" as api_user raises "JSON null"
+    "\{\"id\": \"not-a-num\"\}" as api_user raises "api_user.id"
+    "\{\"role\": \"superuser\"\}" as api_user raises "api_user.role"
+    42 as api_user raises "expected JSON text"
 end
 `
 	report, err := RunChecks(src)
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Passed != 11 || report.Failed != 0 {
-		t.Fatalf("expected 11 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	if report.Passed != 13 || report.Failed != 0 {
+		t.Fatalf("expected 13 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
 	}
 }
 
@@ -996,5 +990,155 @@ end
 	}
 	if report.Passed != 4 || report.Failed != 0 {
 		t.Fatalf("expected 4 passed checks, got %+v", report)
+	}
+}
+
+func TestUnicodeIdentifierLexer(t *testing.T) {
+	tokens, err := NewLexer(`response = "ok" as ö`).Tokenize()
+	if err != nil {
+		t.Fatalf("Tokenize failed: %v", err)
+	}
+	var lastIdent Token
+	for _, tok := range tokens {
+		if tok.Type == TOK_IDENT {
+			lastIdent = tok
+		}
+	}
+	if lastIdent.Lexeme != "ö" {
+		t.Fatalf("expected final identifier 'ö', got %+v", lastIdent)
+	}
+}
+
+func TestStrictAsRejectsUnknownTypes(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		wantSub  string
+		wantLine int
+	}{
+		{
+			name:     "unknown unicode ident",
+			src:      "import network\nx = \"ok\" as ö\n",
+			wantSub:  `Unknown type "ö" after 'as'`,
+			wantLine: 2,
+		},
+		{
+			name:     "typo suggestion",
+			src:      "def api_user\n    id = 0\nend\nx = \"\\{\\}\" as api_usre\n",
+			wantSub:  `Did you mean "api_user"?`,
+			wantLine: 4,
+		},
+		{
+			name:     "string alias hint",
+			src:      "x = 42 as string\n",
+			wantSub:  "Did you mean 'text'?",
+			wantLine: 1,
+		},
+		{
+			name:     "constant is not a blueprint",
+			src:      "def pi = 3.14\nx = \"3.14\" as pi\n",
+			wantSub:  `Constant "pi" (defined on line 1) is not a type or 'def' blueprint`,
+			wantLine: 2,
+		},
+		{
+			name:     "forward declared def rejected",
+			src:      "x = \"\\{\\}\" as late_user\ndef late_user\n    id = 0\nend\n",
+			wantSub:  `Type "late_user" is used after 'as' before it is defined (defined on line 2)`,
+			wantLine: 1,
+		},
+		{
+			name:     "unknown type in list as",
+			src:      "xs = list as unknown_item\n",
+			wantSub:  `Unknown type "unknown_item" after 'list as'`,
+			wantLine: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected parse error for %s, got nil", tc.name)
+			}
+			var easeErr *EaseError
+			if !errors.As(err, &easeErr) {
+				t.Fatalf("expected *EaseError, got %T: %v", err, err)
+			}
+			if easeErr.Line != tc.wantLine {
+				t.Fatalf("expected line %d, got %d (%v)", tc.wantLine, easeErr.Line, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected %q in error:\n%v", tc.wantSub, err)
+			}
+		})
+	}
+
+	// Valid cases: built-in types, prior def, imported std module blueprint, and union def.
+	validSrc := `
+import network
+
+def custom_user
+    name = ""
+end
+
+def ticket = "open" | "closed"
+
+a = 42 as text
+b = "12" as number
+c = "true" as bool
+d = "open" as ticket
+e = "\{\"name\": \"Ada\"\}" as custom_user
+f = "\{\"status\": 200, \"body\": \"ok\"\}" as http_response
+g = list as bool
+`
+	if _, err := ParseProgram(validSrc); err != nil {
+		t.Fatalf("expected valid strict 'as' usages to parse cleanly, got: %v", err)
+	}
+}
+
+func TestStrictAsRuntimeErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "invalid number text",
+			src:     `x = "not-a-num" as number`,
+			wantSub: `Cannot convert text "not-a-num" to number`,
+		},
+		{
+			name:    "invalid bool text",
+			src:     `x = "maybe" as bool`,
+			wantSub: `Cannot convert text "maybe" to bool`,
+		},
+		{
+			name:    "disallowed union value",
+			src:     "def ticket = \"open\" | \"closed\"\nx = \"pending\" as ticket\n",
+			wantSub: `Value pending is not valid for union "ticket"`,
+		},
+		{
+			name:    "json array rejected for record def",
+			src:     "def user\n    id = 0\nend\nx = \"[1, 2]\" as user\n",
+			wantSub: `Cannot convert text to user: invalid JSON`,
+		},
+		{
+			name:    "wrong nested field type",
+			src:     "def user\n    id = 0\nend\nx = \"\\{\\\"id\\\": true\\}\" as user\n",
+			wantSub: `Field 'user.id' expected number, got bool`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			_, err := EvalProgram(tc.src, &out)
+			if err == nil {
+				t.Fatalf("expected runtime error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected %q in error:\n%v", tc.wantSub, err)
+			}
+		})
 	}
 }

@@ -45,9 +45,12 @@ end
 # Interaktiver Hauptablauf mit Tastatureingabe (ask)
 say "--- Einlasskontrolle ---"
 user_name = ask "Wie heißt du?"
-user_age  = ask "Wie alt bist du?" as number
-
-check user_age is not number -> say "Bitte beim nächsten Mal eine Zahl eingeben."
-
-result = do allow_entry user_name, user_age
-say result
+raw_age   = ask "Wie alt bist du?"
+if raw_age is ""
+    result = do allow_entry user_name, raw_age
+    say result
+else
+    user_age = raw_age as number
+    result = do allow_entry user_name, user_age
+    say result
+end

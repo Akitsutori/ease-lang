@@ -748,13 +748,13 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 
 	case *TypedListExpr:
 		if len(e.Rows) == 0 {
-			if e.ElemType != "number" && e.ElemType != "text" && e.ElemType != "string" {
+			if e.ElemType != "number" && e.ElemType != "text" && e.ElemType != "bool" {
 				protoVal, ok := ev.global.Lookup(e.ElemType)
 				if !ok {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def' or use 'number' / 'text'.")
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def' or use 'number' / 'text' / 'bool'.")
 				}
 				if _, isRec := protoVal.(*RecordValue); !isRec {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text'.")
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("%q is not a 'def' record type", e.ElemType), "Use 'list as <def_name>' or 'list as number' / 'list as text' / 'list as bool'.")
 				}
 			}
 			return &ListValue{ElemType: e.ElemType}, nil
@@ -904,76 +904,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		switch e.TypeName {
-		case "text", "string":
-			if rec, ok := targetVal.(*RecordValue); ok {
-				b, err := json.Marshal(easeValueToJSON(rec))
-				if err != nil {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Cannot serialize %s to JSON: %v", rec.TypeName, err), "")
-				}
-				return string(b), nil
-			}
-			return FormatValue(targetVal), nil
-		case "number":
-			switch v := targetVal.(type) {
-			case float64:
-				return v, nil
-			case string:
-				n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-				if err != nil {
-					// Keep original non-numeric value so `check x is not number` can handle it cleanly.
-					return targetVal, nil
-				}
-				return n, nil
-			case bool:
-				if v {
-					return float64(1), nil
-				}
-				return float64(0), nil
-			default:
-				return targetVal, nil
-			}
-		case "bool":
-			switch v := targetVal.(type) {
-			case bool:
-				return v, nil
-			case string:
-				low := strings.ToLower(strings.TrimSpace(v))
-				if low == "true" {
-					return true, nil
-				}
-				if low == "false" {
-					return false, nil
-				}
-				return targetVal, nil
-			case float64:
-				return v != 0, nil
-			default:
-				return targetVal, nil
-			}
-		default:
-			if protoVal, ok := env.Lookup(e.TypeName); ok {
-				if proto, isRec := protoVal.(*RecordValue); isRec && proto.IsPrototype {
-					if rec, already := targetVal.(*RecordValue); already && rec.TypeName == e.TypeName {
-						return rec, nil
-					}
-					rawStr, isStr := targetVal.(string)
-					if !isStr || strings.TrimSpace(rawStr) == "" {
-						return targetVal, nil
-					}
-					var rawMap map[string]any
-					if err := json.Unmarshal([]byte(rawStr), &rawMap); err != nil || rawMap == nil {
-						return targetVal, nil
-					}
-					mapped, ok := mapJSONToRecord(rawMap, proto, env)
-					if !ok {
-						return targetVal, nil
-					}
-					return mapped, nil
-				}
-			}
-			return targetVal, nil
-		}
+		return ev.castValue(e, targetVal, env)
 
 	case *FieldExpr:
 		targetVal, err := ev.EvalExpr(e.Target, env)
@@ -1466,7 +1397,218 @@ func easeValueToJSON(v Value) any {
 	}
 }
 
-func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env) (*RecordValue, bool) {
+func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, error) {
+	line, col := e.TypeLine, e.TypeCol
+	if line == 0 {
+		line, col = e.Line, e.Col
+	}
+
+	switch e.TypeName {
+	case "text":
+		if targetVal == nil {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"Cannot convert nothing to text",
+				"Provide a text, number, bool, list, or 'def' record value.",
+			)
+		}
+		if rec, ok := targetVal.(*RecordValue); ok {
+			b, err := json.Marshal(easeValueToJSON(rec))
+			if err != nil {
+				return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot serialize %s to JSON: %v", rec.TypeName, err), "")
+			}
+			return string(b), nil
+		}
+		return FormatValue(targetVal), nil
+
+	case "number":
+		switch v := targetVal.(type) {
+		case float64:
+			return v, nil
+		case string:
+			n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+				return nil, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot convert text %q to number", v),
+					"Provide a valid numeric string (for example \"42\" or \"3.14\").",
+				)
+			}
+			return n, nil
+		case bool:
+			if v {
+				return float64(1), nil
+			}
+			return float64(0), nil
+		default:
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to number", TypeName(targetVal)),
+				"Only number, numeric text, or bool can be converted with 'as number'.",
+			)
+		}
+
+	case "bool":
+		switch v := targetVal.(type) {
+		case bool:
+			return v, nil
+		case string:
+			low := strings.ToLower(strings.TrimSpace(v))
+			if low == "true" {
+				return true, nil
+			}
+			if low == "false" {
+				return false, nil
+			}
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert text %q to bool", v),
+				"Expected \"true\" or \"false\".",
+			)
+		case float64:
+			return v != 0, nil
+		default:
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to bool", TypeName(targetVal)),
+				"Only bool, \"true\"/\"false\" text, or number can be converted with 'as bool'.",
+			)
+		}
+
+	default:
+		protoVal, ok := env.Lookup(e.TypeName)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Unknown type %q after 'as'", e.TypeName),
+				"Only built-in types (text, number, bool) or a previously defined/imported 'def' blueprint are allowed after 'as'.",
+			)
+		}
+
+		if union, isUnion := protoVal.(*UnionValue); isUnion {
+			for _, opt := range union.Values {
+				if ValuesEqual(targetVal, opt) {
+					return targetVal, nil
+				}
+			}
+			allowed := make([]string, len(union.Values))
+			for i, opt := range union.Values {
+				allowed[i] = FormatValue(opt)
+			}
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Value %s is not valid for union %q", FormatValue(targetVal), e.TypeName),
+				fmt.Sprintf("Allowed values for %s: %s.", e.TypeName, strings.Join(allowed, ", ")),
+			)
+		}
+
+		proto, isRec := protoVal.(*RecordValue)
+		if !isRec || !proto.IsPrototype {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("%q is not a 'def' blueprint or built-in type", e.TypeName),
+				"Only built-in types (text, number, bool) or a 'def' blueprint can be used after 'as'.",
+			)
+		}
+
+		if rec, already := targetVal.(*RecordValue); already {
+			if rec.TypeName == e.TypeName {
+				return rec, nil
+			}
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert record %q to %q", rec.TypeName, e.TypeName),
+				fmt.Sprintf("Expected %s or JSON text matching 'def %s'.", e.TypeName, e.TypeName),
+			)
+		}
+
+		rawStr, isStr := targetVal.(string)
+		if !isStr {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to %s: expected JSON text", TypeName(targetVal), e.TypeName),
+				fmt.Sprintf("Provide a JSON object string matching the 'def %s' blueprint.", e.TypeName),
+			)
+		}
+		if strings.TrimSpace(rawStr) == "" {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert empty text to %s", e.TypeName),
+				fmt.Sprintf("Expected a JSON object matching 'def %s'. Check for empty responses before casting.", e.TypeName),
+			)
+		}
+
+		var rawMap map[string]any
+		if err := json.Unmarshal([]byte(rawStr), &rawMap); err != nil {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert text to %s: invalid JSON (%v)", e.TypeName, err),
+				fmt.Sprintf("Expected a JSON object matching 'def %s'.", e.TypeName),
+			)
+		}
+		if rawMap == nil {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert JSON null to %s: expected JSON object", e.TypeName),
+				fmt.Sprintf("Expected a JSON object matching 'def %s'.", e.TypeName),
+			)
+		}
+
+		mapped, mapErr := mapJSONToRecord(rawMap, proto, env, e.TypeName)
+		if mapErr != nil {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				mapErr.Error(),
+				fmt.Sprintf("Ensure the JSON data matches every field and type of 'def %s'.", e.TypeName),
+			)
+		}
+		return mapped, nil
+	}
+}
+
+func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env, path string) (*RecordValue, error) {
 	fields := make(map[string]Value, len(proto.Fields))
 	for k, v := range proto.Fields {
 		fields[k] = v
@@ -1474,25 +1616,28 @@ func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env) (*Reco
 	order := make([]string, len(proto.Order))
 	copy(order, proto.Order)
 
-	for fieldName, defaultVal := range proto.Fields {
+	for _, fieldName := range proto.Order {
+		defaultVal := proto.Fields[fieldName]
 		jsonVal, exists := rawMap[fieldName]
 		if !exists {
 			continue
 		}
-		converted, ok := coerceJSONValue(jsonVal, defaultVal, env)
-		if !ok {
-			return nil, false
+		fieldPath := path + "." + fieldName
+		converted, err := coerceJSONValue(jsonVal, defaultVal, env, fieldPath)
+		if err != nil {
+			return nil, err
 		}
 		if opts, hasAllowed := proto.Allowed[fieldName]; hasAllowed && len(opts) > 0 {
 			matched := false
-			for _, opt := range opts {
+			allowed := make([]string, len(opts))
+			for i, opt := range opts {
+				allowed[i] = FormatValue(opt)
 				if ValuesEqual(converted, opt) {
 					matched = true
-					break
 				}
 			}
 			if !matched {
-				return nil, false
+				return nil, fmt.Errorf("Invalid value %s for field '%s': allowed values are %s", FormatValue(converted), fieldPath, strings.Join(allowed, ", "))
 			}
 		}
 		fields[fieldName] = converted
@@ -1504,76 +1649,95 @@ func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env) (*Reco
 		Allowed:     proto.Allowed,
 		Order:       order,
 		IsPrototype: false,
-	}, true
+	}, nil
 }
 
-func coerceJSONValue(jsonVal any, template Value, env *Env) (Value, bool) {
+func coerceJSONValue(jsonVal any, template Value, env *Env, path string) (Value, error) {
 	switch tmpl := template.(type) {
 	case float64:
 		n, ok := jsonVal.(float64)
-		return n, ok
+		if !ok {
+			return nil, fmt.Errorf("Field '%s' expected number, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
+		}
+		return n, nil
 	case string:
 		s, ok := jsonVal.(string)
-		return s, ok
+		if !ok {
+			return nil, fmt.Errorf("Field '%s' expected text, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
+		}
+		return s, nil
 	case bool:
 		b, ok := jsonVal.(bool)
-		return b, ok
+		if !ok {
+			return nil, fmt.Errorf("Field '%s' expected bool, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
+		}
+		return b, nil
 	case *RecordValue:
 		subMap, ok := jsonVal.(map[string]any)
 		if !ok || subMap == nil {
-			return nil, false
+			return nil, fmt.Errorf("Field '%s' expected %s object, got %s", path, tmpl.TypeName, jsonTypeName(jsonVal))
 		}
-		return mapJSONToRecord(subMap, tmpl, env)
+		return mapJSONToRecord(subMap, tmpl, env, path)
 	case *ListValue:
 		arr, ok := jsonVal.([]any)
 		if !ok {
-			return nil, false
+			return nil, fmt.Errorf("Field '%s' expected list, got %s", path, jsonTypeName(jsonVal))
 		}
 		elems := make([]Value, 0, len(arr))
-		for _, item := range arr {
+		for idx, item := range arr {
+			elemPath := fmt.Sprintf("%s[%d]", path, idx)
 			if tmpl.ElemType != "" {
 				switch tmpl.ElemType {
 				case "number":
 					n, ok := item.(float64)
 					if !ok {
-						return nil, false
+						return nil, fmt.Errorf("Element '%s' expected number, got %s", elemPath, jsonTypeName(item))
 					}
 					elems = append(elems, n)
-				case "text", "string":
+				case "text":
 					s, ok := item.(string)
 					if !ok {
-						return nil, false
+						return nil, fmt.Errorf("Element '%s' expected text, got %s", elemPath, jsonTypeName(item))
 					}
 					elems = append(elems, s)
 				case "bool":
 					b, ok := item.(bool)
 					if !ok {
-						return nil, false
+						return nil, fmt.Errorf("Element '%s' expected bool, got %s", elemPath, jsonTypeName(item))
 					}
 					elems = append(elems, b)
 				default:
 					subMap, ok := item.(map[string]any)
 					if !ok || subMap == nil {
-						return nil, false
+						return nil, fmt.Errorf("Element '%s' expected %s object, got %s", elemPath, tmpl.ElemType, jsonTypeName(item))
 					}
-					if protoVal, found := env.Lookup(tmpl.ElemType); found {
-						if proto, isRec := protoVal.(*RecordValue); isRec && proto.IsPrototype {
-							rec, ok := mapJSONToRecord(subMap, proto, env)
-							if !ok {
-								return nil, false
-							}
-							elems = append(elems, rec)
-							continue
-						}
+					protoVal, found := env.Lookup(tmpl.ElemType)
+					if !found {
+						return nil, fmt.Errorf("Unknown list element blueprint %q for '%s'", tmpl.ElemType, elemPath)
 					}
-					return nil, false
+					proto, isRec := protoVal.(*RecordValue)
+					if !isRec || !proto.IsPrototype {
+						return nil, fmt.Errorf("%q is not a 'def' record blueprint for '%s'", tmpl.ElemType, elemPath)
+					}
+					rec, err := mapJSONToRecord(subMap, proto, env, elemPath)
+					if err != nil {
+						return nil, err
+					}
+					elems = append(elems, rec)
 				}
 			} else {
 				elems = append(elems, item)
 			}
 		}
-		return &ListValue{ElemType: tmpl.ElemType, Elements: elems}, true
+		return &ListValue{ElemType: tmpl.ElemType, Elements: elems}, nil
 	default:
-		return jsonVal, true
+		return jsonVal, nil
 	}
+}
+
+func jsonTypeName(v any) string {
+	if v == nil {
+		return "null"
+	}
+	return TypeName(v)
 }

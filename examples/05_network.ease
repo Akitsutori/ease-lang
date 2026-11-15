@@ -17,11 +17,9 @@ def event
     key  = ""
 end
 
-# 1. Stufe: Typ-Konformität an der Grenze (Form via 'as')
+# 1. Stufe: Striktes Typ-Casting an der Grenze (Form via 'as' ohne stillen Fallback)
 to parse_age raw
-    age = raw as number
-    check age is not number -> "Ungültiges Zahlenformat"
-    age
+    raw as number
 end
 
 # 2. Stufe: Inhaltsvalidität in der Fachlogik (Bedeutung via 'to' + 'check')
@@ -62,7 +60,7 @@ test "import network, ask/send Schnittstelle & Form vs. Inhalt"
     # Typ-Konformität (Form) vs. Inhaltsvalidität (Fachlogik)
     do parse_age "25" is 25
     do parse_age "-5" is -5
-    do parse_age "abc" is "Ungültiges Zahlenformat"
+    do parse_age "abc" raises "Cannot convert text"
 
     do validate_age do parse_age "-5" is "Alter kann nicht negativ sein"
     do validate_age do parse_age "200" is "Alter ist unrealistisch"
@@ -88,8 +86,6 @@ test "import network, ask/send Schnittstelle & Form vs. Inhalt"
     roundtrip = raw_json as api_user
     roundtrip is api_user
 
-    bad_user = "\{\"role\": \"hacker\"\}" as api_user
-    bad_user is not api_user
-    empty_user = "" as api_user
-    empty_user is not api_user
+    "\{\"role\": \"hacker\"\}" as api_user raises "Invalid value"
+    "" as api_user raises "empty text"
 end

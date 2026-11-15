@@ -1,14 +1,51 @@
-# Feature 06: Explizite Typkonvertierung (as number / as text)
+# Feature 06: Striktes 'as' Casting ohne stille Fallbacks
+# Zwei Ausgänge:
+#   A) Zieltyp existiert und Daten erfüllen alle Felder/Typen -> validiertes Objekt
+#   B) Zieltyp existiert nicht oder Daten weichen ab         -> sofortiger Fehlerabbruch
+
+def ticket = "vip" | "standard" | "none"
+
+def api_user
+    id   = 0
+    name = "Gast"
+    role = "member" | "admin"
+end
 
 raw_ok = "42" as number
-raw_bad = "abc" as number
 num_as_text = 123 as text
+flag_ok = "true" as bool
+vip_ticket = "vip" as ticket
+valid_user = "\{\"id\": 7, \"role\": \"admin\", \"ignored\": true\}" as api_user
 
-test "Explizite Typkonvertierung mit as"
+test "Explizite Typkonvertierung mit as (Ausgang A: gültige Daten)"
     raw_ok is number
     raw_ok + 8 is 50
-    raw_bad is not number
-    raw_bad is "abc"
     num_as_text is text
     num_as_text is "123"
+    flag_ok is bool
+    flag_ok is true
+    vip_ticket is "vip"
+
+    valid_user is api_user
+    valid_user.id is 7
+    valid_user.name is "Gast"
+    valid_user.role is "admin"
+
+    # Roundtrip Record -> JSON -> Record
+    roundtrip = (valid_user as text) as api_user
+    roundtrip is api_user
+    roundtrip.id is 7
+end
+
+test "Striktes as ohne stillen Fallback (Ausgang B: Fehlerabbruch bei Abweichung)"
+    "abc" as number raises "Cannot convert text"
+    "maybe" as bool raises "Cannot convert text"
+    "gold" as ticket raises "not valid for union"
+
+    "" as api_user raises "empty text"
+    "\{broken" as api_user raises "invalid JSON"
+    "null" as api_user raises "JSON null"
+    "\{\"id\": \"keine-zahl\"\}" as api_user raises "api_user.id"
+    "\{\"role\": \"superuser\"\}" as api_user raises "api_user.role"
+    42 as api_user raises "expected JSON text"
 end

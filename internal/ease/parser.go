@@ -34,6 +34,9 @@ func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error)
 	if err := resolveProgramImports(prog, source, seen); err != nil {
 		return nil, err
 	}
+	if err := validateProgramTypes(prog, source); err != nil {
+		return nil, err
+	}
 	return prog, nil
 }
 
@@ -1174,7 +1177,13 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			}
 			typeTok := p.advance()
 			line, col := expr.Pos()
-			expr = &CastExpr{posInfo: posInfo{Line: line, Col: col}, Target: expr, TypeName: typeTok.Lexeme}
+			expr = &CastExpr{
+				posInfo:  posInfo{Line: line, Col: col},
+				Target:   expr,
+				TypeName: typeTok.Lexeme,
+				TypeLine: typeTok.Line,
+				TypeCol:  typeTok.Col,
+			}
 			continue
 		}
 
@@ -1411,14 +1420,14 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 	listTok := p.advance() // consume `list`
 	if p.match(TOK_AS) {
-		if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
+		if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_BOOL_KW) && !p.check(TOK_IDENT) {
 			tok := p.current()
 			return nil, newError(
 				"SyntaxError",
 				tok.Line,
 				tok.Col,
 				p.source,
-				fmt.Sprintf("Expected element type after 'list as', got %q", tok.Lexeme),
+				fmt.Sprintf("Expected element type ('number', 'text', 'bool', or a 'def' record) after 'list as', got %q", tok.Lexeme),
 				"Example: list as number, or list as particle",
 			)
 		}
@@ -1427,6 +1436,8 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 			return &TypedListExpr{
 				posInfo:  posInfo{Line: listTok.Line, Col: listTok.Col},
 				ElemType: typeTok.Lexeme,
+				TypeLine: typeTok.Line,
+				TypeCol:  typeTok.Col,
 			}, nil
 		}
 		if !p.match(TOK_NEWLINE) {
@@ -1474,6 +1485,8 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 		return &TypedListExpr{
 			posInfo:  posInfo{Line: listTok.Line, Col: listTok.Col},
 			ElemType: typeTok.Lexeme,
+			TypeLine: typeTok.Line,
+			TypeCol:  typeTok.Col,
 			Rows:     rows,
 		}, nil
 	}

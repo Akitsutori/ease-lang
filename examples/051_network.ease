@@ -29,9 +29,10 @@ end
 
 # 2. Verben mit zweistufiger Grenzprüfung
 to load_verified_user client, user_id
-    # Stufe 1: Echter HTTP-GET + Typ-Konformität (`as api_user`)
-    raw = do ask client, "/users/{user_id}" as api_user
-    check raw is not api_user -> fetch_report with status = "transport_or_format_error", note = "HTTP 404, Timeout oder ungültiges JSON"
+    # Stufe 1: Echter HTTP-GET + Leerantwort prüfen + strikte Typ-Konformität (`as api_user`)
+    raw_json = do ask client, "/users/{user_id}"
+    check raw_json is "" -> fetch_report with status = "transport_or_format_error", note = "HTTP 404, Timeout oder leere Antwort"
+    raw = raw_json as api_user
 
     # Stufe 2: Fachliche Inhaltsvalidität (`check`)
     check
@@ -47,9 +48,9 @@ to publish_article client, draft
     check draft.userId <= 0 -> post_receipt with id = 0
 
     # Echter HTTP-POST gegen /posts
-    receipt = do send client, "/posts", draft as post_receipt
-    check receipt is not post_receipt -> post_receipt with id = 0
-    receipt
+    resp_json = do send client, "/posts", draft
+    check resp_json is "" -> post_receipt with id = 0
+    resp_json as post_receipt
 end
 
 # 3. Ausführbares Hauptprogramm (läuft direkt bei `ease.exe examples/051_network.ease`)

@@ -16,6 +16,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, # comments, operators)
 │   ├── ast.go                   # AST node definitions for declarations, statements, and expressions
 │   ├── parser.go                # Recursive-descent parser and stdlib import resolution
+│   ├── typecheck.go             # Strict `as` / `list as` target-type validation (built-ins & `def` blueprints)
 │   ├── checker.go               # Runner for `test` and `check "..."` assertion blocks
 │   ├── eval.go                  # Tree-walking evaluator, runtime values, JSON casts, and built-ins
 │   ├── screen.go                # Ebitengine main-thread bridge and headless `--check` frame simulation
@@ -88,8 +89,8 @@ Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. 
 1. **Uniform Bracket-Free Calls**: Call verbs with `do <verb> arg1, arg2` — never introduce `fn(...)` call syntax or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping (e.g., `total = total + (n * n)`).
 2. **Dot Notation Only for Lists and Records**: Index lists and access fields consistently with `.` (`cloud.0.vx`, `player.hp`). Build lists with `list 1, 2, 3` or `list as <type>`.
 3. **Logic-Free Data Blueprints (`def`)**: Keep `def` declarations pure data structures with defaults and union constraints (`"a" | "b"`). Behavior belongs exclusively in verbs (`to ... end`).
-4. **Strict Boundary Between Shape and Meaning**:
-   - `as <type>` handles **shape / type conformity** (e.g., string-to-number or JSON-to-`def` mapping). Failures return a non-matching value caught by `is not <type>`.
+4. **Strict Boundary Between Shape and Meaning (Zero Silent Fallbacks)**:
+   - `as <type>` enforces **shape / type conformity** with **no silent fallbacks**: the target must be a built-in base type (`text`, `number`, `bool`) or a previously declared/imported `def` blueprint, and any invalid cast or JSON mismatch aborts immediately with a clear error.
    - `to ...` + `check` handles **domain validity** (business rules, ranges, invariants).
 5. **No Legacy Syntax Regressions**: Do not reintroduce `let`, `var`, `set`, `report`, `test:`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing.
 6. **Tests & Docs Ship Together**: Every change to lexing, parsing, evaluation, or standard modules must include Go unit tests in `internal/ease/ease_test.go`, corresponding `.ease` coverage in `tests/` or `examples/`, and an exact update to the BNF grammar and docs in `README.md` if syntax changed.

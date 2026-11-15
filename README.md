@@ -199,17 +199,32 @@ end
 ### Type Checks & Conversions (`is`, `is not`, `as`)
 
 - **Equality, type, and union checks**: `is`, `is-not` / `is not` (plus `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
-- **Explicit casting with `as`**:
-  - `text as number` / `as bool` / `as text`
-  - `<Record> as text` serializes a `def` record to JSON text.
-  - `<text> as <def_type>` unmarshals JSON into a copy of the `<def_type>` blueprint, preserving missing defaults, ignoring extra JSON keys, and enforcing field types and union `Allowed` constraints. If parsing or validation fails, the original non-matching value is preserved so `val is not <def_type>` evaluates to `true`.
+- **Strict explicit casting with `as` (zero silent fallbacks)**:
+  - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`, `bool`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (such as `as ö` or a typo like `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time with a clear error message and "Did you mean ...?" hint.
+  - **Two-outcome rule**: Every `as` expression has **only two possible outcomes**:
+    - **A)** The target type exists and the value/data conforms to all fields, types, and union rules -> Ease returns the validated value/object.
+    - **B)** The target type does not exist, or the data deviates (e.g. `"abc" as number`, `"maybe" as bool`, `"" as api_user`, invalid JSON, `null`, wrong field type, or invalid union variant) -> Ease **aborts immediately** with a descriptive error (`TypeError` / `RuntimeError`).
+  - **Conversions**:
+    - `val as text` formats primitives or serializes a `def` record to JSON text.
+    - `val as number` / `val as bool` converts numbers, booleans, or valid numeric/boolean strings strictly.
+    - `<text> as <def_union>` validates that the string matches one of the union's allowed literals (`"guest" | "admin"`).
+    - `<text> as <def_record>` parses a JSON object into a copy of the `<def_record>` blueprint, keeping omitted default fields, ignoring extra JSON keys, and strictly validating every present field's type and union constraint:
 
 ```ease
-age = "42" as number
-check age is not number -> "Invalid number format"
+def api_user
+    id   = 0
+    name = "Gast"
+    role = "guest" | "admin"
+end
 
+age = "42" as number
 u = "\{\"id\": 42, \"role\": \"admin\"\}" as api_user
-check u is not api_user -> "Invalid user JSON"
+
+# Invalid casts or mismatched JSON abort immediately (testable with `raises`):
+test "strict as"
+    "abc" as number raises "Cannot convert"
+    "\{\"role\": \"hacker\"\}" as api_user raises "api_user.role"
+end
 ```
 
 ---
@@ -310,7 +325,7 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `ask` / `ask "Prompt"` | Reads a line of input from `stdin` (optional prompt) |
 | `do len xs` | Returns length of `text` (runes) or `list` |
 | `do str val` | Converts a value to `text` |
-| `do num val` | Converts `number`, `text`, or `bool` to `number` (raises `RuntimeError` on invalid input; prefer `as number` for safe checks) |
+| `do num val` | Converts `number`, `text`, or `bool` to `number` (raises `RuntimeError` on invalid input) |
 | `do type val` | Returns the type name or `def` name as `text` |
 | `do range start, end` | Returns an inclusive list of numbers `[start .. end]` |
 | `do push xs, item` | Returns a new list with `item` appended (enforces element type on `list as <type>`) |
@@ -451,7 +466,7 @@ with_clause    ::= "with" NL { with_field stmt_end [NL] } "end"
                  | "with" with_field { "," with_field }
 with_field     ::= IDENT "=" expr
 
-cast_type      ::= "text" | "number" | "bool" | IDENT
+cast_type      ::= "text" | "number" | "bool" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
 
 bare_call_args ::= term { "," term }                     (* 'as' binds outside the full call *)
 
@@ -474,7 +489,7 @@ ask_expr       ::= "ask" [ primary ]                     (* single-token prompt 
 list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," with_field } stmt_end [NL] } "end" ]
                  | "list" expr { "," expr }
 
-list_elem_type ::= "text" | "number" | IDENT
+list_elem_type ::= "text" | "number" | "bool" | IDENT    (* must name a built-in type or previously defined/imported `def` blueprint *)
 ```
 
 > **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do ask client, "/users/1" as api_user` binds `(do ask client, "/users/1") as api_user` rather than casting only the final argument.

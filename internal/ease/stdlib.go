@@ -51,6 +51,12 @@ func resolveProgramImports(prog *Program, source string, seen map[string]bool) e
 		if err != nil {
 			return err
 		}
+		for _, d := range modProg.Defs {
+			d.Imported = true
+		}
+		for _, u := range modProg.Unions {
+			u.Imported = true
+		}
 		mergedFuncs = append(mergedFuncs, modProg.Functions...)
 		mergedDefs = append(mergedDefs, modProg.Defs...)
 		mergedUnions = append(mergedUnions, modProg.Unions...)
