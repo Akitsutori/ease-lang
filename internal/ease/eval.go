@@ -1149,7 +1149,7 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 			if rn == 0 {
 				return nil, newError("RuntimeError", line, col, ev.source, "Modulo by zero", "The right-hand divisor of '%' cannot be 0.")
 			}
-			return float64(int64(ln) % int64(rn)), nil
+			return math.Mod(ln, rn), nil
 		case "<":
 			return ln < rn, nil
 		case "<=":

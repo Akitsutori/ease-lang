@@ -1285,3 +1285,22 @@ end
 		t.Fatalf("expected 0 passed / 1 failed, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
 	}
 }
+
+func TestModuloFloatAndZero(t *testing.T) {
+	src := `
+test "float modulo and modulo by zero"
+    5 % 0.5 is 0
+    5.5 % 2 is 1.5
+    10 % 3 is 1
+    5 % 0 raises "Modulo by zero"
+    5 % 0.0 raises "Modulo by zero"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 5 || report.Failed != 0 {
+		t.Fatalf("expected 5 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+}

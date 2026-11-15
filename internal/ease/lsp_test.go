@@ -143,3 +143,49 @@ func TestLSPServerRoundTrip(t *testing.T) {
 		t.Fatalf("expected shutdown response id 2, got %s", shutdownFrame)
 	}
 }
+
+func TestLSPHandleMessagePanicRecovery(t *testing.T) {
+	var inBuf bytes.Buffer
+	writeFrame := func(payload any) {
+		b, _ := json.Marshal(payload)
+		fmt.Fprintf(&inBuf, "Content-Length: %d\r\n\r\n%s", len(b), b)
+	}
+
+	writeFrame(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{},
+	})
+	writeFrame(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "shutdown",
+	})
+	writeFrame(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	var outBuf bytes.Buffer
+	srv := NewLSPServer(&inBuf, &outBuf)
+
+	// Simulate an unexpected panic inside handleMessage via a nil message.
+	if exit := srv.handleMessage(nil); exit {
+		t.Fatalf("expected recovered panic in handleMessage not to trigger server exit")
+	}
+
+	// Subsequent LSP requests on the same server instance must still succeed.
+	if err := srv.Run(); err != nil {
+		t.Fatalf("LSPServer.Run() after recovered panic failed: %v", err)
+	}
+
+	r := bufio.NewReader(&outBuf)
+	initFrame, err := readLSPFrame(r)
+	if err != nil {
+		t.Fatalf("failed reading initialize response after recovery: %v", err)
+	}
+	if !strings.Contains(string(initFrame), "ease-lsp") {
+		t.Fatalf("expected ease-lsp in initialize response, got %s", initFrame)
+	}
+}

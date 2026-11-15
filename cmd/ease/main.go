@@ -28,7 +28,14 @@ func main() {
 		select {
 		case fn := <-mainWorkCh:
 			if fn != nil {
-				fn()
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Fprintf(os.Stderr, "InternalError: unexpected panic on main thread: %v\n", r)
+						}
+					}()
+					fn()
+				}()
 			}
 		case code := <-exitCh:
 			os.Exit(code)
@@ -36,7 +43,13 @@ func main() {
 	}
 }
 
-func runCLI() int {
+func runCLI() (exitCode int) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "InternalError: unexpected panic: %v\n", r)
+			exitCode = 1
+		}
+	}()
 	// If this binary carries an embedded `.ease` program, run directly as a standalone app.
 	if embeddedSrc, ok, err := ease.ReadEmbeddedSource(""); err == nil && ok {
 		return runEmbedded(embeddedSrc, os.Args[1:])
@@ -305,23 +318,30 @@ func cmdRepl() int {
 		if line == "exit" || line == "quit" {
 			break
 		}
-		parsed, err := ease.ParseProgram(line)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			continue
-		}
-		if len(parsed.Body) > 0 {
-			val, err := ev.ExecStatements(parsed.Body, env)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "InternalError: unexpected panic: %v\n", r)
+				}
+			}()
+			parsed, err := ease.ParseProgram(line)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
-				continue
+				return
 			}
-			if val != nil {
-				if _, isSay := parsed.Body[len(parsed.Body)-1].(*ease.SayStmt); !isSay {
-					fmt.Println(ease.FormatValue(val))
+			if len(parsed.Body) > 0 {
+				val, err := ev.ExecStatements(parsed.Body, env)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return
+				}
+				if val != nil {
+					if _, isSay := parsed.Body[len(parsed.Body)-1].(*ease.SayStmt); !isSay {
+						fmt.Println(ease.FormatValue(val))
+					}
 				}
 			}
-		}
+		}()
 	}
 	return 0
 }

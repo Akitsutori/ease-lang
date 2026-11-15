@@ -114,7 +114,18 @@ func (s *LSPServer) Run() error {
 	}
 }
 
-func (s *LSPServer) handleMessage(msg *lspMessage) bool {
+func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if msg != nil && len(msg.ID) > 0 && string(msg.ID) != "null" {
+				s.sendResponse(msg.ID, nil, &lspRespError{
+					Code:    -32603,
+					Message: fmt.Sprintf("Internal error: %v", r),
+				})
+			}
+			exit = false
+		}
+	}()
 	switch msg.Method {
 	case "initialize":
 		result := map[string]any{
@@ -264,7 +275,22 @@ func (s *LSPServer) publishDiagnostics(uri, source string) {
 }
 
 // DiagnoseSource parses an Ease source string and converts any EaseError into LSP diagnostics.
-func DiagnoseSource(source string) []LSPDiagnostic {
+func DiagnoseSource(source string) (diags []LSPDiagnostic) {
+	defer func() {
+		if r := recover(); r != nil {
+			diags = []LSPDiagnostic{
+				{
+					Range: LSPRange{
+						Start: LSPPosition{Line: 0, Character: 0},
+						End:   LSPPosition{Line: 0, Character: 1},
+					},
+					Severity: 1,
+					Source:   "ease",
+					Message:  fmt.Sprintf("Internal error: %v", r),
+				},
+			}
+		}
+	}()
 	_, err := ParseProgram(source)
 	if err == nil {
 		return []LSPDiagnostic{}
@@ -329,13 +355,18 @@ func diagnosticEndCol(source string, lineIdx, colIdx int) int {
 }
 
 // DocumentSymbolsForSource extracts outline symbols (defs, unions, functions, checks) from Ease source.
-func DocumentSymbolsForSource(source string) []LSPDocumentSymbol {
+func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
+	defer func() {
+		if r := recover(); r != nil {
+			symbols = []LSPDocumentSymbol{}
+		}
+	}()
 	prog, err := ParseProgram(source)
 	if err != nil || prog == nil {
 		return []LSPDocumentSymbol{}
 	}
 
-	symbols := make([]LSPDocumentSymbol, 0, len(prog.Defs)+len(prog.Unions)+len(prog.Functions)+len(prog.Checks))
+	symbols = make([]LSPDocumentSymbol, 0, len(prog.Defs)+len(prog.Unions)+len(prog.Functions)+len(prog.Checks))
 
 	for _, d := range prog.Defs {
 		r := symbolRange(d.Line, d.Col, len(d.Name)+4)
@@ -407,8 +438,13 @@ func symbolRange(line, col, length int) LSPRange {
 }
 
 // CompletionItemsForSource returns Ease keywords plus declared defs/functions in the buffer.
-func CompletionItemsForSource(source string) []LSPCompletionItem {
-	items := make([]LSPCompletionItem, 0, len(keywords)+16)
+func CompletionItemsForSource(source string) (items []LSPCompletionItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			items = []LSPCompletionItem{}
+		}
+	}()
+	items = make([]LSPCompletionItem, 0, len(keywords)+16)
 	for kw := range keywords {
 		items = append(items, LSPCompletionItem{
 			Label:  kw,

@@ -121,6 +121,7 @@ test "Happy Paths gemäß README"
 
     scores = list 10, 25, 40
     scores.0 is 10
+    5 % 0.5 is 0
     empty_nums = list as number
     do len empty_nums is 0
     do range 1 3 is list 1, 2, 3
@@ -202,5 +203,6 @@ test "Listen, Schleifen & Built-ins: 10 Negativtests"
     do bad_repeat "3" raises "non-negative integer"
     do bad_for 42 raises "requires a list"
     10 / 0 raises "Division by zero"
+    5 % 0 raises "Modulo by zero"
     do num "abc" raises "Cannot convert"
 end
