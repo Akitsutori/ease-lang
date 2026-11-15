@@ -37,7 +37,7 @@ Es sind **keine** `npm install`- oder Build-Schritte nötig – `editors/vscode/
 3. Eine `.ease`-Datei (z. B. `examples/00_hello_world.ease`) öffnen.
 
 ### Option B: Über `.vsix` installieren (auch aus GitHub Releases)
-Bei jedem Release (und CI-Lauf) wird `ease-lang-<version>.vsix` automatisch über [build-vsix.ps1](editors/vscode/build-vsix.ps1) gebaut und unter **GitHub Releases** bereitgestellt.
+Bei jedem Release (und CI-Lauf) wird `ease-lang-<version>.vsix` automatisch plattformunabhängig über `go run ./editors/vscode` ([build_vsix.go](editors/vscode/build_vsix.go)) gebaut und unter **GitHub Releases** bereitgestellt.
 
 In VS Code installieren:
 - Über die Oberfläche: `Ctrl+Shift+X` → **`...`** → **`Install from VSIX...`** → `.vsix`-Datei auswählen.
