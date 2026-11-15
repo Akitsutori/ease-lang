@@ -48,11 +48,24 @@ jobs:
       - name: Build binary
         run: go build -o ${{ matrix.asset_name }} ./cmd/ease
 
+      - name: Package VS Code extension (.vsix)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./editors/vscode/build-vsix.ps1
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
+
+      - name: Upload VS Code extension artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ease-vscode-vsix
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release

@@ -108,3 +108,16 @@ jobs:
           name: ease-${{ runner.os }}
           path: ${{ matrix.bin }}
           if-no-files-found: error
+
+      - name: Package and upload VS Code extension (.vsix)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./editors/vscode/build-vsix.ps1
+
+      - name: Upload VS Code extension artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ease-vscode-vsix
+          path: editors/vscode/*.vsix
+          if-no-files-found: error

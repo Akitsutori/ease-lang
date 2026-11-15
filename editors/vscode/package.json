@@ -1,0 +1,49 @@
+{
+  "name": "ease-lang",
+  "displayName": "Ease Language",
+  "description": "Syntax highlighting, live diagnostics, outline symbols, and autocomplete for the Ease programming language (.ease)",
+  "version": "0.1.0",
+  "publisher": "ease-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:ease"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ease",
+        "aliases": [
+          "Ease",
+          "ease"
+        ],
+        "extensions": [
+          ".ease"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ease",
+        "scopeName": "source.ease",
+        "path": "./syntaxes/ease.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ease",
+      "properties": {
+        "ease.executablePath": {
+          "type": "string",
+          "default": "ease",
+          "description": "Path to the ease CLI executable (used to launch `ease lsp`)."
+        }
+      }
+    }
+  }
+}

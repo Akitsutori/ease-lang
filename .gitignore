@@ -8,6 +8,7 @@
 # Standalone build outputs
 dist/
 bin/
+*.vsix
 
 # Coverage & temp artifacts
 coverage.out

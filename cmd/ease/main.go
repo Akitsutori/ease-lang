@@ -63,6 +63,8 @@ func runCLI() int {
 		return cmdTokens(os.Args[2:])
 	case "repl":
 		return cmdRepl()
+	case "lsp":
+		return cmdLsp()
 	case "version", "--version", "-v":
 		fmt.Printf("ease %s\n", version)
 		return 0
@@ -326,6 +328,15 @@ func cmdRepl() int {
 	return 0
 }
 
+func cmdLsp() int {
+	srv := ease.NewLSPServer(os.Stdin, os.Stdout)
+	if err := srv.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "LSP server error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func printUsage() {
 	fmt.Println("Ease Programming Language CLI")
 	fmt.Println("")
@@ -336,5 +347,6 @@ func printUsage() {
 	fmt.Println("  ease ast <file.ease>                      Inspect parsed defs, functions, checks, and statements")
 	fmt.Println("  ease tokens <file.ease>                   Inspect lexer tokens with line/column positions")
 	fmt.Println("  ease repl                                 Start interactive Ease REPL")
+	fmt.Println("  ease lsp                                  Start Language Server (stdio JSON-RPC for editors)")
 	fmt.Println("  ease version                              Print Ease CLI version")
 }

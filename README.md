@@ -2,6 +2,8 @@
 
 **Ease** is a compact, cognitively simple programming language implemented in Go, designed around readable bracket-free verbs (`to` / `do`), logic-free data blueprints (`def`), explicit value spaces (union types), declarative guards (`check`), and built-in unit tests (`test`).
 
+> **VS Code Support:** Syntax highlighting, live diagnostics (`ease lsp`), outline symbols, and autocomplete are documented in [README_VSCODE.md](README_VSCODE.md).
+
 ---
 
 ## Table of Contents

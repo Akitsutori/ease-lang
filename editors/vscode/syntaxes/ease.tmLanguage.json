@@ -1,0 +1,122 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Ease",
+  "scopeName": "source.ease",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.ease",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.ease",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.ease",
+          "match": "\\\\."
+        },
+        {
+          "name": "meta.embedded.line.ease",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.embedded.begin.ease" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.ease" }
+          },
+          "patterns": [
+            { "include": "#numbers" },
+            { "include": "#operators" },
+            { "include": "#constants" },
+            {
+              "name": "variable.other.ease",
+              "match": "[A-Za-z_][A-Za-z0-9_-]*"
+            }
+          ]
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(to)\\s+([A-Za-z_][A-Za-z0-9_-]*)",
+          "captures": {
+            "1": { "name": "keyword.control.ease" },
+            "2": { "name": "entity.name.function.ease" }
+          }
+        },
+        {
+          "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_-]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.ease" },
+            "2": { "name": "entity.name.type.ease" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ease",
+          "match": "\\b(to|end|if|else|repeat|for|in|test|check|import)\\b"
+        },
+        {
+          "name": "keyword.other.ease",
+          "match": "\\b(def|with|do|say|ask|as|is-not|is|raises)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.ease",
+          "match": "\\b(and|or|not)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.ease",
+          "match": "\\b(text|number|bool|list)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.ease",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.ease",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ease",
+          "match": "(->|==|!=|<=|>=|<|>|\\+|-|\\*|/|%|=|\\|)"
+        }
+      ]
+    }
+  }
+}
