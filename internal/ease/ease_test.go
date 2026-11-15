@@ -812,36 +812,59 @@ def api_user
     role = "member" | "admin"
 end
 
-test "Record <-> JSON via as"
-    # Valid JSON with unknown field and omitted default field
-    u = "\{\"id\": 7, \"role\": \"admin\", \"extra\": true\}" as api_user
+test "Record <-> JSON via decode_json / encode_json and strict as"
+    # Valid JSON with single-quoted raw string, unknown field tolerated, all def fields present
+    raw_map = do decode_json '{"id": 7, "name": "Aria", "role": "admin", "extra": true}'
+    raw_map is not text
+    do type raw_map is "map"
+    raw_map.id is 7
+
+    u = raw_map as api_user
     u is api_user
     u.id is 7
-    u.name is "Gast"
+    u.name is "Aria"
     u.role is "admin"
 
-    # Record -> JSON text
-    encoded = u as text
-    decoded = encoded as api_user
+    # Explicit JSON encoding & roundtrip
+    encoded = do encode_json u
+    decoded = do decode_json encoded as api_user
     decoded is api_user
     decoded.id is 7
+    decoded.name is "Aria"
     decoded.role is "admin"
 
-    # Non-match cases -> immediate error (Outcome B, zero silent fallbacks)
-    "" as api_user raises "empty text"
-    "\{broken" as api_user raises "invalid JSON"
-    "null" as api_user raises "JSON null"
-    "\{\"id\": \"not-a-num\"\}" as api_user raises "api_user.id"
-    "\{\"role\": \"superuser\"\}" as api_user raises "api_user.role"
-    42 as api_user raises "expected JSON text"
+    # Defaults remain exclusively for 'with' construction
+    with_defaults = api_user with id = 9
+    with_defaults.name is "Gast"
+    with_defaults.role is "member"
+
+    # Raw text directly passed to 'as <def>' is rejected immediately
+    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user raises "Cannot validate text as api_user"
+    "" as api_user raises "Cannot validate text as api_user"
+
+    # Missing required fields in 'as <def>' (no silent default filling!)
+    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+
+    # Invalid JSON / non-map decoded values / wrong types / invalid union -> immediate error
+    do decode_json "" raises "empty text"
+    do decode_json '{broken' raises "Invalid JSON"
+    do decode_json 42 raises "requires text"
+    (do decode_json 'null') as api_user raises "Cannot validate none as api_user"
+    (do decode_json '[1, 2]') as api_user raises "Cannot validate list as api_user"
+    (do decode_json '{"id": "not-a-num", "name": "Aria", "role": "admin"}') as api_user raises "api_user.id"
+    (do decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user raises "api_user.role"
+    42 as api_user raises "expected structured map or api_user record"
+
+    # Symmetry: no JSON magic in 'as text'
+    u as text raises "Cannot convert api_user to text"
 end
 `
 	report, err := RunChecks(src)
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Passed != 13 || report.Failed != 0 {
-		t.Fatalf("expected 13 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	if report.Passed != 25 || report.Failed != 0 {
+		t.Fatalf("expected 25 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
 	}
 }
 
@@ -852,11 +875,11 @@ def my_record
     second = ""
 end
 
-to some_func a b
-    "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
+to make_pair a b
+    do decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
 end
 
-x = do some_func "a" "b" as my_record
+x = do make_pair "a" "b" as my_record
 `
 	prog, err := ParseProgram(src)
 	if err != nil {
@@ -871,8 +894,8 @@ x = do some_func "a" "b" as my_record
 		t.Fatalf("expected outer CastExpr wrapping do-call, got %T", assign.Value)
 	}
 	call, ok := cast.Target.(*CallExpr)
-	if !ok || call.Callee != "some_func" || len(call.Args) != 2 {
-		t.Fatalf("expected CastExpr.Target to be CallExpr(some_func, 2 args), got %#v", cast.Target)
+	if !ok || call.Callee != "make_pair" || len(call.Args) != 2 {
+		t.Fatalf("expected CastExpr.Target to be CallExpr(make_pair, 2 args), got %#v", cast.Target)
 	}
 
 	evalSrc := src + `
@@ -927,7 +950,8 @@ to run_window
             end
         end
 
-        state = do send win current as frame_state
+        raw_state = do send win current
+        state = do decode_json raw_state as frame_state
         check state is not frame_state -> "Fensterfehler"
     end
 
@@ -1118,8 +1142,8 @@ def ticket = "open" | "closed"
 a = 42 as text
 b = "12" as number
 d = "open" as ticket
-e = "\{\"name\": \"Ada\"\}" as custom_user
-f = "\{\"status\": 200, \"body\": \"ok\"\}" as http_response
+e = (do decode_json '{"name": "Ada"}') as custom_user
+f = (do decode_json '{"status": 200, "body": "ok", "error": ""}') as http_response
 g = list as number
 `
 	if _, err := ParseProgram(validSrc); err != nil {
@@ -1144,14 +1168,34 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 			wantSub: `Value pending is not valid for union "ticket"`,
 		},
 		{
+			name:    "raw text rejected for record def",
+			src:     "def user\n    id = 0\nend\nx = '{\"id\": 1}' as user\n",
+			wantSub: `Cannot validate text as user: expected structured map or user record`,
+		},
+		{
 			name:    "json array rejected for record def",
-			src:     "def user\n    id = 0\nend\nx = \"[1, 2]\" as user\n",
-			wantSub: `Cannot convert text to user: invalid JSON`,
+			src:     "def user\n    id = 0\nend\nx = (do decode_json '[1, 2]') as user\n",
+			wantSub: `Cannot validate list as user: expected structured map or user record`,
+		},
+		{
+			name:    "missing required field rejected for record def",
+			src:     "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (do decode_json '{\"id\": 1}') as user\n",
+			wantSub: `Missing field 'user.name'`,
 		},
 		{
 			name:    "wrong nested field type",
-			src:     "def user\n    id = 0\nend\nx = \"\\{\\\"id\\\": true\\}\" as user\n",
+			src:     "def user\n    id = 0\nend\nx = (do decode_json '{\"id\": true}') as user\n",
 			wantSub: `Field 'user.id' expected number, got condition`,
+		},
+		{
+			name:    "record as text rejected",
+			src:     "def hero\n    hp = 100\nend\nx = hero as text\n",
+			wantSub: `Cannot convert hero to text`,
+		},
+		{
+			name:    "record string interpolation rejected",
+			src:     "def hero\n    hp = 100\nend\nsay \"{hero}\"\n",
+			wantSub: `Cannot interpolate hero into text`,
 		},
 	}
 
@@ -1203,5 +1247,26 @@ end
 	}
 	if report.Passed != 5 || report.Failed != 0 {
 		t.Fatalf("expected 5 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+}
+
+func TestRawSingleQuotedStrings(t *testing.T) {
+	src := `
+raw_json = '{"id": 7, "msg": "hi\n{not_interp}"}'
+test "raw single quotes preserve braces and backslashes literally"
+    raw_json is "\{\"id\": 7, \"msg\": \"hi\\n\{not_interp\}\"\}"
+    '{x}' is "\{x\}"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 2 || report.Failed != 0 {
+		t.Fatalf("expected 2 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+
+	if _, err := ParseProgram("bad = 'unterminated\n"); err == nil || !strings.Contains(err.Error(), "Unterminated raw string literal") {
+		t.Fatalf("expected Unterminated raw string literal error, got: %v", err)
 	}
 }

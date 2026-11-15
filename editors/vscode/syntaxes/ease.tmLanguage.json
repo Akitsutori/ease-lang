@@ -22,31 +22,40 @@
       ]
     },
     "strings": {
-      "name": "string.quoted.double.ease",
-      "begin": "\"",
-      "end": "\"",
       "patterns": [
         {
-          "name": "constant.character.escape.ease",
-          "match": "\\\\."
+          "name": "string.quoted.single.ease",
+          "begin": "'",
+          "end": "'"
         },
         {
-          "name": "meta.embedded.line.ease",
-          "begin": "\\{",
-          "end": "\\}",
-          "beginCaptures": {
-            "0": { "name": "punctuation.section.embedded.begin.ease" }
-          },
-          "endCaptures": {
-            "0": { "name": "punctuation.section.embedded.end.ease" }
-          },
+          "name": "string.quoted.double.ease",
+          "begin": "\"",
+          "end": "\"",
           "patterns": [
-            { "include": "#numbers" },
-            { "include": "#operators" },
-            { "include": "#constants" },
             {
-              "name": "variable.other.ease",
-              "match": "[A-Za-z_][A-Za-z0-9_-]*"
+              "name": "constant.character.escape.ease",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.embedded.line.ease",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.embedded.begin.ease" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.embedded.end.ease" }
+              },
+              "patterns": [
+                { "include": "#numbers" },
+                { "include": "#operators" },
+                { "include": "#constants" },
+                {
+                  "name": "variable.other.ease",
+                  "match": "[A-Za-z_][A-Za-z0-9_-]*"
+                }
+              ]
             }
           ]
         }

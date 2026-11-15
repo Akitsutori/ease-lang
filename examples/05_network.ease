@@ -75,17 +75,20 @@ test "import network, ask/send Schnittstelle & Form vs. Inhalt"
     do describe_event events.0 is "click@120,240"
     do describe_event events.1 is "key:Enter"
 
-    # Record <-> JSON Typ-Konformität via 'as'
-    u = "\{\"id\": 42, \"role\": \"admin\", \"ignored\": 1\}" as api_user
+    # Expliziter zweistufiger Weg: JSON-Parsing -> strikte Strukturprüfung (Pflichtfelder)
+    raw_map = do decode_json '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}'
+    u = raw_map as api_user
     u is api_user
     u.id is 42
     u.name is "Gast"
     u.role is "admin"
 
-    raw_json = u as text
-    roundtrip = raw_json as api_user
+    raw_json = do encode_json u
+    roundtrip = (do decode_json raw_json) as api_user
     roundtrip is api_user
 
-    "\{\"role\": \"hacker\"\}" as api_user raises "Invalid value"
-    "" as api_user raises "empty text"
+    '{"id": 42, "name": "Gast", "role": "admin"}' as api_user raises "Cannot validate text"
+    (do decode_json '{"id": 42, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+    (do decode_json '{"id": 42, "name": "Gast", "role": "hacker"}') as api_user raises "Invalid value"
+    do decode_json "" raises "empty text"
 end

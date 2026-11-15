@@ -38,7 +38,7 @@ to send target path payload
     req = http_request with
         method  = "POST"
         url     = "{target.url}{path}"
-        body    = payload as text
+        body    = do encode_json payload
         token   = target.token
         timeout = target.timeout
     end

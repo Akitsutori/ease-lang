@@ -96,9 +96,12 @@ x = x + 5
 # Immutable constant
 def pi = 3.14
 
-# Strings support {expr} interpolation and \{ escaping
+# Strings in "..." support {expr} interpolation (atomic text/number only) and \{ escaping
 name = "Ease"
 msg = "Hello {name}: {x}, \{literal\}"
+
+# Raw text in '...' is read 1:1 with zero interpolation and zero backslash escapes
+raw_json = '{"id": 7, "name": "Gast", "role": "admin"}'
 ```
 
 Line comments start with `#`.
@@ -238,19 +241,19 @@ end
 
 ---
 
-### Type Checks & Conversions (`is`, `is not`, `as`)
+### Type Checks, Explicit JSON (`decode_json` / `encode_json`) & Contracts (`is`, `as`)
+
+Ease strictly separates **format parsing**, **boundary contract validation**, and **internal construction**:
 
 - **Equality, type, and union checks**: `is`, `is not` (plus `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
-- **Strict explicit casting with `as` (zero silent fallbacks)**:
-  - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (such as `as ö`, `as bool`, or a typo like `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time with a clear error message and hint.
-  - **Two-outcome rule**: Every `as` expression has **only two possible outcomes**:
-    - **A)** The target type exists and the value/data conforms to all fields, types, and union rules -> Ease returns the validated value/object.
-    - **B)** The target type does not exist, or the data deviates (e.g. `"abc" as number`, `"" as api_user`, invalid JSON, `null`, wrong field type, or invalid union variant) -> Ease **aborts immediately** with a descriptive error (`TypeError` / `RuntimeError`).
-  - **Conversions**:
-    - `val as text` formats primitives or serializes a `def` record to JSON text.
-    - `val as number` converts numbers or valid numeric strings strictly.
-    - `<text> as <def_union>` validates that the string matches one of the union's allowed literals (`"guest" | "admin"`).
-    - `<text> as <def_record>` parses a JSON object into a copy of the `<def_record>` blueprint, keeping omitted default fields, ignoring extra JSON keys, and strictly validating every present field's type and union constraint:
+- **Explicit JSON parsing & encoding**: `do decode_json <text>` parses JSON text into structured data (`map`, `list`, primitives) and fails immediately on empty or invalid JSON; `do encode_json <val>` serializes structured values (`def` records, `map`, `list`, atomic values) into JSON text.
+- **Strict structural contract with `as` (zero implicit JSON magic)**:
+  - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (`as ö`, `as bool`, `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time.
+  - **Atomic-only `as text` & interpolation**: `val as text` and `"{expr}"` interpolation work **exclusively on atomic base values (`text`, `number`)** — passing a structured `def` record, `map`, or `list` aborts immediately with `TypeError`. Use `do encode_json` for JSON serialization or interpolate atomic fields like `"{user.name}"`.
+  - **`val as number`**: Converts numbers or valid numeric strings strictly.
+  - **`<text> as <def_union>`**: Validates that the value matches one of the union's allowed literals (`"guest" | "admin"`).
+  - **`<map_or_record> as <def_record>`**: Validates **already-structured** data (`map` from `do decode_json`, or a matching record) against the `<def_record>` blueprint. Passing unstructured `text` directly to `as <def_record>` fails immediately (`TypeError`).
+  - **Mandatory fields at the boundary (defaults belong exclusively to `with`)**: Every field declared in `def` **must be explicitly present** with matching type and valid union value — `as <def_record>` never fills missing fields with defaults (`Missing field '<type>.<field>'`). Extra unknown keys are tolerated for forward compatibility. Internal default construction remains exclusively `<def> with ...`.
 
 ```ease
 def api_user
@@ -260,12 +263,23 @@ def api_user
 end
 
 age = "42" as number
-u = "\{\"id\": 42, \"role\": \"admin\"\}" as api_user
 
-# Invalid casts or mismatched JSON abort immediately (testable with `raises`):
-test "strict as"
-    "abc" as number raises "Cannot convert"
-    "\{\"role\": \"hacker\"\}" as api_user raises "api_user.role"
+# 1. Explicit JSON parsing (single-quoted raw text avoids backslash escapes)
+# 2. Strict contract validation against `def api_user` (all fields required)
+raw_map = do decode_json '{"id": 42, "name": "Ada", "role": "admin"}'
+u = raw_map as api_user
+
+# Defaults are strictly for internal `with` construction:
+local_guest = api_user with id = 1
+
+test "strict as contract vs decode_json vs with defaults"
+    u.name is "Ada"
+    local_guest.name is "Gast"
+
+    '{"id": 42, "name": "Ada", "role": "admin"}' as api_user raises "Cannot validate text"
+    (do decode_json '{"id": 42, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+    (do decode_json '{"id": 42, "name": "Ada", "role": "hacker"}') as api_user raises "api_user.role"
+    u as text raises "Cannot convert api_user to text"
 end
 ```
 
@@ -339,7 +353,7 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 1. **One-page learnable grammar ([`llms.txt`](llms.txt))**: A model with zero prior Ease training data can load the entire formal grammar and standard library in a single small prompt without conflicting dialects.
 2. **One canonical syntax per construct**: Function declarations (`to add a b`) and calls (`do add 2 3`) never use brackets or commas; equality and type assertions both use `is` / `is not` (no `==`/`!=`/`is-not` aliases); blocks always close with `end`. Commas appear only in `list` literals and single-line `with` updates.
 3. **Self-documenting states instead of `bool`, enforced by `def`/`to`/`do`**: Removing `bool` eliminates boolean blindness — conditions (`amount >= 50`) live inside `check`/`if`/`test`, while returned states use explicit `def` union types (`"yes" | "no"`, `"open" | "locked"`). At the same time, the `def` (noun) / `to` (infinitive verb) / `do` (imperative call) triad exposes sloppy names like `to can_ship` immediately when read aloud.
-4. **Zero silent fallbacks + repairable diagnostics**: Unknown types (`as ö`, `as bool`) and mismatched JSON payloads abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
+4. **Zero implicit magic + repairable diagnostics**: Parsing (`do decode_json`) is strictly separated from schema validation (`as <def>`, where every declared field is mandatory without silent default-filling; defaults stay exclusively in `with`). Unknown types (`as ö`, `as bool`) and mismatched fields abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
 5. **Built-in self-verification & machine interfaces**: Agents can verify their own output in one command with `ease test` (including `raises` error assertions) and inspect structure deterministically via `ease ast`, `ease tokens`, and `ease lsp`.
 
 ---
@@ -355,7 +369,7 @@ Wraps HTTP networking via the `http_call` host bridge:
 - **Blueprints**: `network` (`url`, `timeout = 5`, `token = ""`), `http_request` (`method`, `url`, `body`, `token`, `timeout`), `http_response` (`status`, `body`, `error`).
 - **Verbs**:
   - `do ask target path` — performs HTTP `GET` (`Content-Type: application/json`, optional Bearer token) and returns the response body or `""` on transport errors or HTTP status `>= 400`.
-  - `do send target path payload` — serializes `payload as text` and performs HTTP `POST` to `{target.url}{path}`.
+  - `do send target path payload` — serializes `payload` via `do encode_json` and performs HTTP `POST` to `{target.url}{path}`.
 
 See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tests) and [`examples/051_network.ease`](examples/051_network.ease) (live REST example).
 
@@ -364,7 +378,7 @@ See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tes
 Wraps 2D rendering and window input (via Ebitengine and `screen_present`):
 
 - **Blueprints**: `screen` (`width = 800`, `height = 600`, `title = "Ease Window"`), `circle` (`x`, `y`, `size`, `color`), `box` (`x`, `y`, `width`, `height`, `color`), `scene` (`background`, `circles`, `boxes`), `frame_state` (`status = "open" | "closed"`, `key`, `mouse_x`, `mouse_y`).
-- **Verb**: `do send target current_scene` — renders one frame (60 FPS) and returns the current `frame_state` serialized as JSON text (typically consumed via `as frame_state`).
+- **Verb**: `do send target current_scene` — renders one frame (60 FPS) and returns the current `frame_state` serialized as JSON text (typically decoded via `do decode_json ... as frame_state`).
 - **Headless test mode (`--check`)**: Simulates deterministic frames without opening a graphical window so UI loops can run cleanly in CI/CD environments.
 
 See [`examples/06_window.ease`](examples/06_window.ease).
@@ -384,7 +398,9 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `do range start end` | Returns an inclusive list of numbers `[start .. end]` |
 | `do push xs item` | Returns a new list with `item` appended (enforces element type on `list as <type>`) |
 | `do abs n` / `do min a b` / `do max a b` | Numeric math helpers |
-| `do fields rec` | Returns a list of field names in declaration order for a `def` record |
+| `do fields rec` | Returns a list of field names in declaration order for a `def` record or decoded `map` |
+| `do decode_json txt` | Parses valid JSON `text` into structured Ease data (`map`, `list`, or primitives); aborts on empty/invalid JSON |
+| `do encode_json val` | Encodes a `def` record, `map`, `list`, or primitive into JSON `text` |
 | `do fail msg` | Raises an explicit `RuntimeError` (testable with `raises`) |
 
 ---
@@ -406,6 +422,7 @@ IDENT         ::= LETTER { LETTER | DIGIT }         (* excluding reserved keywor
 
 NUMBER        ::= [ "-" ] DIGIT+ [ "." DIGIT+ ]    (* "-" directly before a digit without whitespace is an atomic negative literal; use "- " for subtraction *)
 STRING        ::= '"' { CHAR - ('"' | "\n" | "{" | "\\") | ESCAPE } '"'
+RAW_STRING    ::= "'" { CHAR - ("'" | "\n") } "'"   (* 1:1 literal: no interpolation and no escapes *)
 INTERP_STRING ::= '"' { CHAR - ('"' | "\n" | "\\") | ESCAPE | "{" EXPR_TEXT "}" } '"'
 ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```
@@ -526,6 +543,7 @@ bare_call_args ::= term { term }                         (* space-separated; 'as
 
 primary        ::= NUMBER
                  | STRING
+                 | RAW_STRING
                  | INTERP_STRING
                  | IDENT
                  | do_expr
@@ -545,7 +563,7 @@ list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," wit
 list_elem_type ::= "text" | "number" | IDENT    (* must name a built-in type or previously defined/imported `def` blueprint *)
 ```
 
-> **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do ask client "/users/1" as api_user` binds `(do ask client "/users/1") as api_user` rather than casting only the final argument.
+> **Note on `as` binding**: Inside `bare_call_args`, nested `as` postfix casts are suppressed so `do decode_json raw_text as api_user` binds `(do decode_json raw_text) as api_user` rather than casting only the final argument.
 
 ---
 

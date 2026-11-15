@@ -42,7 +42,8 @@ to run_window
             end
         end
 
-        state = do send win current as frame_state
+        raw_state = do send win current
+        state = do decode_json raw_state as frame_state
         check state is not frame_state -> "Fensterfehler"
     end
 

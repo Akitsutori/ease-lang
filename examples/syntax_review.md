@@ -7,13 +7,13 @@ Diese Übersicht prüft jede Syntax-Behauptung in [`README.md`](../README.md) Ze
 
 ---
 
-## 1. Lexical Structure (`README.md` L344–L369)
-- **Happy Path**: Unicode-Ident `größe_1 = 42`, Kommentare `# ...`, Escapes `\n \t \" \\ \{`, Interpolation `"Hi {name}: {1 + 2}"`
+## 1. Lexical Structure (`README.md`)
+- **Happy Path**: Unicode-Ident `größe_1 = 42`, Kommentare `# ...`, Escapes `\n \t \" \\ \{`, Interpolation `"Hi {name}: {1 + 2}"`, Rohtext `'{"id": 7}'` (1:1 ohne Interpolation/Escapes)
 - **10 Negativtests**:
   1. Unterminierter String: `"hello`
   2. Mehrzeiliger Rohstring: `"hello\nworld"`
-  3. Ungültige Escape-Sequenz: `"\q"`
-  4. Abschließender Backslash: `"abc\`
+  3. Unterminierter Rohtext in `'...'`: `'hello`
+  4. Interpolation auf Nicht-Atomwerten: `"{hero}"` (Laufzeit-`TypeError`)
   5. Leere Interpolation: `"{}"`
   6. Unterminierte Interpolation: `"{x + 1"`
   7. Ungültiger Ausdruck in Interpolation: `"{1 + }"`
@@ -91,19 +91,19 @@ Diese Übersicht prüft jede Syntax-Behauptung in [`README.md`](../README.md) Ze
   9. `"a" < 1` (`raises` in `.ease`)
   10. `(1 > 0) < (1 < 0)` (`raises` in `.ease`)
 
-## 7. Strict `as` Casting (`README.md`)
-- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `"{...}" as api_user`, `do ask client "/x" as api_user`
+## 7. Strict `as` Contract & Explicit JSON (`decode_json` / `encode_json`) (`README.md`)
+- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `(do decode_json '{"id": 7, "name": "Gast", "role": "admin"}') as api_user`, `do encode_json u`
 - **10 Negativtests**:
   1. Unbekannter Unicode-Typ: `x as ö` (Parse/TypeError)
   2. Tippfehler: `x as api_usre` (Parse/TypeError mit Vorschlag)
   3. Alias `as string` (Parse/TypeError mit Hinweis auf `text`)
-  4. `as bool` (Parse/TypeError: Boolean ist kein eingebauter Typ)
-  5. `as boolean` (Parse/TypeError)
-  6. Konstante nach `as`: `x as pi` (Parse/TypeError)
-  7. Vorwärtsreferenz vor `def`: `x as late_user` (Parse/TypeError)
-  8. Ungültige Zahl: `"abc" as number` (`raises` in `.ease`)
-  9. Ungültiger Union-Wert: `"pending" as ticket` (`raises` in `.ease`)
-  10. Ungültiges JSON / Feldtyp / `null` (`raises` in `.ease`)
+  4. `as bool` / `as boolean` (Parse/TypeError: Boolean ist kein eingebauter Typ)
+  5. Konstante / Vorwärtsreferenz nach `as`: `x as pi` / `x as late_user`
+  6. Roher Text direkt an `as <def>`: `'{"id": 7, ...}' as api_user` (`raises` in `.ease`)
+  7. Fehlendes Pflichtfeld bei `as <def>` (kein Default-Fallback): `Missing field 'api_user.name'` (`raises` in `.ease`)
+  8. Record/Liste an `as text` oder `{...}`-Interpolation (`raises` in `.ease`)
+  9. Ungültige Zahl / Union / JSON in `decode_json` (`"abc" as number`, `"pending" as ticket`, `do decode_json '{broken'` -> `raises` in `.ease`)
+  10. Falsches JSON-Format / Feldtyp (`do decode_json '[1, 2]' as api_user`, `do decode_json '{"id": "abc", ...}' as api_user` -> `raises` in `.ease`)
 
 ## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `repeat`, `for`) (`README.md`)
 - **Happy Path**: `list 10, 25, 40`, `scores.0`, `list as number`, `list as player with ... end`, `repeat 3`, `for i in do range 1 10`, `for xs do say it end`

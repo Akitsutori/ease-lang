@@ -1,7 +1,10 @@
-# Feature 06: Striktes 'as' Casting ohne stille Fallbacks
-# Zwei Ausgänge:
-#   A) Zieltyp existiert und Daten erfüllen alle Felder/Typen -> validiertes Objekt
-#   B) Zieltyp existiert nicht oder Daten weichen ab         -> sofortiger Fehlerabbruch
+# Feature 06: Explizites JSON-Parsing (decode_json / encode_json) & strikter Strukturvertrag (as)
+#
+# Trennung der Verantwortlichkeiten:
+#   1. Format-Parsing:     do decode_json <text> / do encode_json <val>
+#   2. Strukturvertrag:    <map|record> as <def> (alle def-Felder PFLICHT, keine Defaults!)
+#   3. Internes Bauen:     <def> with ... (Default-Werte aus def werden hier genutzt)
+#   4. Atomare Textform:   as text & "{expr}" nur für text und number
 
 def ticket = "vip" | "standard" | "none"
 
@@ -11,37 +14,67 @@ def api_user
     role = "member" | "admin"
 end
 
+to bad_interp val
+    "Wert: {val}"
+end
+
 raw_ok = "42" as number
 num_as_text = 123 as text
 vip_ticket = "vip" as ticket
-valid_user = "\{\"id\": 7, \"role\": \"admin\", \"ignored\": true\}" as api_user
 
-test "Explizite Typkonvertierung mit as (Ausgang A: gültige Daten)"
+parsed_map = do decode_json '{"id": 7, "name": "Aria", "role": "admin", "ignored": true}'
+valid_user = parsed_map as api_user
+default_user = api_user with id = 9
+
+test "Explizites JSON-Parsing & striktes as (Ausgang A: gültige Daten)"
     raw_ok is number
     raw_ok + 8 is 50
     num_as_text is text
     num_as_text is "123"
     vip_ticket is "vip"
 
+    # Defaults gelten ausschließlich für Konstruktion mit `with`
+    default_user.name is "Gast"
+    default_user.role is "member"
+
+    # Zweistufiger Weg: decode_json -> as api_user
+    do type parsed_map is "map"
+    parsed_map.id is 7
     valid_user is api_user
     valid_user.id is 7
-    valid_user.name is "Gast"
+    valid_user.name is "Aria"
     valid_user.role is "admin"
 
-    # Roundtrip Record -> JSON -> Record
-    roundtrip = (valid_user as text) as api_user
+    # Expliziter Roundtrip: encode_json -> decode_json -> as api_user
+    json_out = do encode_json valid_user
+    roundtrip = (do decode_json json_out) as api_user
     roundtrip is api_user
     roundtrip.id is 7
+    roundtrip.name is "Aria"
 end
 
-test "Striktes as ohne stillen Fallback (Ausgang B: Fehlerabbruch bei Abweichung)"
+test "Striktes as, Pflichtfelder & atomare Textgrenze (Ausgang B: Fehlerabbruch)"
     "abc" as number raises "Cannot convert text"
     "gold" as ticket raises "not valid for union"
 
-    "" as api_user raises "empty text"
-    "\{broken" as api_user raises "invalid JSON"
-    "null" as api_user raises "JSON null"
-    "\{\"id\": \"keine-zahl\"\}" as api_user raises "api_user.id"
-    "\{\"role\": \"superuser\"\}" as api_user raises "api_user.role"
-    42 as api_user raises "expected JSON text"
+    # Rohtext direkt an `as <def>` muss sofort scheitern
+    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user raises "Cannot validate text as api_user"
+    "" as api_user raises "Cannot validate text as api_user"
+
+    # Fehlendes Pflichtfeld in `as <def>` (kein stilles Auffüllen mit Defaults)
+    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+
+    # Ungültiges JSON oder falscher Strukturtyp
+    do decode_json "" raises "empty text"
+    do decode_json '{broken' raises "Invalid JSON"
+    (do decode_json 'null') as api_user raises "Cannot validate none as api_user"
+    (do decode_json '[1, 2]') as api_user raises "Cannot validate list as api_user"
+    (do decode_json '{"id": "keine-zahl", "name": "Aria", "role": "admin"}') as api_user raises "api_user.id"
+    (do decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user raises "api_user.role"
+    42 as api_user raises "expected structured map or api_user record"
+
+    # Symmetrie: strukturierte Werte nicht in `as text` oder `{...}` Interpolation
+    valid_user as text raises "Cannot convert api_user to text"
+    (list 1, 2) as text raises "Cannot convert list to text"
+    do bad_interp valid_user raises "Cannot interpolate api_user into text"
 end

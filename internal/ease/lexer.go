@@ -102,6 +102,15 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
+		if r == '\'' {
+			tok, err := l.scanRawString()
+			if err != nil {
+				return nil, err
+			}
+			tokens = append(tokens, tok)
+			continue
+		}
+
 		if unicode.IsDigit(r) {
 			tok, err := l.scanNumber()
 			if err != nil {
@@ -261,6 +270,27 @@ func (l *Lexer) scanString() (Token, error) {
 	}
 
 	return Token{}, newError("SyntaxError", line, col, l.source, "Unterminated string literal", "Add a closing '\"' at the end of your text.")
+}
+
+// scanRawString scans a single-quoted literal 1:1 without interpolation or backslash escapes.
+func (l *Lexer) scanRawString() (Token, error) {
+	line, col := l.line, l.col
+	l.advance() // opening single quote
+	var b strings.Builder
+
+	for !l.eof() {
+		r := l.peek()
+		if r == '\'' {
+			l.advance()
+			return Token{Type: TOK_STRING, Lexeme: b.String(), Line: line, Col: col}, nil
+		}
+		if r == '\n' {
+			return Token{}, newError("SyntaxError", line, col, l.source, "Unterminated raw string literal", "Close raw strings with a matching '\\'' before the end of the line.")
+		}
+		b.WriteRune(l.advance())
+	}
+
+	return Token{}, newError("SyntaxError", line, col, l.source, "Unterminated raw string literal", "Add a closing '\\'' at the end of your raw text.")
 }
 
 func (l *Lexer) scanInterpExpr(openLine, openCol int) (string, error) {

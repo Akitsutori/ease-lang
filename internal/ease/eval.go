@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,12 @@ type RecordValue struct {
 	Allowed     map[string][]Value
 	Order       []string
 	IsPrototype bool
+}
+
+// MapValue represents a structured key-value object produced by `do decode_json`.
+type MapValue struct {
+	Fields map[string]Value
+	Order  []string
 }
 
 // UnionValue represents a union value-space defined with `def <name> = v1 | v2 | ...`.
@@ -91,6 +98,17 @@ func FormatValue(v Value) string {
 			}
 		}
 		return fmt.Sprintf("%s(%s)", val.TypeName, strings.Join(parts, ", "))
+	case *MapValue:
+		parts := make([]string, 0, len(val.Order))
+		for _, k := range val.Order {
+			fv := val.Fields[k]
+			if s, ok := fv.(string); ok {
+				parts = append(parts, fmt.Sprintf("%s: %s", k, strconv.Quote(s)))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s: %s", k, FormatValue(fv)))
+			}
+		}
+		return fmt.Sprintf("map(%s)", strings.Join(parts, ", "))
 	case *UnionValue:
 		parts := make([]string, len(val.Values))
 		for i, v := range val.Values {
@@ -121,10 +139,21 @@ func TypeName(v Value) string {
 		return "list"
 	case *RecordValue:
 		return val.TypeName
+	case *MapValue:
+		return "map"
 	case *UnionValue:
 		return val.TypeName
 	default:
 		return "unknown"
+	}
+}
+
+func isAtomicEaseValue(v Value) bool {
+	switch v.(type) {
+	case string, float64:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -212,6 +241,18 @@ func ValuesEqual(a, b Value) bool {
 			return true
 		}
 		if len(va.Fields) != len(vb.Fields) {
+			return false
+		}
+		for k, v := range va.Fields {
+			ov, exists := vb.Fields[k]
+			if !exists || !ValuesEqual(v, ov) {
+				return false
+			}
+		}
+		return true
+	case *MapValue:
+		vb, ok := b.(*MapValue)
+		if !ok || len(va.Fields) != len(vb.Fields) {
 			return false
 		}
 		for k, v := range va.Fields {
@@ -676,6 +717,20 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			if err != nil {
 				return nil, err
 			}
+			if !isAtomicEaseValue(val) {
+				pLine, pCol := part.Expr.Pos()
+				if pLine == 0 {
+					pLine, pCol = e.Line, e.Col
+				}
+				return nil, newError(
+					"TypeError",
+					pLine,
+					pCol,
+					ev.source,
+					fmt.Sprintf("Cannot interpolate %s into text", TypeName(val)),
+					"String interpolation '{...}' only allows atomic values (text, number). Interpolate a field like '{hero.hp}' or use 'do encode_json ...'.",
+				)
+			}
 			b.WriteString(FormatValue(val))
 		}
 		return b.String(), nil
@@ -908,6 +963,20 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if mv, ok := targetVal.(*MapValue); ok {
+			val, exists := mv.Fields[e.Field]
+			if !exists {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("map has no field %q", e.Field),
+					fmt.Sprintf("Available fields: %s", strings.Join(mv.Order, ", ")),
+				)
+			}
+			return val, nil
+		}
 		rec, ok := targetVal.(*RecordValue)
 		if !ok {
 			return nil, newError(
@@ -916,7 +985,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				e.Col,
 				ev.source,
 				fmt.Sprintf("Cannot read field '.%s' on %s", e.Field, TypeName(targetVal)),
-				"Field access '.name' only works on 'def' records.",
+				"Field access '.name' only works on 'def' records or maps.",
 			)
 		}
 		val, exists := rec.Fields[e.Field]
@@ -1258,15 +1327,73 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if len(args) != 1 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "fields takes 1 argument", "Example: do fields player")
 		}
+		if mv, ok := args[0].(*MapValue); ok {
+			out := make([]Value, len(mv.Order))
+			for i, k := range mv.Order {
+				out[i] = k
+			}
+			return out, true, nil
+		}
 		rec, ok := args[0].(*RecordValue)
 		if !ok {
-			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("fields() requires a 'def' record, got %s", TypeName(args[0])), "Define a record with 'def ... end'.")
+			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("fields() requires a 'def' record or map, got %s", TypeName(args[0])), "Define a record with 'def ... end'.")
 		}
 		out := make([]Value, len(rec.Order))
 		for i, k := range rec.Order {
 			out[i] = k
 		}
 		return out, true, nil
+
+	case "decode_json":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "decode_json takes 1 argument (text)", "Example: do decode_json raw_text")
+		}
+		rawStr, ok := args[0].(string)
+		if !ok {
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("decode_json requires text, got %s", TypeName(args[0])),
+				"Pass a JSON string to decode, e.g. do decode_json '{\"id\": 1}'.",
+			)
+		}
+		if strings.TrimSpace(rawStr) == "" {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"Cannot decode empty text as JSON",
+				"Check for empty responses before calling 'do decode_json'.",
+			)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(rawStr), &parsed); err != nil {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Invalid JSON in decode_json: %v", err),
+				"Provide valid JSON text.",
+			)
+		}
+		return jsonAnyToEase(parsed), true, nil
+
+	case "encode_json":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "encode_json takes 1 argument", "Example: do encode_json user")
+		}
+		if err := validateJSONEncodable(args[0]); err != nil {
+			return nil, true, newError("TypeError", line, col, ev.source, err.Error(), "Conditions and union definitions cannot be encoded as JSON.")
+		}
+		b, err := json.Marshal(easeValueToJSON(args[0]))
+		if err != nil {
+			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot encode %s to JSON: %v", TypeName(args[0]), err), "")
+		}
+		return string(b), true, nil
 
 	case "http_call":
 		if len(args) != 1 {
@@ -1378,9 +1505,73 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 	return ev.newHTTPResponseRecord(float64(resp.StatusCode), string(rawBody), "")
 }
 
+func jsonAnyToEase(v any) Value {
+	switch x := v.(type) {
+	case map[string]any:
+		fields := make(map[string]Value, len(x))
+		order := make([]string, 0, len(x))
+		for k := range x {
+			order = append(order, k)
+		}
+		slices.Sort(order)
+		for _, k := range order {
+			fields[k] = jsonAnyToEase(x[k])
+		}
+		return &MapValue{Fields: fields, Order: order}
+	case []any:
+		out := make([]Value, len(x))
+		for i, el := range x {
+			out[i] = jsonAnyToEase(el)
+		}
+		return out
+	default:
+		return x
+	}
+}
+
+func validateJSONEncodable(v Value) error {
+	switch x := v.(type) {
+	case bool:
+		return fmt.Errorf("Cannot encode condition to JSON")
+	case *UnionValue:
+		return fmt.Errorf("Cannot encode union definition %q to JSON", x.TypeName)
+	case *RecordValue:
+		for _, k := range x.Order {
+			if err := validateJSONEncodable(x.Fields[k]); err != nil {
+				return err
+			}
+		}
+	case *MapValue:
+		for _, k := range x.Order {
+			if err := validateJSONEncodable(x.Fields[k]); err != nil {
+				return err
+			}
+		}
+	case *ListValue:
+		for _, el := range x.Elements {
+			if err := validateJSONEncodable(el); err != nil {
+				return err
+			}
+		}
+	case []Value:
+		for _, el := range x {
+			if err := validateJSONEncodable(el); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func easeValueToJSON(v Value) any {
 	switch x := v.(type) {
 	case *RecordValue:
+		out := make(map[string]any, len(x.Fields))
+		for k, val := range x.Fields {
+			out[k] = easeValueToJSON(val)
+		}
+		return out
+	case *MapValue:
 		out := make(map[string]any, len(x.Fields))
 		for k, val := range x.Fields {
 			out[k] = easeValueToJSON(val)
@@ -1411,24 +1602,30 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 
 	switch e.TypeName {
 	case "text":
-		if targetVal == nil {
+		switch v := targetVal.(type) {
+		case string:
+			return v, nil
+		case float64:
+			return FormatValue(v), nil
+		case *RecordValue, *MapValue, *ListValue, []Value:
 			return nil, newError(
-				"RuntimeError",
+				"TypeError",
 				line,
 				col,
 				ev.source,
-				"Cannot convert nothing to text",
-				"Provide a text, number, list, or 'def' record value.",
+				fmt.Sprintf("Cannot convert %s to text", TypeName(targetVal)),
+				"Only atomic values (text, number) can be cast with 'as text'. Use 'do encode_json ...' to serialize structured data to JSON.",
+			)
+		default:
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to text", TypeName(targetVal)),
+				"Only atomic values (text, number) can be cast with 'as text'.",
 			)
 		}
-		if rec, ok := targetVal.(*RecordValue); ok {
-			b, err := json.Marshal(easeValueToJSON(rec))
-			if err != nil {
-				return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot serialize %s to JSON: %v", rec.TypeName, err), "")
-			}
-			return string(b), nil
-		}
-		return FormatValue(targetVal), nil
 
 	case "number":
 		switch v := targetVal.(type) {
@@ -1499,7 +1696,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("%q is not a 'def' blueprint or built-in type", e.TypeName),
-				"Only built-in types (text, number, bool) or a 'def' blueprint can be used after 'as'.",
+				"Only built-in types (text, number) or a 'def' blueprint can be used after 'as'.",
 			)
 		}
 
@@ -1508,60 +1705,38 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				return rec, nil
 			}
 			return nil, newError(
-				"RuntimeError",
+				"TypeError",
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("Cannot convert record %q to %q", rec.TypeName, e.TypeName),
-				fmt.Sprintf("Expected %s or JSON text matching 'def %s'.", e.TypeName, e.TypeName),
+				fmt.Sprintf("Cannot validate record %q as %q", rec.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 
-		rawStr, isStr := targetVal.(string)
-		if !isStr {
+		mv, isMap := targetVal.(*MapValue)
+		if !isMap {
+			if _, isStr := targetVal.(string); isStr {
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot validate text as %s: expected structured map or %s record", e.TypeName, e.TypeName),
+					fmt.Sprintf("Parse JSON text explicitly first with 'do decode_json ...', then validate with 'as %s'.", e.TypeName),
+				)
+			}
 			return nil, newError(
-				"RuntimeError",
+				"TypeError",
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("Cannot convert %s to %s: expected JSON text", TypeName(targetVal), e.TypeName),
-				fmt.Sprintf("Provide a JSON object string matching the 'def %s' blueprint.", e.TypeName),
-			)
-		}
-		if strings.TrimSpace(rawStr) == "" {
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Cannot convert empty text to %s", e.TypeName),
-				fmt.Sprintf("Expected a JSON object matching 'def %s'. Check for empty responses before casting.", e.TypeName),
-			)
-		}
-
-		var rawMap map[string]any
-		if err := json.Unmarshal([]byte(rawStr), &rawMap); err != nil {
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Cannot convert text to %s: invalid JSON (%v)", e.TypeName, err),
-				fmt.Sprintf("Expected a JSON object matching 'def %s'.", e.TypeName),
-			)
-		}
-		if rawMap == nil {
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Cannot convert JSON null to %s: expected JSON object", e.TypeName),
-				fmt.Sprintf("Expected a JSON object matching 'def %s'.", e.TypeName),
+				fmt.Sprintf("Cannot validate %s as %s: expected structured map or %s record", TypeName(targetVal), e.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 
-		mapped, mapErr := mapJSONToRecord(rawMap, proto, env, e.TypeName)
+		mapped, mapErr := mapToRecord(mv.Fields, proto, env, e.TypeName)
 		if mapErr != nil {
 			return nil, newError(
 				"RuntimeError",
@@ -1569,29 +1744,26 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				mapErr.Error(),
-				fmt.Sprintf("Ensure the JSON data matches every field and type of 'def %s'.", e.TypeName),
+				fmt.Sprintf("Ensure all fields declared in 'def %s' are present with matching types and valid union values.", e.TypeName),
 			)
 		}
 		return mapped, nil
 	}
 }
 
-func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env, path string) (*RecordValue, error) {
+func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path string) (*RecordValue, error) {
 	fields := make(map[string]Value, len(proto.Fields))
-	for k, v := range proto.Fields {
-		fields[k] = v
-	}
 	order := make([]string, len(proto.Order))
 	copy(order, proto.Order)
 
 	for _, fieldName := range proto.Order {
 		defaultVal := proto.Fields[fieldName]
-		jsonVal, exists := rawMap[fieldName]
-		if !exists {
-			continue
-		}
 		fieldPath := path + "." + fieldName
-		converted, err := coerceJSONValue(jsonVal, defaultVal, env, fieldPath)
+		rawVal, exists := rawMap[fieldName]
+		if !exists {
+			return nil, fmt.Errorf("Missing field '%s'", fieldPath)
+		}
+		converted, err := coerceToTemplate(rawVal, defaultVal, env, fieldPath)
 		if err != nil {
 			return nil, err
 		}
@@ -1620,64 +1792,59 @@ func mapJSONToRecord(rawMap map[string]any, proto *RecordValue, env *Env, path s
 	}, nil
 }
 
-func coerceJSONValue(jsonVal any, template Value, env *Env, path string) (Value, error) {
+func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, error) {
 	switch tmpl := template.(type) {
 	case float64:
-		n, ok := jsonVal.(float64)
+		n, ok := val.(float64)
 		if !ok {
-			return nil, fmt.Errorf("Field '%s' expected number, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
+			return nil, fmt.Errorf("Field '%s' expected number, got %s (%s)", path, structuredTypeName(val), FormatValue(val))
 		}
 		return n, nil
 	case string:
-		s, ok := jsonVal.(string)
+		s, ok := val.(string)
 		if !ok {
-			return nil, fmt.Errorf("Field '%s' expected text, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
+			return nil, fmt.Errorf("Field '%s' expected text, got %s (%s)", path, structuredTypeName(val), FormatValue(val))
 		}
 		return s, nil
-	case bool:
-		b, ok := jsonVal.(bool)
-		if !ok {
-			return nil, fmt.Errorf("Field '%s' expected bool, got %s (%s)", path, jsonTypeName(jsonVal), FormatValue(jsonVal))
-		}
-		return b, nil
 	case *RecordValue:
-		subMap, ok := jsonVal.(map[string]any)
-		if !ok || subMap == nil {
-			return nil, fmt.Errorf("Field '%s' expected %s object, got %s", path, tmpl.TypeName, jsonTypeName(jsonVal))
+		if subRec, ok := val.(*RecordValue); ok && subRec.TypeName == tmpl.TypeName {
+			return subRec, nil
 		}
-		return mapJSONToRecord(subMap, tmpl, env, path)
+		subMap, ok := val.(*MapValue)
+		if !ok || subMap == nil {
+			return nil, fmt.Errorf("Field '%s' expected %s map/record, got %s", path, tmpl.TypeName, structuredTypeName(val))
+		}
+		return mapToRecord(subMap.Fields, tmpl, env, path)
 	case *ListValue:
-		arr, ok := jsonVal.([]any)
+		arr, _, ok := asListElements(val)
 		if !ok {
-			return nil, fmt.Errorf("Field '%s' expected list, got %s", path, jsonTypeName(jsonVal))
+			return nil, fmt.Errorf("Field '%s' expected list, got %s", path, structuredTypeName(val))
 		}
 		elems := make([]Value, 0, len(arr))
 		for idx, item := range arr {
-			elemPath := fmt.Sprintf("%s[%d]", path, idx)
+			elemPath := fmt.Sprintf("%s.%d", path, idx)
 			if tmpl.ElemType != "" {
 				switch tmpl.ElemType {
 				case "number":
 					n, ok := item.(float64)
 					if !ok {
-						return nil, fmt.Errorf("Element '%s' expected number, got %s", elemPath, jsonTypeName(item))
+						return nil, fmt.Errorf("Element '%s' expected number, got %s", elemPath, structuredTypeName(item))
 					}
 					elems = append(elems, n)
 				case "text":
 					s, ok := item.(string)
 					if !ok {
-						return nil, fmt.Errorf("Element '%s' expected text, got %s", elemPath, jsonTypeName(item))
+						return nil, fmt.Errorf("Element '%s' expected text, got %s", elemPath, structuredTypeName(item))
 					}
 					elems = append(elems, s)
-				case "bool":
-					b, ok := item.(bool)
-					if !ok {
-						return nil, fmt.Errorf("Element '%s' expected bool, got %s", elemPath, jsonTypeName(item))
-					}
-					elems = append(elems, b)
 				default:
-					subMap, ok := item.(map[string]any)
+					if subRec, ok := item.(*RecordValue); ok && subRec.TypeName == tmpl.ElemType {
+						elems = append(elems, subRec)
+						continue
+					}
+					subMap, ok := item.(*MapValue)
 					if !ok || subMap == nil {
-						return nil, fmt.Errorf("Element '%s' expected %s object, got %s", elemPath, tmpl.ElemType, jsonTypeName(item))
+						return nil, fmt.Errorf("Element '%s' expected %s map/record, got %s", elemPath, tmpl.ElemType, structuredTypeName(item))
 					}
 					protoVal, found := env.Lookup(tmpl.ElemType)
 					if !found {
@@ -1687,7 +1854,7 @@ func coerceJSONValue(jsonVal any, template Value, env *Env, path string) (Value,
 					if !isRec || !proto.IsPrototype {
 						return nil, fmt.Errorf("%q is not a 'def' record blueprint for '%s'", tmpl.ElemType, elemPath)
 					}
-					rec, err := mapJSONToRecord(subMap, proto, env, elemPath)
+					rec, err := mapToRecord(subMap.Fields, proto, env, elemPath)
 					if err != nil {
 						return nil, err
 					}
@@ -1699,13 +1866,13 @@ func coerceJSONValue(jsonVal any, template Value, env *Env, path string) (Value,
 		}
 		return &ListValue{ElemType: tmpl.ElemType, Elements: elems}, nil
 	default:
-		return jsonVal, nil
+		return val, nil
 	}
 }
 
-func jsonTypeName(v any) string {
+func structuredTypeName(v any) string {
 	if v == nil {
-		return "null"
+		return "none"
 	}
 	return TypeName(v)
 }

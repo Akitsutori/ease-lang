@@ -10,10 +10,12 @@ counter = counter + 1
 
 name = "Ease"
 msg = "Hallo {name}: {x} + {y} = {x + y}, \{literal\}"
+raw_text = 'Rohtext: {keine_interp}, C:\temp\data, {"id": 1}'
 
 test "Variablen & String-Interpolation"
     x is 15
     pi is 3.14
     counter is 1
     msg is "Hallo Ease: 15 + 2.5 = 17.5, \{literal\}"
+    raw_text is "Rohtext: \{keine_interp\}, C:\\temp\\data, \{\"id\": 1\}"
 end

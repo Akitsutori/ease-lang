@@ -76,6 +76,10 @@ to bad_lt a b
     a < b
 end
 
+to bad_interp val
+    "Wert: {val}"
+end
+
 # 6. Schleifen-Hilfsfunktionen für Negativtests
 to bad_repeat n
     repeat n
@@ -112,7 +116,8 @@ test "Happy Paths gemäß README"
     "42" as number is 42
     42 as text is "42"
     "vip" as ticket is "vip"
-    "\{\"id\": 7, \"role\": \"admin\"\}" as api_user is api_user
+    (do decode_json '{"id": 7, "name": "Gast", "role": "admin"}') as api_user is api_user
+    do decode_json '{"id": 7, "msg": "hi\n{raw}"}' is not text
 
     scores = list 10, 25, 40
     scores.0 is 10
@@ -168,17 +173,21 @@ test "Guards, Verzweigungen, Logik & Vergleiche: 10 Negativtests"
     do bad_lt cond_yes cond_no raises "requires numbers"
 end
 
-test "Striktes as Casting (Ausgang B): 10 Negativtests"
+test "Striktes as Casting & decode_json (Ausgang B): 10 Negativtests"
     "abc" as number raises "Cannot convert text"
     "" as number raises "Cannot convert text"
     (list 1) as number raises "Cannot convert"
     "pending" as ticket raises "not valid for union"
     123 as ticket raises "not valid for union"
-    "" as api_user raises "empty text"
-    "\{broken" as api_user raises "invalid JSON"
-    "null" as api_user raises "JSON null"
-    "\{\"id\": \"abc\"\}" as api_user raises "api_user.id"
-    "\{\"role\": \"root\"\}" as api_user raises "api_user.role"
+    '{"id": 7, "name": "Gast", "role": "admin"}' as api_user raises "Cannot validate text"
+    do decode_json "" raises "empty text"
+    do decode_json '{broken' raises "Invalid JSON"
+    (do decode_json 'null') as api_user raises "Cannot validate none"
+    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+    (do decode_json '{"id": "abc", "name": "Gast", "role": "admin"}') as api_user raises "api_user.id"
+    (do decode_json '{"id": 7, "name": "Gast", "role": "root"}') as api_user raises "api_user.role"
+    hero as text raises "Cannot convert player to text"
+    do bad_interp hero raises "Cannot interpolate player into text"
 end
 
 test "Listen, Schleifen & Built-ins: 10 Negativtests"
