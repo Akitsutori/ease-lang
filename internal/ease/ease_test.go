@@ -969,3 +969,32 @@ end
 		t.Fatalf("expected 1 passed check, got %+v", report)
 	}
 }
+
+func TestCommaFreeFunctionCalls(t *testing.T) {
+	src := `
+to greet name suffix
+    "Hallo {name}{suffix}"
+end
+
+to add_three a b c
+    a + b + c
+end
+
+sum = 0
+for x in range 1 3 do sum = sum + x end
+
+test "comma-free parameters and calls"
+    do greet "Welt" "!" is "Hallo Welt!"
+    do greet "Welt" "" is "Hallo Welt"
+    do add_three 2 3 4 is 9
+    sum is 6
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 4 || report.Failed != 0 {
+		t.Fatalf("expected 4 passed checks, got %+v", report)
+	}
+}

@@ -8,11 +8,12 @@ import (
 
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
-	tokens        []Token
-	source        string
-	pos           int
-	disallowTopIs bool
-	disallowAs    bool
+	tokens          []Token
+	source          string
+	pos             int
+	disallowTopIs   bool
+	disallowAs      bool
+	disallowDoAsArg bool
 }
 
 // ParseProgram lexes and parses `source` into a complete Program AST.
@@ -750,13 +751,19 @@ func (p *Parser) parseForStmt() (Stmt, error) {
 	if p.check(TOK_IDENT) && p.peekNext().Type == TOK_IN {
 		itemName = p.advance().Lexeme
 		p.advance() // consume `in`
+		prevDisallowDo := p.disallowDoAsArg
+		p.disallowDoAsArg = true
 		iterExpr, err = p.parseExpr()
+		p.disallowDoAsArg = prevDisallowDo
 		if err != nil {
 			return nil, err
 		}
 		p.match(TOK_DO) // optional `do` for single-line `for x in list do ... end`
 	} else {
+		prevDisallowDo := p.disallowDoAsArg
+		p.disallowDoAsArg = true
 		iterExpr, err = p.parseExpr()
+		p.disallowDoAsArg = prevDisallowDo
 		if err != nil {
 			return nil, err
 		}
@@ -1199,9 +1206,10 @@ func (p *Parser) parseBareCallArgs(initial []Expr) ([]Expr, error) {
 			return nil, err
 		}
 		args = append(args, arg)
-		if !p.match(TOK_COMMA) {
-			break
+		if p.match(TOK_COMMA) || p.startsBareCallArg() {
+			continue
 		}
+		break
 	}
 	return args, nil
 }
@@ -1211,6 +1219,9 @@ func (p *Parser) startsBareCallArg() bool {
 	case TOK_NUMBER, TOK_STRING, TOK_INTERP_STRING, TOK_IDENT, TOK_LIST_KW, TOK_TRUE, TOK_FALSE, TOK_ASK:
 		return true
 	case TOK_DO:
+		if p.disallowDoAsArg {
+			return false
+		}
 		return p.peekNext().Type != TOK_NEWLINE && p.peekNext().Type != TOK_EOF
 	default:
 		return false
@@ -1286,7 +1297,7 @@ func (p *Parser) parsePrimary() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
-				if p.match(TOK_COMMA) {
+				if p.match(TOK_COMMA) || p.startsBareCallArg() {
 					args, err := p.parseBareCallArgs([]Expr{firstArg})
 					if err != nil {
 						return nil, err
