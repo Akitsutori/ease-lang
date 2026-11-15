@@ -1,0 +1,14 @@
+# Feature 06: Explizite Typkonvertierung (as number / as text)
+
+raw_ok = "42" as number
+raw_bad = "abc" as number
+num_as_text = 123 as text
+
+test "Explizite Typkonvertierung mit as"
+    raw_ok is number
+    raw_ok + 8 is 50
+    raw_bad is not number
+    raw_bad is "abc"
+    num_as_text is text
+    num_as_text is "123"
+end

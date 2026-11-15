@@ -1,0 +1,44 @@
+# Ease Language Showcase: Baupläne, Union Types, check-Guards & Listen
+
+def role = "admin" | "member" | "guest"
+
+def account
+    name   = "Gast"
+    role   = "guest"
+    active = true
+end
+
+to greet user
+    check
+        user is not account       -> "Ungültiges Konto"
+        user.role is not role     -> "Unbekannte Rolle"
+        not user.active           -> "Konto deaktiviert"
+        user.role is "admin"      -> "Admin-Zugang für {user.name}"
+    end
+    "Willkommen, {user.name}!"
+end
+
+to sum_squares nums
+    total = 0
+    for n in nums
+        total = total + (n * n)
+    end
+    total
+end
+
+test "Showcase Kernfeatures"
+    ada = account with name = "Ada", role = "admin"
+    bob = account with name = "Bob", role = "member", active = false
+
+    do greet ada is "Admin-Zugang für Ada"
+    do greet bob is "Konto deaktiviert"
+    do greet account is "Willkommen, Gast!"
+
+    xs = do range 1, 5
+    do len xs is 5
+    do sum_squares xs is 55
+end
+
+ada = account with name = "Ada", role = "admin"
+say do greet ada
+say "Summe der Quadrate 1..5: {do sum_squares do range 1, 5}"

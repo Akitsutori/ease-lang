@@ -1,0 +1,18 @@
+# Fibonacci in Ease: Rekursion, check-Guards & integrierte Unit-Tests
+
+to fib n
+    check
+        n <= 0 -> 0
+        n == 1 -> 1
+    end
+    left = do fib n - 1
+    right = do fib n - 2
+    left + right
+test
+    do fib 0 is 0
+    do fib 1 is 1
+    do fib 5 is 5
+    do fib 10 is 55
+end
+
+say "fib(10) = {do fib 10}"

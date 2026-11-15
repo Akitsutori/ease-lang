@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (ubuntu-latest)
+            os: ubuntu-latest
+            bin: ease
+            hello_bin: hello
+            race_flag: -race
+          - name: Windows (windows-latest)
+            os: windows-latest
+            bin: ease.exe
+            hello_bin: hello.exe
+            race_flag: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Ebitengine system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libc6-dev \
+            libgl1-mesa-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxxf86vm-dev \
+            libasound2-dev \
+            pkg-config
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      - name: Run Go unit tests
+        run: go test ${{ matrix.race_flag }} -v ./...
+
+      - name: Build ease CLI
+        run: go build -o ${{ matrix.bin }} ./cmd/ease
+
+      - name: Run Ease language feature tests
+        shell: bash
+        run: |
+          for f in tests/*.ease; do
+            echo "==> ease test $f"
+            ./${{ matrix.bin }} test "$f"
+          done
+
+      - name: Verify offline Ease examples
+        shell: bash
+        run: |
+          for f in \
+            examples/00_hello_world.ease \
+            examples/01_entry_check.ease \
+            examples/02_guard.ease \
+            examples/03_player.ease \
+            examples/04_particles.ease \
+            examples/05_network.ease \
+            examples/06_window.ease \
+            examples/fibonacci.ease \
+            examples/showcase.ease; do
+            echo "==> ease test $f"
+            ./${{ matrix.bin }} test "$f"
+          done
+
+          echo "==> ease ast examples/051_network.ease"
+          ./${{ matrix.bin }} ast examples/051_network.ease
+
+          echo "==> ease run --check (headless)"
+          ./${{ matrix.bin }} run examples/00_hello_world.ease --check
+          ./${{ matrix.bin }} run examples/06_window.ease --check
+          ./${{ matrix.bin }} run examples/fibonacci.ease --check
+          ./${{ matrix.bin }} run examples/showcase.ease --check
+
+      - name: Verify standalone executable bundling (ease build)
+        shell: bash
+        run: |
+          ./${{ matrix.bin }} build examples/00_hello_world.ease -o ${{ matrix.hello_bin }}
+          ./${{ matrix.hello_bin }}
+
+      - name: Upload built ease binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ease-${{ runner.os }}
+          path: ${{ matrix.bin }}
+          if-no-files-found: error

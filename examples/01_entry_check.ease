@@ -1,0 +1,53 @@
+# ==============================================================================
+# Eintrittskontrolle: to...end, check-Guards, Typprüfung (is / is not),
+# test-Blöcke, ask und String-Interpolation
+# ==============================================================================
+
+to allow_entry name, age
+    check
+        name is not text  -> "Name muss Text sein"
+        name is ""        -> "Name darf nicht leer sein"
+        age is not number -> "Alter muss eine Zahl sein"
+        age < 18          -> "Du bist {age}. Das ist jung"
+        age > 120         -> "Ungültiges Alter"
+    end
+
+    "Willkommen {name}, du darfst rein!"
+end
+
+to is_valid_vip code, age
+    check
+        code is text
+        code is "VIP2026"
+        age is number
+        age >= 18
+    else
+        false
+    end
+
+    true
+end
+
+test "Einlassregeln & VIP-Prüfung"
+    do allow_entry 123, 25      is "Name muss Text sein"
+    do allow_entry "", 25       is "Name darf nicht leer sein"
+    do allow_entry "Max", "abc" is "Alter muss eine Zahl sein"
+    do allow_entry "Max", 16    is "Du bist 16. Das ist jung"
+    do allow_entry "Max", 150   is "Ungültiges Alter"
+    do allow_entry "Max", 25    is "Willkommen Max, du darfst rein!"
+
+    do is_valid_vip "VIP2026", 20  is true
+    do is_valid_vip "VIP2026", 16  is false
+    do is_valid_vip "FALSCH", 25   is false
+    do is_valid_vip "VIP2026", "x" is false
+end
+
+# Interaktiver Hauptablauf mit Tastatureingabe (ask)
+say "--- Einlasskontrolle ---"
+user_name = ask "Wie heißt du?"
+user_age  = ask "Wie alt bist du?" as number
+
+check user_age is not number -> say "Bitte beim nächsten Mal eine Zahl eingeben."
+
+result = do allow_entry user_name, user_age
+say result

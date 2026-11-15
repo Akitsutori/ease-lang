@@ -1,0 +1,95 @@
+# Finale Approval-Testdatei: 05_network.ease
+# Deckt import network, do ask (GET), do send (POST) sowie die strikte
+# Trennung zwischen Typ-Konformität (as) und Inhaltsvalidität (to + check) ab.
+
+import network
+
+def api_user
+    id   = 0
+    name = "Gast"
+    role = "member" | "admin"
+end
+
+def event
+    kind = "click" | "key" | "unknown"
+    x    = 0
+    y    = 0
+    key  = ""
+end
+
+# 1. Stufe: Typ-Konformität an der Grenze (Form via 'as')
+to parse_age raw
+    age = raw as number
+    check age is not number -> "Ungültiges Zahlenformat"
+    age
+end
+
+# 2. Stufe: Inhaltsvalidität in der Fachlogik (Bedeutung via 'to' + 'check')
+to validate_age age
+    check
+        age is not number -> "Ungültiges Zahlenformat"
+        age < 0           -> "Alter kann nicht negativ sein"
+        age > 130         -> "Alter ist unrealistisch"
+    end
+    age
+end
+
+to describe_event ev
+    check
+        ev.kind is "click" -> "click@{ev.x},{ev.y}"
+        ev.kind is "key"   -> "key:{ev.key}"
+    end
+    "unknown"
+end
+
+test "import network, ask/send Schnittstelle & Form vs. Inhalt"
+    api = network with
+        url     = "http://127.0.0.1:1"
+        timeout = 1
+        token   = "demo-token"
+    end
+
+    api is network
+    api.timeout is 1
+    api.token is "demo-token"
+
+    # Offline / nicht erreichbare Gegenstelle liefert ehrlich ""
+    raw_get  = do ask api, "/age"
+    raw_post = do send api, "/age", 42
+    raw_get is ""
+    raw_post is ""
+
+    # Typ-Konformität (Form) vs. Inhaltsvalidität (Fachlogik)
+    do parse_age "25" is 25
+    do parse_age "-5" is -5
+    do parse_age "abc" is "Ungültiges Zahlenformat"
+
+    do validate_age do parse_age "-5" is "Alter kann nicht negativ sein"
+    do validate_age do parse_age "200" is "Alter ist unrealistisch"
+    do validate_age do parse_age "25" is 25
+
+    events = list as event with
+        kind = "click", x = 120, y = 240
+        kind = "key", key = "Enter"
+        kind = "unknown"
+    end
+    do len events is 3
+    do describe_event events.0 is "click@120,240"
+    do describe_event events.1 is "key:Enter"
+
+    # Record <-> JSON Typ-Konformität via 'as'
+    u = "\{\"id\": 42, \"role\": \"admin\", \"ignored\": 1\}" as api_user
+    u is api_user
+    u.id is 42
+    u.name is "Gast"
+    u.role is "admin"
+
+    raw_json = u as text
+    roundtrip = raw_json as api_user
+    roundtrip is api_user
+
+    bad_user = "\{\"role\": \"hacker\"\}" as api_user
+    bad_user is not api_user
+    empty_user = "" as api_user
+    empty_user is not api_user
+end

@@ -1,0 +1,88 @@
+# examples/051_network.ease – Live-REST-Client gegen eine echte Internet-API
+import network
+
+# 1. Logikfreie Baupläne (Substantive)
+def api_user
+    id       = 0
+    name     = ""
+    username = ""
+    email    = ""
+end
+
+def new_post
+    title  = ""
+    body   = ""
+    userId = 0
+end
+
+def post_receipt
+    id     = 0
+    title  = ""
+    userId = 0
+end
+
+def fetch_report
+    status = "ok" | "transport_or_format_error" | "domain_rejected"
+    user   = api_user
+    note   = ""
+end
+
+# 2. Verben mit zweistufiger Grenzprüfung
+to load_verified_user client, user_id
+    # Stufe 1: Echter HTTP-GET + Typ-Konformität (`as api_user`)
+    raw = do ask client, "/users/{user_id}" as api_user
+    check raw is not api_user -> fetch_report with status = "transport_or_format_error", note = "HTTP 404, Timeout oder ungültiges JSON"
+
+    # Stufe 2: Fachliche Inhaltsvalidität (`check`)
+    check
+        raw.name is "" -> fetch_report with status = "domain_rejected", note = "Kein Name hinterlegt"
+        raw.id > 3     -> fetch_report with status = "domain_rejected", note = "Nur Stammnutzer (ID 1-3) zugelassen"
+    end
+
+    fetch_report with status = "ok", user = raw, note = "Verifiziert"
+end
+
+to publish_article client, draft
+    check draft.title is "" -> post_receipt with id = 0
+    check draft.userId <= 0 -> post_receipt with id = 0
+
+    # Echter HTTP-POST gegen /posts
+    receipt = do send client, "/posts", draft as post_receipt
+    check receipt is not post_receipt -> post_receipt with id = 0
+    receipt
+end
+
+# 3. Ausführbares Hauptprogramm (läuft direkt bei `ease.exe examples/051_network.ease`)
+say "=== Starte Live-REST-Test gegen jsonplaceholder.typicode.com ==="
+
+api = network with
+    url     = "https://jsonplaceholder.typicode.com"
+    timeout = 10
+end
+
+# Schritt 1: Echten Nutzer #1 abrufen (HTTP 200 -> Leanne Graham)
+say "[1/4] GET /users/1 ..."
+r1 = do load_verified_user api, 1
+say " -> Status: {r1.status} | Name: {r1.user.name} ({r1.user.email})"
+
+# Schritt 2: Nutzer #8 abrufen (HTTP 200, wird aber von Fachregel in Stufe 2 abgewiesen)
+say "[2/4] GET /users/8 (Fachregel-Test) ..."
+r2 = do load_verified_user api, 8
+say " -> Status: {r2.status} | Grund: {r2.note}"
+
+# Schritt 3: Nicht existierenden Nutzer #999 abrufen (echtes HTTP 404 -> Stufe 1 greift)
+say "[3/4] GET /users/999 (404-Fehler-Test) ..."
+r3 = do load_verified_user api, 999
+say " -> Status: {r3.status} | Grund: {r3.note}"
+
+# Schritt 4: Echten POST-Request an /posts absenden (HTTP 201 Created)
+say "[4/4] POST /posts ..."
+article = new_post with
+    title  = "Ease Live-Test"
+    body   = "Gesendet aus ease.exe ohne Klammern"
+    userId = r1.user.id
+end
+
+created = do publish_article api, article
+say " -> Gespeichert mit Server-ID: {created.id} | Titel: {created.title}"
+say "=== Alle Live-Requests abgeschlossen ==="

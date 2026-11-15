@@ -1,0 +1,38 @@
+# Feature 05: Check-Guards (Pfeil-Checkliste ->, Sammel-else & Einzeiler)
+
+to validate_score name, score
+    check
+        name is not text -> "Name muss Text sein"
+        name is ""       -> "Name fehlt"
+        score is not number -> "Punktzahl muss Zahl sein"
+        score < 0           -> "Punktzahl darf nicht negativ sein"
+    end
+    "OK: {name} hat {score} Punkte"
+end
+
+to can_publish title, words
+    check
+        title is text
+        title is-not ""
+        words is number
+        words >= 100
+    else
+        "rejected"
+    end
+    "published"
+end
+
+status_msg = "init"
+check status_msg is text -> status_msg = "checked"
+
+test "Check-Guards"
+    do validate_score 42, 10 is "Name muss Text sein"
+    do validate_score "", 10 is "Name fehlt"
+    do validate_score "Ada", "ten" is "Punktzahl muss Zahl sein"
+    do validate_score "Ada", -5 is "Punktzahl darf nicht negativ sein"
+    do validate_score "Ada", 99 is "OK: Ada hat 99 Punkte"
+    do can_publish "Guide", 150 is "published"
+    do can_publish "", 150 is "rejected"
+    do can_publish "Guide", 20 is "rejected"
+    status_msg is "checked"
+end

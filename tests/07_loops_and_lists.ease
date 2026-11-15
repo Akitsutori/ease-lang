@@ -1,0 +1,64 @@
+# Feature 07: Homogene Listen (list), Punkt-Indexierung, Schleifen & if/else
+
+def particle
+    x = 0
+    vx = 10
+    life = 100
+    state = "active" | "dead"
+end
+
+to sum_squares xs
+    total = 0
+    for n in xs
+        total = total + (n * n)
+    end
+    total
+end
+
+to count_down start
+    out = list as number
+    cur = start
+    repeat start
+        out = do push out, cur
+        cur = cur - 1
+    end
+    out
+end
+
+to classify n
+    if n > 0
+        "positiv"
+    else
+        "nicht-positiv"
+    end
+end
+
+test "Listen, Schleifen & Verzweigungen"
+    scores = list 10, 25, 40
+    scores.0 is 10
+    do len scores is 3
+
+    empty_nums = list as number
+    empty_nums is list
+    do len empty_nums is 0
+
+    cloud = list as particle with
+        x = 0, vx = 5, life = 20
+        x = 10, vx = 2, life = 5
+    end
+    do len cloud is 2
+    cloud.0.vx is 5
+    cloud.1.state is "active"
+
+    sum_x = 0
+    for cloud do
+        sum_x = sum_x + x
+    end
+    sum_x is 10
+
+    nums = do range 1, 4
+    do sum_squares nums is 30
+    do count_down 3 is list 3, 2, 1
+    do classify 5 is "positiv"
+    do classify 0 is "nicht-positiv"
+end

@@ -1,0 +1,17 @@
+def ticket = "vip" | "standard" | "none"
+
+to check_access age, pass
+    check
+        age < 18           -> "Abgelehnt: zu jung"
+        pass is "none"     -> "Abgelehnt: kein Ticket"
+        pass is "vip"      -> "Willkommen in der Lounge"
+    end
+    "Willkommen im Hauptbereich"
+end
+
+test "Alters- und Ticketkontrolle"
+    do check_access 16, "vip"      is "Abgelehnt: zu jung"
+    do check_access 22, "none"     is "Abgelehnt: kein Ticket"
+    do check_access 22, "standard" is "Willkommen im Hauptbereich"
+    do check_access 30, "vip"      is "Willkommen in der Lounge"
+end

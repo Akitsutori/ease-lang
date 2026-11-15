@@ -1,0 +1,29 @@
+# Feature 03: Datenstrukturen (def ... end), with-Kopien & Introspection
+
+def player
+    x = 360
+    speed = 400
+    role = "hero"
+end
+
+greg = player with x = 10
+moved = greg with x = 20
+
+boss = player with
+    x = 500
+    speed = 150
+    role = "boss"
+end
+
+test "Records, with-Kopien & fields"
+    greg.x is 10
+    greg.speed is 400
+    moved.x is 20
+    greg.x is 10
+    boss.x is 500
+    boss.role is "boss"
+    greg is player
+    greg is not moved
+    do type greg is "player"
+    do fields greg is list "x", "speed", "role"
+end

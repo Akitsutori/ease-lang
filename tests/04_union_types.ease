@@ -1,0 +1,27 @@
+# Feature 04: Union Types (explizite Werteräume statt Boolean)
+
+def ticket = "vip" | "standard" | "none"
+def door_state = "open" | "locked"
+
+to evaluate_entry pass, door
+    check
+        pass is not ticket -> "Ungültiger Ticket-Typ"
+        door is not door_state -> "Unbekannter Türzustand"
+        door is "locked" -> "Tür ist verschlossen"
+        pass is "none" -> "Kein Einlass ohne Ticket"
+        pass is "vip" -> "VIP-Lounge geöffnet"
+    end
+    "Standard-Einlass gewährt"
+end
+
+test "Union Types & Werteraum-Prüfung"
+    "vip" is ticket
+    "gold" is not ticket
+    "open" is door_state
+    do evaluate_entry "vip", "open" is "VIP-Lounge geöffnet"
+    do evaluate_entry "standard", "open" is "Standard-Einlass gewährt"
+    do evaluate_entry "none", "open" is "Kein Einlass ohne Ticket"
+    do evaluate_entry "vip", "locked" is "Tür ist verschlossen"
+    do evaluate_entry "gold", "open" is "Ungültiger Ticket-Typ"
+    do evaluate_entry "vip", "broken" is "Unbekannter Türzustand"
+end

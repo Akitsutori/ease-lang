@@ -1,0 +1,17 @@
+# Feature 02: Funktionen (to ... end), implizite Rückgabe & klammerfreie Aufrufe
+
+to add a, b
+    a + b
+test
+    do add 2, 3 is 5
+    do add 10, -4 is 6
+end
+
+to safe_div a, b
+    check b == 0 -> do fail "Division durch Null"
+    a / b
+test
+    do safe_div 10, 2 is 5
+    do safe_div 9, 3 is 3
+    do safe_div 1, 0 raises "Division durch Null"
+end

@@ -1,0 +1,63 @@
+import screen
+
+to move_x x, key
+    check
+        key is "right" -> x + 6
+        key is "left"  -> x - 6
+    end
+    x
+end
+
+to clamp_x x, min_x, max_x
+    check
+        x < min_x -> min_x
+        x > max_x -> max_x
+    end
+    x
+end
+
+to run_window
+    win = screen with
+        width  = 800
+        height = 600
+        title  = "Go with ease"
+    end
+
+    pos_x = 400
+    state = frame_state
+
+    for range 1, 3600 do
+        check state.status is "closed" -> "Fenster geschlossen"
+
+        moved = do move_x pos_x, state.key
+        pos_x = do clamp_x moved, 30, 770
+
+        current = scene with
+            background = "slate"
+            circles = list as circle with
+                x = pos_x, y = 300, size = 35, color = "amber"
+            end
+            boxes = list as box with
+                x = 120, y = 500, width = 560, height = 24, color = "emerald"
+            end
+        end
+
+        state = do send win, current as frame_state
+        check state is not frame_state -> "Fensterfehler"
+    end
+
+    "Fertig"
+end
+
+test
+    do move_x 100, "right" is 106
+    do move_x 100, "left"  is 94
+    do move_x 100, ""      is 100
+
+    do clamp_x 10, 30, 770  is 30
+    do clamp_x 900, 30, 770 is 770
+    do clamp_x 400, 30, 770 is 400
+end
+
+result = do run_window
+say "Status: {result}"

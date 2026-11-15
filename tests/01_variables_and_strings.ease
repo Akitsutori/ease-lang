@@ -1,0 +1,19 @@
+# Feature 01: Variablen, def-Konstanten & String-Interpolation
+
+x = 10
+y = 2.5
+x = x + 5
+
+def pi = 3.14
+counter = 0
+counter = counter + 1
+
+name = "Ease"
+msg = "Hallo {name}: {x} + {y} = {x + y}, \{literal\}"
+
+test "Variablen & String-Interpolation"
+    x is 15
+    pi is 3.14
+    counter is 1
+    msg is "Hallo Ease: 15 + 2.5 = 17.5, \{literal\}"
+end
