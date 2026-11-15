@@ -350,7 +350,7 @@ LETTER        ::= UNICODE_LETTER | "_"
 DIGIT         ::= [0-9]
 IDENT         ::= LETTER { LETTER | DIGIT }         (* excluding reserved keywords *)
 
-NUMBER        ::= DIGIT+ [ "." DIGIT+ ]
+NUMBER        ::= [ "-" ] DIGIT+ [ "." DIGIT+ ]    (* "-" directly before a digit without whitespace is an atomic negative literal; use "- " for subtraction *)
 STRING        ::= '"' { CHAR - ('"' | "\n" | "{" | "\\") | ESCAPE } '"'
 INTERP_STRING ::= '"' { CHAR - ('"' | "\n" | "\\") | ESCAPE | "{" EXPR_TEXT "}" } '"'
 ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )

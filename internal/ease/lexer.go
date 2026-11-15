@@ -141,6 +141,12 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			if l.peek() == '>' {
 				l.advance()
 				tokens = append(tokens, Token{Type: TOK_ARROW, Lexeme: "->", Line: line, Col: col})
+			} else if unicode.IsDigit(l.peek()) {
+				numTok, err := l.scanNumberWithPrefix(line, col, "-")
+				if err != nil {
+					return nil, err
+				}
+				tokens = append(tokens, numTok)
 			} else {
 				tokens = append(tokens, Token{Type: TOK_MINUS, Lexeme: "-", Line: line, Col: col})
 			}
@@ -315,8 +321,12 @@ func (l *Lexer) scanInterpExpr(openLine, openCol int) (string, error) {
 }
 
 func (l *Lexer) scanNumber() (Token, error) {
-	line, col := l.line, l.col
+	return l.scanNumberWithPrefix(l.line, l.col, "")
+}
+
+func (l *Lexer) scanNumberWithPrefix(line, col int, prefix string) (Token, error) {
 	var b strings.Builder
+	b.WriteString(prefix)
 	hasDot := false
 
 	for !l.eof() {

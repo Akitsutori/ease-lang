@@ -1154,3 +1154,40 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestMinusRuleAtomicLiteralVsSubtraction(t *testing.T) {
+	src := `
+to classify n
+    if n > 0
+        "positive"
+    else
+        "non-positive"
+    end
+end
+
+to get_count
+    10
+end
+
+to negate x
+    -x
+end
+
+a = 10
+
+test "atomic negative literal vs binary subtraction"
+    do classify -2 is "non-positive"
+    do classify -0.5 is "non-positive"
+    do get_count - 2 is 8
+    a - 2 is 8
+    do negate 5 is -5
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 5 || report.Failed != 0 {
+		t.Fatalf("expected 5 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+}
