@@ -34,8 +34,8 @@ def frame_state
     mouse_y = 0
 end
 
-# Sendet eine fertige Szene an das Fenster, zeichnet 1 Frame (60 FPS)
-# und gibt den aktuellen Fenster- und Eingabezustand als Text/JSON zurück.
+# Presents a scene to the window, renders 1 frame (60 FPS),
+# and returns the current frame_state serialized as JSON text.
 to send target current_scene
     do screen_present target current_scene
 end

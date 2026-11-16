@@ -1,68 +1,42 @@
-# Ease in VS Code (Syntax-Highlighting & Fehlererkennung)
+# Ease in VS Code
 
-Mit der Extension unter [editors/vscode/](editors/vscode/) und dem eingebauten Language Server (`ease lsp`) bekommst du in VS Code:
+The extension under [editors/vscode/](editors/vscode/) integrates VS Code with Ease's built-in Language Server (`ease lsp`):
 
-- **Syntax-Highlighting** für `.ease`-Dateien (Keywords, Typen, `#`-Kommentare, Zahlen, Operatoren sowie `{expr}`-Interpolation in Strings)
-- **Live-Fehlererkennung** beim Tippen (rote Unterstreichungen & Problems-Panel inkl. `Hint`-Texten direkt aus dem Ease-Parser)
-- **Direkt ausführen & testen**: `Ctrl+F5` (*Run Without Debugging*), Play-Button ▶ oben rechts oder `Ease: Run Tests` im Editor
-- **Outline / Breadcrumbs** für `def`-Records, `union`-Typen, `to`-Funktionen und `check`-Blöcke
-- **Autocomplete** für Ease-Keywords sowie im Dokument definierte Funktionen und Typen
-- **Editor-Komfort**: `#`-Kommentar-Toggle (`Ctrl+/`), Klammer-/Anführungszeichen-Auto-Closing und Einrückung für `to` / `def` / `if` / `repeat` / `for` → `end`
+- **Syntax highlighting** for `.ease` files (keywords, types, `#` comments, numbers, operators, and `{expr}` string interpolation)
+- **Live diagnostics** while typing (errors, source spans, and hints directly from the Ease parser/typechecker)
+- **Run & Test** directly in the editor (`Ctrl+F5`, ▶ Run button, or `Ease: Run Tests`)
+- **Outline & Breadcrumbs** for `def` records, unions, `to` functions, and `check`/`test` blocks
+- **Autocomplete** for Ease keywords plus functions and types in the current file
+- **Editor helpers**: `#` comment toggling (`Ctrl+/`), auto-closing quotes/parens, and `to`/`def`/`if`/`repeat`/`for` → `end` indentation
 
-## 1. Voraussetzungen
+## Setup
 
-Du brauchst eine gebaute `ease`-Binary (`ease.exe` unter Windows bzw. `ease` unter Linux):
+Both the `ease` CLI binary and the prebuilt VS Code extension (`ease-lang-<version>.vsix`) are attached to each **GitHub Release** (packaged by CI via `go run ./editors/vscode`).
 
-- Entweder aus den **GitHub Releases** herunterladen und ins `PATH` (oder direkt ins Projekt-Wurzelverzeichnis) legen,
-- oder selbst bauen:
-  ```bash
-  go build -o ease ./cmd/ease
-  ```
-  *(Unter Windows: `go build -o ease.exe ./cmd/ease`)*
+1. **Install the extension (`ease-lang-<version>.vsix`)**:
+   - **VS Code UI**: `Ctrl+Shift+X` → **`...`** → **`Install from VSIX...`**
+   - **CLI**:
+     ```bash
+     code --install-extension ease-lang-<version>.vsix
+     ```
+2. **Provide the `ease` binary**:
+   Download `ease` (`ease.exe` on Windows) from GitHub Releases and place it in your `PATH` (or workspace root), or build it locally:
+   ```bash
+   go build -o ease ./cmd/ease
+   ```
+   *(Windows: `go build -o ease.exe ./cmd/ease`)*
 
-Die Extension sucht standardmäßig nach `ease` im `PATH` oder nach `ease.exe` / `ease` im geöffneten Workspace. Alternativ kannst du den Pfad in den VS-Code-Einstellungen festlegen:
+   You can also point VS Code directly to the binary in `settings.json`:
+   ```json
+   {
+     "ease.executablePath": "path/to/ease"
+   }
+   ```
 
-```json
-{
-  "ease.executablePath": "D:/pfad/zu/ease.exe"
-}
-```
+*(For extension development: open [editors/vscode/](editors/vscode/) in VS Code and press **F5** to launch an Extension Development Host—no `npm install` required.)*
 
-## 2. In VS Code einrichten
+## Architecture
 
-Es sind **keine** `npm install`- oder Build-Schritte nötig – `editors/vscode/extension.js` nutzt ausschließlich Node.js-Bordmittel.
-
-### Option A: Direkt testen (Extension Development Host)
-1. Ordner `editors/vscode` in VS Code öffnen (`File -> Open Folder...`).
-2. **F5** drücken → es öffnet sich ein neues VS-Code-Fenster mit aktiver Ease-Extension.
-3. Eine `.ease`-Datei (z. B. `examples/00_hello_world.ease`) öffnen.
-
-### Option B: Über `.vsix` installieren (auch aus GitHub Releases)
-Bei jedem Release (und CI-Lauf) wird `ease-lang-<version>.vsix` automatisch plattformunabhängig über `go run ./editors/vscode` ([build_vsix.go](editors/vscode/build_vsix.go)) gebaut und unter **GitHub Releases** bereitgestellt.
-
-In VS Code installieren:
-- Über die Oberfläche: `Ctrl+Shift+X` → **`...`** → **`Install from VSIX...`** → `.vsix`-Datei auswählen.
-- Oder per CLI:
-  ```powershell
-  code --install-extension ease-lang-0.1.0.vsix
-  ```
-
-### Option C: Dauerhaft lokal verlinken
-Kopiere oder verlinke `editors/vscode` in deinen VS-Code-Extensions-Ordner:
-
-- **Windows (PowerShell):**
-  ```powershell
-  New-Item -ItemType Junction -Path "$env:USERPROFILE\.vscode\extensions\ease-lang" -Target "D:\DOWNLOADS\VSCode\ease-lang\editors\vscode"
-  ```
-- **Linux / macOS:**
-  ```bash
-  ln -s /pfad/zu/ease-lang/editors/vscode ~/.vscode/extensions/ease-lang
-  ```
-
-Danach VS Code neu laden (`Ctrl+Shift+P` → `Developer: Reload Window`).
-
-## 3. Technische Architektur
-
-- **VS-Code-Client** ([editors/vscode/extension.js](editors/vscode/extension.js)): Startet `ease lsp` als Kindprozess und spricht JSON-RPC 2.0 über `stdin`/`stdout`.
-- **Language Server** ([internal/ease/lsp.go](internal/ease/lsp.go), CLI-Befehl `ease lsp` in [cmd/ease/main.go](cmd/ease/main.go)): Nutzt direkt `ParseProgram` aus `internal/ease/` und meldet `EaseError`-Positionen als `textDocument/publishDiagnostics`.
-- **Grammatik & Editor-Regeln**: [editors/vscode/syntaxes/ease.tmLanguage.json](editors/vscode/syntaxes/ease.tmLanguage.json) und [editors/vscode/language-configuration.json](editors/vscode/language-configuration.json).
+- **VS Code Client** ([editors/vscode/extension.js](editors/vscode/extension.js)): Spawns `ease lsp` and communicates over JSON-RPC 2.0 (`stdin`/`stdout`).
+- **Language Server** ([internal/ease/lsp.go](internal/ease/lsp.go), invoked via `ease lsp` in [cmd/ease/main.go](cmd/ease/main.go)): Runs `ParseProgram` from `internal/ease/` and publishes `EaseError` diagnostics.
+- **Grammar & Config**: [editors/vscode/syntaxes/ease.tmLanguage.json](editors/vscode/syntaxes/ease.tmLanguage.json) and [editors/vscode/language-configuration.json](editors/vscode/language-configuration.json).
