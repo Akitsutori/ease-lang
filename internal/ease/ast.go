@@ -137,6 +137,7 @@ type CheckRule struct {
 // CheckGuardStmt represents `check cond -> action` or `check ... [else ...] end`.
 type CheckGuardStmt struct {
 	posInfo
+	IsBlock  bool
 	Rules    []CheckRule
 	ElseBody []Stmt
 }

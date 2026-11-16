@@ -265,6 +265,24 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	}, nil
 }
 
+func (p *Parser) isUnionDelimiter(t TokenType) bool {
+	switch t {
+	case TOK_PIPE, TOK_NEWLINE, TOK_EOF, TOK_END, TOK_ELSE:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Parser) parseUnionOrFieldExpr() (Expr, bool, error) {
+	if (p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW)) && p.isUnionDelimiter(p.peekNext().Type) {
+		tok := p.advance()
+		return &IdentExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Name: tok.Lexeme}, true, nil
+	}
+	expr, err := p.parseExpr()
+	return expr, false, err
+}
+
 func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 	defTok := p.advance() // consume `def`
 	if !p.check(TOK_IDENT) {
@@ -280,14 +298,14 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 	}
 	nameTok := p.advance()
 	if p.match(TOK_ASSIGN) {
-		first, err := p.parseExpr()
+		first, isBaseKw, err := p.parseUnionOrFieldExpr()
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		if p.match(TOK_PIPE) {
 			variants := []Expr{first}
 			for {
-				v, err := p.parseTerm()
+				v, _, err := p.parseUnionOrFieldExpr()
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -304,6 +322,17 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 				Name:     nameTok.Lexeme,
 				Variants: variants,
 			}, nil, nil
+		}
+		if isBaseKw {
+			id := first.(*IdentExpr)
+			return nil, nil, nil, newError(
+				"SyntaxError",
+				id.Line,
+				id.Col,
+				p.source,
+				fmt.Sprintf("Constant 'def %s' cannot have bare type %q as value", nameTok.Lexeme, id.Name),
+				fmt.Sprintf("Use a concrete literal value or combine with '|' into a union (e.g. def %s = %s | ErrorRecord).", nameTok.Lexeme, id.Name),
+			)
 		}
 		if err := p.expectStmtEnd("constant definition"); err != nil {
 			return nil, nil, nil, err
@@ -354,7 +383,7 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 				fmt.Sprintf("Write: %s = <default value>", fieldTok.Lexeme),
 			)
 		}
-		valExpr, err := p.parseExpr()
+		valExpr, isFieldBaseKw, err := p.parseUnionOrFieldExpr()
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -362,7 +391,7 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 		if p.match(TOK_PIPE) {
 			allowed = append(allowed, valExpr)
 			for {
-				optExpr, err := p.parseExpr()
+				optExpr, _, err := p.parseUnionOrFieldExpr()
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -371,6 +400,16 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 					break
 				}
 			}
+		} else if isFieldBaseKw {
+			id := valExpr.(*IdentExpr)
+			return nil, nil, nil, newError(
+				"SyntaxError",
+				id.Line,
+				id.Col,
+				p.source,
+				fmt.Sprintf("Field '%s.%s' needs a default value or union, got bare type %q", nameTok.Lexeme, fieldTok.Lexeme, id.Name),
+				"Provide a concrete default value (e.g. name = \"\" or code = 0) or a union (e.g. val = text | ErrorRecord).",
+			)
 		}
 		if err := p.expectStmtEnd("def field"); err != nil {
 			return nil, nil, nil, err
@@ -888,24 +927,33 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 
 	var elseBody []Stmt
 	if p.match(TOK_ELSE) {
-		p.skipNewlines()
-		for !p.check(TOK_END) {
-			if p.check(TOK_EOF) {
-				return nil, newError(
-					"SyntaxError",
-					chkTok.Line,
-					chkTok.Col,
-					p.source,
-					"'check ... else' block is missing 'end'",
-					"Close every 'check ... else' block with 'end'.",
-				)
-			}
-			s, err := p.parseStmt()
+		if p.match(TOK_ARROW) {
+			action, err := p.parseStmt()
 			if err != nil {
 				return nil, err
 			}
-			elseBody = append(elseBody, s)
+			elseBody = append(elseBody, action)
 			p.skipNewlines()
+		} else {
+			p.skipNewlines()
+			for !p.check(TOK_END) {
+				if p.check(TOK_EOF) {
+					return nil, newError(
+						"SyntaxError",
+						chkTok.Line,
+						chkTok.Col,
+						p.source,
+						"'check ... else' block is missing 'end'",
+						"Close every 'check ... else' block with 'end'.",
+					)
+				}
+				s, err := p.parseStmt()
+				if err != nil {
+					return nil, err
+				}
+				elseBody = append(elseBody, s)
+				p.skipNewlines()
+			}
 		}
 	}
 
@@ -919,6 +967,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 
 	return &CheckGuardStmt{
 		posInfo:  posInfo{Line: chkTok.Line, Col: chkTok.Col},
+		IsBlock:  true,
 		Rules:    rules,
 		ElseBody: elseBody,
 	}, nil

@@ -4,17 +4,21 @@ Ease is a small, strict, bracket-free language implemented in Go.
 Every construct has **one canonical form** and **zero silent fallbacks**.
 
 ## 1. Core Invariants
-- **No `bool`, no `true`/`false` literals**: Keep conditions (`x > 0`, `a is b`, `and`, `or`, `not`) inside `if`, `check`, and `test`. Return or store outcomes via explicit `def` union types/records (`def decision` with `answer = "yes" | "no"`, `def state = "open" | "locked"`).
-- **Grammatical triad (`def` / `to` / `do`)**: `def` = noun blueprint (`def decision`), `to` = English infinitive action verb (`to decide_if_to_ship amount` — avoid nouns/questions like `to user_data` or `to can_ship`), `do` = imperative call (`do decide_if_to_ship 80`).
+- **No `bool`, no `true`/`false` literals**: Keep conditions (`x > 0`, `a is b`, `and`, `or`, `not`) inside `if`, `check`, and `test`. Return or store outcomes via explicit `def` union types/records (`def status = "OK" | "FAILED"`, `def decision` with `answer = "yes" | "no"`).
+- **Grammatical triad (`def` / `to` / `do`)**: `def` = noun blueprint (`def ErrorMessage`), `to` = English infinitive action verb (`to process_response res` — avoid nouns/questions like `to user_data` or `to can_ship`), `do` = imperative call (`do process_response res`).
 - **No commas in function signatures or calls**: Declare `to add a b ... end` and call `do add 2 3`. Commas are only for `list 10, 25, 40` and single-line `with` updates.
-- **No `==`, `!=`, `is-not`**: Use `is` and `is not` for both equality and type checks (`x is 5`, `x is number`, `x is not text`).
+- **No `==`, `!=`, `is-not`**: Use `is` and `is not` for both equality and type checks (`x is 5`, `x is number`, `res is ErrorMessage`, `x is not text`).
 - **Atomic negative literals**: `-2` (no space) is a negative number literal (`do f -2`). `a - 2` (space after `-`) is subtraction (`do count - 2`).
 - **Built-in runtime types**: `number`, `text`, `list`, `nothing` (plus `def` records and unions).
 - **Raw text vs interpolated text**: `'...'` reads 1:1 with zero `{...}` interpolation and zero backslash escapes (ideal for JSON literals). `"..."` supports `{expr}` interpolation strictly for atomic `text`/`number` values (interpolating a `def` record or `list` raises `TypeError`).
+- **Orthogonal Union Types (`def U = A | B | ...`)**:
+  - **4 building blocks**: literals (`"OK"`, `404`), base types (`text`, `number`), record blueprints (`ErrorMessage`), and other named unions (automatically flattened: `def outcome = status | ErrorMessage`). Unions can also be used as record field types (`res = outcome`) and typed lists (`list as outcome`).
+  - **3 compile-time guardrails**: (1) No redundant literals with `text`/`number` (`'OK' is already covered by 'text'`), (2) No duplicates (`"OK" | "OK"`, `User | User`, or across flattening), (3) Records in the same union (`Admin | Guest`) must differ in at least one mandatory field name, field type, or disjoint inline union constraint so `raw_map as <union>` stays unambiguous.
+  - **Type Narrowing & Exhaustiveness in `check` / `if`**: Inside `res is ErrorMessage -> ...` or `if res is ErrorMessage ... end` (and after an early exit `check res is not ErrorMessage -> ...`), `res` narrows to `ErrorMessage` and allows `res.code` / `res.message`; accessing record fields before narrowing raises a static `TypeError`. A `check ... end` dispatch on a closed union must cover every variant or specify an explicit fallback (`else -> ...` or a post-`end` expression); otherwise compile fails with `Non-exhaustive check on '<union>' (Missing case: ...)`.
 - **Explicit JSON + strict `as` contracts (no implicit JSON magic)**:
   - `do decode_json raw` parses JSON text -> `map`/`list`/primitives (fails immediately on empty or invalid JSON). `do encode_json val` serializes structured data -> JSON text.
   - `as text` works only on atomic values (`text`, `number`) — records/lists raise `TypeError`.
-  - `<map_or_record> as <def_record>` validates structured data (raw `text` directly -> `TypeError`). **All `def` fields are mandatory** (`Missing field '<type>.<field>'`); extra keys are tolerated.
+  - `<map_or_record> as <def_record_or_union>` validates structured data (raw `text` directly -> `TypeError`). **All `def` fields are mandatory** (`Missing field '<type>.<field>'`); extra keys are tolerated.
   - Defaults belong exclusively to `<def> with ...` (`hero = user with id = 1`).
 
 ## 2. Syntax Cheat Sheet
@@ -22,12 +26,34 @@ Every construct has **one canonical form** and **zero silent fallbacks**.
 import network
 
 def pi = 3.14
-def role = "guest" | "admin"
+def status = "OK" | "FAILED"
+
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+
+def outcome = status | ErrorMessage
 
 def user
     id   = 0
     name = "Guest"
     role = "guest" | "admin"
+end
+
+to process_response res
+    check
+        res is "OK"         -> "Processed successfully"
+        res is "FAILED"     -> "Unknown failure"
+        res is ErrorMessage -> "Error {res.code}: {res.message}"
+    end
+end
+
+to log_only_success res
+    check
+        res is "OK" -> "Succeeded"
+        else        -> "Something else happened"
+    end
 end
 
 to greet u
@@ -42,7 +68,7 @@ to add a b
     a + b
 end
 
-# Records, lists, loops, explicit JSON decode + strict contract validation
+# Records, unions, lists, loops, explicit JSON decode + strict contract validation
 ada = user with id = 1, name = "Aria", role = "admin"
 nums = list 10, 20, 30
 first = nums.0
@@ -56,9 +82,15 @@ raw_map = do decode_json '{"id": 7, "name": "Guest", "role": "admin"}'
 parsed = raw_map as user
 encoded = do encode_json parsed
 
+raw_err = (do decode_json '{"code": 503, "message": "Unavailable"}') as outcome
+
 test "example"
     do add 2 3 is 5
     do greet ada is "Admin: Aria"
+    do process_response "OK" is "Processed successfully"
+    do process_response raw_err is "Error 503: Unavailable"
+    do log_only_success "OK" is "Succeeded"
+    do log_only_success raw_err is "Something else happened"
     "abc" as number raises "Cannot convert text"
     '{"id": 7, "name": "Guest", "role": "admin"}' as user raises "Cannot validate text"
     (do decode_json '{"id": 7, "role": "admin"}') as user raises "Missing field 'user.name'"

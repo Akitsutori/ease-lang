@@ -6,6 +6,15 @@
 def ticket = "vip" | "standard" | "none"
 def door_state = "open" | "locked"
 
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+
+def status = "OK" | "FEHLER"
+def outcome = status | ErrorMessage
+def id_or_name = number | text
+
 def entry_gate
     door = "open" | "locked"
 end
@@ -21,10 +30,42 @@ to evaluate_entry pass door
     "Standard-Einlass gewährt"
 end
 
+to process_response res
+    check
+        res is "OK"         -> "Erfolgreich verarbeitet"
+        res is "FEHLER"     -> "Unbekannter Fehler"
+        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
+    end
+end
+
+to log_only_success res
+    check
+        res is "OK" -> "Hat geklappt"
+        else        -> "Irgendetwas anderes ist passiert"
+    end
+end
+
 test "Union Types & Werteraum-Prüfung"
     "vip" is ticket
     "gold" is not ticket
     "open" is door_state
+    "OK" is outcome
+    42 is id_or_name
+    "Ada" is id_or_name
+
+    err = ErrorMessage with code = 503, message = "Service unavailable"
+    err is outcome
+    do process_response "OK" is "Erfolgreich verarbeitet"
+    do process_response "FEHLER" is "Unbekannter Fehler"
+    do process_response err is "Fehler 503: Service unavailable"
+    do log_only_success "OK" is "Hat geklappt"
+    do log_only_success "FEHLER" is "Irgendetwas anderes ist passiert"
+    do log_only_success err is "Irgendetwas anderes ist passiert"
+
+    parsed = (do decode_json '{"code": 404, "message": "Not Found"}') as outcome
+    parsed is ErrorMessage
+    do process_response parsed is "Fehler 404: Not Found"
+
     do evaluate_entry "vip" "open" is "VIP-Lounge geöffnet"
     do evaluate_entry "standard" "open" is "Standard-Einlass gewährt"
     do evaluate_entry "none" "open" is "Kein Einlass ohne Ticket"

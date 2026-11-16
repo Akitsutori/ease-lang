@@ -38,6 +38,9 @@ type UnionValue struct {
 	Values   []Value
 }
 
+// BaseTypeValue represents a base type member (`text` or `number`) inside a union.
+type BaseTypeValue string
+
 // ListValue represents a typed homogeneous list in Ease.
 type ListValue struct {
 	ElemType string
@@ -108,18 +111,36 @@ func FormatValue(v Value) string {
 		}
 		return fmt.Sprintf("map(%s)", strings.Join(parts, ", "))
 	case *UnionValue:
-		parts := make([]string, len(val.Values))
-		for i, v := range val.Values {
-			if s, ok := v.(string); ok {
-				parts[i] = strconv.Quote(s)
-			} else {
-				parts[i] = FormatValue(v)
-			}
-		}
-		return fmt.Sprintf("%s(%s)", val.TypeName, strings.Join(parts, " | "))
+		return fmt.Sprintf("%s(%s)", val.TypeName, strings.Join(formatUnionOptions(val.Values), " | "))
+	case BaseTypeValue:
+		return string(val)
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+func formatUnionOption(opt Value) string {
+	switch o := opt.(type) {
+	case string:
+		return strconv.Quote(o)
+	case BaseTypeValue:
+		return string(o)
+	case *RecordValue:
+		if o.IsPrototype {
+			return o.TypeName
+		}
+		return FormatValue(o)
+	default:
+		return FormatValue(o)
+	}
+}
+
+func formatUnionOptions(opts []Value) []string {
+	out := make([]string, len(opts))
+	for i, opt := range opts {
+		out[i] = formatUnionOption(opt)
+	}
+	return out
 }
 
 // TypeName returns the human-readable Ease type name of `v`.
@@ -141,6 +162,8 @@ func TypeName(v Value) string {
 		return "map"
 	case *UnionValue:
 		return val.TypeName
+	case BaseTypeValue:
+		return string(val)
 	default:
 		return "unknown"
 	}
@@ -183,20 +206,10 @@ func ValuesEqual(a, b Value) bool {
 		if ub, ok2 := b.(*UnionValue); ok2 {
 			return ua.TypeName == ub.TypeName
 		}
-		for _, v := range ua.Values {
-			if ValuesEqual(v, b) {
-				return true
-			}
-		}
-		return false
+		return valueInUnion(b, ua)
 	}
 	if ub, ok := b.(*UnionValue); ok {
-		for _, v := range ub.Values {
-			if ValuesEqual(a, v) {
-				return true
-			}
-		}
-		return false
+		return valueInUnion(a, ub)
 	}
 	switch va := a.(type) {
 	case bool:
@@ -372,55 +385,148 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		funcs:    funcs,
 		global:   NewEnv(nil),
 	}
-	for _, def := range prog.Defs {
-		fields := make(map[string]Value, len(def.Fields))
-		allowed := make(map[string][]Value)
-		order := make([]string, 0, len(def.Fields))
-		for _, f := range def.Fields {
-			val, err := ev.EvalExpr(f.Default, ev.global)
-			if err != nil {
-				ev.initErr = err
-				return ev
-			}
-			fields[f.Name] = val
-			order = append(order, f.Name)
-			if len(f.Allowed) > 0 {
-				opts := make([]Value, 0, len(f.Allowed))
-				for _, optExpr := range f.Allowed {
-					optVal, err := ev.EvalExpr(optExpr, ev.global)
-					if err != nil {
-						ev.initErr = err
-						return ev
-					}
-					opts = append(opts, optVal)
-				}
-				allowed[f.Name] = opts
-			}
-		}
-		ev.global.Define(def.Name, &RecordValue{
-			TypeName:    def.Name,
-			Fields:      fields,
-			Allowed:     allowed,
-			Order:       order,
-			IsPrototype: true,
-		}, false)
+	type declItem struct {
+		imported bool
+		line     int
+		seq      int
+		def      *DefDecl
+		union    *UnionDecl
+	}
+	items := make([]declItem, 0, len(prog.Defs)+len(prog.Unions))
+	seq := 0
+	for _, d := range prog.Defs {
+		items = append(items, declItem{imported: d.Imported, line: d.Line, seq: seq, def: d})
+		seq++
 	}
 	for _, u := range prog.Unions {
-		vals := make([]Value, 0, len(u.Variants))
-		for _, ve := range u.Variants {
-			val, err := ev.EvalExpr(ve, ev.global)
-			if err != nil {
-				ev.initErr = err
-				return ev
+		items = append(items, declItem{imported: u.Imported, line: u.Line, seq: seq, union: u})
+		seq++
+	}
+	slices.SortFunc(items, func(a, b declItem) int {
+		if a.imported != b.imported {
+			if a.imported {
+				return -1
 			}
-			vals = append(vals, val)
+			return 1
 		}
-		ev.global.Define(u.Name, &UnionValue{
-			TypeName: u.Name,
-			Values:   vals,
-		}, false)
+		if a.imported {
+			return a.seq - b.seq
+		}
+		if a.line != b.line {
+			return a.line - b.line
+		}
+		return a.seq - b.seq
+	})
+
+	for _, item := range items {
+		if item.def != nil {
+			def := item.def
+			fields := make(map[string]Value, len(def.Fields))
+			allowed := make(map[string][]Value)
+			order := make([]string, 0, len(def.Fields))
+			for _, f := range def.Fields {
+				order = append(order, f.Name)
+				if len(f.Allowed) > 0 {
+					var opts []Value
+					for _, optExpr := range f.Allowed {
+						optVals, err := ev.evalUnionVariantExpr(optExpr, ev.global)
+						if err != nil {
+							ev.initErr = err
+							return ev
+						}
+						opts = append(opts, optVals...)
+					}
+					allowed[f.Name] = opts
+					fields[f.Name] = defaultValueForUnionOption(opts[0])
+					continue
+				}
+				val, err := ev.EvalExpr(f.Default, ev.global)
+				if err != nil {
+					ev.initErr = err
+					return ev
+				}
+				if uVal, isUnion := val.(*UnionValue); isUnion {
+					opts := make([]Value, len(uVal.Values))
+					copy(opts, uVal.Values)
+					allowed[f.Name] = opts
+					if len(opts) > 0 {
+						fields[f.Name] = defaultValueForUnionOption(opts[0])
+					} else {
+						fields[f.Name] = nil
+					}
+					continue
+				}
+				fields[f.Name] = val
+			}
+			ev.global.Define(def.Name, &RecordValue{
+				TypeName:    def.Name,
+				Fields:      fields,
+				Allowed:     allowed,
+				Order:       order,
+				IsPrototype: true,
+			}, false)
+		} else if item.union != nil {
+			u := item.union
+			vals := make([]Value, 0, len(u.Variants))
+			for _, ve := range u.Variants {
+				vItems, err := ev.evalUnionVariantExpr(ve, ev.global)
+				if err != nil {
+					ev.initErr = err
+					return ev
+				}
+				vals = append(vals, vItems...)
+			}
+			ev.global.Define(u.Name, &UnionValue{
+				TypeName: u.Name,
+				Values:   vals,
+			}, false)
+		}
 	}
 	return ev
+}
+
+func (ev *Evaluator) evalUnionVariantExpr(expr Expr, env *Env) ([]Value, error) {
+	if id, ok := expr.(*IdentExpr); ok {
+		if id.Name == "text" || id.Name == "number" {
+			return []Value{BaseTypeValue(id.Name)}, nil
+		}
+	}
+	val, err := ev.EvalExpr(expr, env)
+	if err != nil {
+		return nil, err
+	}
+	if subUnion, ok := val.(*UnionValue); ok {
+		out := make([]Value, len(subUnion.Values))
+		copy(out, subUnion.Values)
+		return out, nil
+	}
+	return []Value{val}, nil
+}
+
+func defaultValueForUnionOption(opt Value) Value {
+	switch o := opt.(type) {
+	case BaseTypeValue:
+		if o == "number" {
+			return float64(0)
+		}
+		return ""
+	case *RecordValue:
+		fieldsCopy := make(map[string]Value, len(o.Fields))
+		for k, v := range o.Fields {
+			fieldsCopy[k] = v
+		}
+		orderCopy := make([]string, len(o.Order))
+		copy(orderCopy, o.Order)
+		return &RecordValue{
+			TypeName:    o.TypeName,
+			Fields:      fieldsCopy,
+			Allowed:     o.Allowed,
+			Order:       orderCopy,
+			IsPrototype: false,
+		}
+	default:
+		return opt
+	}
 }
 
 // EvalProgramWithInput parses and executes `source` with custom stdin/stdout streams.
@@ -641,7 +747,11 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		return val, nil, err
 
 	case *CheckGuardStmt:
+		hasArrowRule := false
 		for _, rule := range s.Rules {
+			if rule.Action != nil {
+				hasArrowRule = true
+			}
 			condVal, err := ev.EvalExpr(rule.Cond, env)
 			if err != nil {
 				return nil, nil, err
@@ -677,6 +787,17 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				}
 				return nil, nil, newError("RuntimeError", rule.Line, rule.Col, ev.source, "Check condition failed", "Add an 'else' block or '-> action' to handle this case.")
 			}
+		}
+		if hasArrowRule && len(s.ElseBody) > 0 {
+			val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
+			if err != nil || sig != nil {
+				return val, sig, err
+			}
+			lastStmt := s.ElseBody[len(s.ElseBody)-1]
+			if _, isExpr := lastStmt.(*ExprStmt); isExpr && ev.callDepth > 0 {
+				return val, &reportSignal{val: val}, nil
+			}
+			return val, nil, nil
 		}
 		return nil, nil, nil
 
@@ -1128,15 +1249,10 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 		}
 		if opts, constrained := rec.Allowed[upd.Name]; constrained {
 			matched := false
-			optStrs := make([]string, len(opts))
-			for i, opt := range opts {
-				if s, ok := opt.(string); ok {
-					optStrs[i] = strconv.Quote(s)
-				} else {
-					optStrs[i] = FormatValue(opt)
-				}
-				if ValuesEqual(newVal, opt) {
+			for _, opt := range opts {
+				if valueMatchesUnionOption(newVal, opt) {
 					matched = true
+					break
 				}
 			}
 			if !matched {
@@ -1146,7 +1262,7 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 					upd.Col,
 					ev.source,
 					fmt.Sprintf("Invalid value %s for %s.%s", FormatValue(newVal), rec.TypeName, upd.Name),
-					fmt.Sprintf("Allowed values: %s", strings.Join(optStrs, " | ")),
+					fmt.Sprintf("Allowed values: %s", strings.Join(formatUnionOptions(opts), " | ")),
 				)
 			}
 		} else if origVal := cloned[upd.Name]; origVal != nil && TypeName(origVal) != TypeName(newVal) {
@@ -1642,6 +1758,8 @@ func validateJSONEncodable(v Value) error {
 	switch x := v.(type) {
 	case bool:
 		return fmt.Errorf("Cannot encode condition to JSON")
+	case BaseTypeValue:
+		return fmt.Errorf("Cannot encode base type %q to JSON", string(x))
 	case *UnionValue:
 		return fmt.Errorf("Cannot encode union definition %q to JSON", x.TypeName)
 	case *RecordValue:
@@ -1691,9 +1809,20 @@ func easeValueToJSON(v Value) any {
 	}
 }
 
+func valueMatchesUnionOption(v Value, opt Value) bool {
+	if bt, ok := opt.(BaseTypeValue); ok {
+		return matchesEaseType(v, string(bt))
+	}
+	if recOpt, ok := opt.(*RecordValue); ok && recOpt.IsPrototype {
+		recVal, isRec := v.(*RecordValue)
+		return isRec && recVal.TypeName == recOpt.TypeName
+	}
+	return ValuesEqual(v, opt)
+}
+
 func valueInUnion(v Value, union *UnionValue) bool {
 	for _, opt := range union.Values {
-		if ValuesEqual(v, opt) {
+		if valueMatchesUnionOption(v, opt) {
 			return true
 		}
 	}
@@ -1721,14 +1850,60 @@ func matchesListElemType(v Value, elemType string, env *Env) bool {
 		_, ok := v.(string)
 		return ok
 	default:
-		if rec, ok := v.(*RecordValue); ok {
-			return rec.TypeName == elemType
-		}
 		if union, ok := lookupUnion(env, elemType); ok {
 			return valueInUnion(v, union)
 		}
+		if rec, ok := v.(*RecordValue); ok {
+			return rec.TypeName == elemType
+		}
 		return false
 	}
+}
+
+func coerceToUnionOptions(val Value, opts []Value, env *Env, candidatePrefix string) (Value, error) {
+	if mv, isMap := val.(*MapValue); isMap && mv != nil {
+		var matches []*RecordValue
+		var recNames []string
+		var recErrs []string
+		for _, opt := range opts {
+			recOpt, ok := opt.(*RecordValue)
+			if !ok || !recOpt.IsPrototype {
+				continue
+			}
+			recNames = append(recNames, recOpt.TypeName)
+			prefix := recOpt.TypeName
+			if candidatePrefix != "" {
+				prefix = candidatePrefix + "(" + recOpt.TypeName + ")"
+			}
+			mapped, err := mapToRecord(mv.Fields, recOpt, env, prefix)
+			if err == nil {
+				matches = append(matches, mapped)
+			} else {
+				recErrs = append(recErrs, recOpt.TypeName+": "+err.Error())
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0], nil
+		}
+		if len(matches) > 1 {
+			matchedNames := make([]string, len(matches))
+			for i, m := range matches {
+				matchedNames[i] = m.TypeName
+			}
+			return nil, fmt.Errorf("ambiguous map matching multiple records (%s)", strings.Join(matchedNames, ", "))
+		}
+		if len(recErrs) > 0 {
+			return nil, fmt.Errorf("map did not match (%s)", strings.Join(recErrs, "; "))
+		}
+		return nil, fmt.Errorf("expected allowed value, got map")
+	}
+
+	for _, opt := range opts {
+		if valueMatchesUnionOption(val, opt) {
+			return val, nil
+		}
+	}
+	return nil, fmt.Errorf("no matching union variant")
 }
 
 func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col int, env *Env) (Value, error) {
@@ -1776,10 +1951,20 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 		if union, isUnion := protoVal.(*UnionValue); isUnion {
 			if len(lv.Elements) == 0 && lv.ElemType != "" && lv.ElemType != targetType {
 				compatible := false
-				for _, opt := range union.Values {
-					if structuredTypeName(opt) == lv.ElemType {
-						compatible = true
-						break
+				if subUnion, isSub := lookupUnion(env, lv.ElemType); isSub {
+					compatible = true
+					for _, sv := range subUnion.Values {
+						if !valueInUnion(sv, union) {
+							compatible = false
+							break
+						}
+					}
+				} else {
+					for _, opt := range union.Values {
+						if structuredTypeName(opt) == lv.ElemType {
+							compatible = true
+							break
+						}
 					}
 				}
 				if !compatible {
@@ -1793,23 +1978,21 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 					)
 				}
 			}
-			allowed := make([]string, len(union.Values))
-			for i, opt := range union.Values {
-				allowed[i] = FormatValue(opt)
-			}
+			allowed := formatUnionOptions(union.Values)
 			elems := make([]Value, len(lv.Elements))
 			for idx, item := range lv.Elements {
-				if !valueInUnion(item, union) {
+				coerced, cErr := coerceToUnionOptions(item, union.Values, env, fmt.Sprintf("%s.%d", targetType, idx))
+				if cErr != nil {
 					return nil, newError(
 						"TypeError",
 						line,
 						col,
 						ev.source,
-						fmt.Sprintf("Value %s at element %d is not valid for union %q", FormatValue(item), idx, targetType),
+						fmt.Sprintf("Value %s at element %d is not valid for union %q: %s", FormatValue(item), idx, targetType, cErr.Error()),
 						fmt.Sprintf("Allowed values for %s: %s.", targetType, strings.Join(allowed, ", ")),
 					)
 				}
-				elems[idx] = item
+				elems[idx] = coerced
 			}
 			return &ListValue{ElemType: targetType, Elements: elems}, nil
 		}
@@ -1960,23 +2143,23 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		}
 
 		if union, isUnion := protoVal.(*UnionValue); isUnion {
-			for _, opt := range union.Values {
-				if ValuesEqual(targetVal, opt) {
-					return targetVal, nil
+			coerced, cErr := coerceToUnionOptions(targetVal, union.Values, env, e.TypeName)
+			if cErr != nil {
+				allowed := formatUnionOptions(union.Values)
+				msg := fmt.Sprintf("Value %s is not valid for union %q", FormatValue(targetVal), e.TypeName)
+				if _, isMap := targetVal.(*MapValue); isMap {
+					msg = fmt.Sprintf("Value %s is not valid for union %q (%s)", FormatValue(targetVal), e.TypeName, cErr.Error())
 				}
+				return nil, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					msg,
+					fmt.Sprintf("Allowed values for %s: %s.", e.TypeName, strings.Join(allowed, ", ")),
+				)
 			}
-			allowed := make([]string, len(union.Values))
-			for i, opt := range union.Values {
-				allowed[i] = FormatValue(opt)
-			}
-			return nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Value %s is not valid for union %q", FormatValue(targetVal), e.TypeName),
-				fmt.Sprintf("Allowed values for %s: %s.", e.TypeName, strings.Join(allowed, ", ")),
-			)
+			return coerced, nil
 		}
 
 		proto, isRec := protoVal.(*RecordValue)
@@ -2054,22 +2237,18 @@ func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path str
 		if !exists {
 			return nil, fmt.Errorf("Missing field '%s'", fieldPath)
 		}
+		if opts, hasAllowed := proto.Allowed[fieldName]; hasAllowed && len(opts) > 0 {
+			converted, cErr := coerceToUnionOptions(rawVal, opts, env, fieldPath)
+			if cErr != nil {
+				allowed := formatUnionOptions(opts)
+				return nil, fmt.Errorf("Invalid value %s for field '%s': allowed values are %s (%s)", FormatValue(rawVal), fieldPath, strings.Join(allowed, ", "), cErr.Error())
+			}
+			fields[fieldName] = converted
+			continue
+		}
 		converted, err := coerceToTemplate(rawVal, defaultVal, env, fieldPath)
 		if err != nil {
 			return nil, err
-		}
-		if opts, hasAllowed := proto.Allowed[fieldName]; hasAllowed && len(opts) > 0 {
-			matched := false
-			allowed := make([]string, len(opts))
-			for i, opt := range opts {
-				allowed[i] = FormatValue(opt)
-				if ValuesEqual(converted, opt) {
-					matched = true
-				}
-			}
-			if !matched {
-				return nil, fmt.Errorf("Invalid value %s for field '%s': allowed values are %s", FormatValue(converted), fieldPath, strings.Join(allowed, ", "))
-			}
 		}
 		fields[fieldName] = converted
 	}
@@ -2143,10 +2322,11 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 						return nil, fmt.Errorf("Unknown list element blueprint %q for '%s'", tmpl.ElemType, elemPath)
 					}
 					if union, isUnion := protoVal.(*UnionValue); isUnion {
-						if !valueInUnion(item, union) {
-							return nil, fmt.Errorf("Invalid value %s for element '%s' of union %q", FormatValue(item), elemPath, tmpl.ElemType)
+						coerced, cErr := coerceToUnionOptions(item, union.Values, env, elemPath)
+						if cErr != nil {
+							return nil, fmt.Errorf("Invalid value %s for element '%s' of union %q: %s", FormatValue(item), elemPath, tmpl.ElemType, cErr.Error())
 						}
-						elems = append(elems, item)
+						elems = append(elems, coerced)
 						continue
 					}
 					if subRec, ok := item.(*RecordValue); ok && subRec.TypeName == tmpl.ElemType {

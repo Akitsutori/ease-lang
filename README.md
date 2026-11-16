@@ -18,7 +18,7 @@
    - [Variables, Constants & Types](#variables-constants--types)
    - [Functions (`to ... end`) & Calls (`do`)](#functions-to--end--calls-do)
    - [Records (`def`), `with` Copies & Union Types](#records-def-with-copies--union-types)
-   - [Guards (`check`) & Branching (`if`)](#guards-check--branching-if)
+   - [Guards (`check`), Type Narrowing & Exhaustiveness (`if`, `check`)](#guards-check-type-narrowing--exhaustiveness-if-check)
    - [Type Checks & Conversions (`is`, `is not`, `as`)](#type-checks--conversions-is-is-not-as)
    - [Lists & Loops (`list`, `repeat`, `for`)](#lists--loops-list-repeat-for)
    - [Built-in Tests (`test` & `check`)](#built-in-tests-test--check)
@@ -101,7 +101,7 @@ name = "Ease"
 msg = "Hello {name}: {x}, \{literal\}"
 
 # Raw text in '...' is read 1:1 with zero interpolation and zero backslash escapes
-raw_json = '{"id": 7, "name": "Gast", "role": "admin"}'
+raw_json = '{"id": 7, "name": "Guest", "role": "admin"}'
 ```
 
 Line comments start with `#`.
@@ -176,13 +176,31 @@ And whenever `"yes" | "no"` grows into richer domain logic, switching to `status
 
 ### Records (`def`), `with` Copies & Union Types
 
-Record blueprints (`def`) are **logic-free**: they define fields, default values, and optional inline union constraints. `with` creates a modified copy without mutating the original record.
+Record blueprints (`def`) are **logic-free**: they define fields, default values, and optional inline union constraints (or reference named unions directly). `with` creates a modified copy without mutating the original record.
+
+Union definitions (`def <Name> = A | B | ...`) are closed value spaces built orthogonally from **4 building blocks**:
+1. **Literals**: `"OK"`, `"FAILED"`, `0`, `404`
+2. **Base types**: `text`, `number`
+3. **Record blueprints**: `ErrorMessage`, `User`
+4. **Other named unions (automatically flattened)**: e.g. `def outcome = status | ErrorMessage` flattens `status` into `outcome`
+
+To keep unions unambiguous and clean, Ease enforces **3 compile-time guardrails**:
+- **No redundancy**: A base type cannot be paired with literals of that type (`"OK" | text` -> `'OK' is already covered by 'text'`).
+- **No duplicates**: Duplicate literals, base types, or record members (including across flattened unions) are rejected immediately.
+- **Distinguishable records for `as`**: Two records in the same union (e.g. `Admin | Guest`) must differ in at least one mandatory field name, field type, or disjoint inline union constraint so `raw_map as outcome` can decode unambiguously.
 
 ```ease
-# Named union type (closed value space)
-def ticket = "vip" | "standard" | "none"
+# 1. Record blueprint
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
 
-# Record blueprint with defaults and inline union field
+# 2. Composed union (literals + flattened sub-union + record blueprint)
+def status  = "OK" | "FAILED"
+def outcome = status | ErrorMessage
+
+# Record blueprint with defaults, union field reference, and inline union
 def player
     name  = "Guest"
     hp    = 100
@@ -198,12 +216,33 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 
 ---
 
-### Guards (`check`) & Branching (`if`)
+### Guards (`check`), Type Narrowing & Exhaustiveness (`if`, `check`)
 
-`check` guards validate preconditions cleanly without deeply nested conditionals:
+`check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals.
+
+- **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or inside `if res is ErrorMessage ... end`, or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
+- **Exhaustiveness Check**: A `check ... end` block matching a closed union without a fallback (`else -> ...` or a post-`end` expression) must handle every flattened variant — otherwise compilation stops with `Non-exhaustive check on '<union>' (Missing case: ...)`.
+- **Explicit fallback (`else -> ...`)**: When only specific variants matter, add `else -> ...` to handle everything else explicitly.
 
 ```ease
-# 1. Arrow guard checklist: first matching condition returns or executes its action
+# 1. Exhaustive union matching + Type Narrowing (no 'else' needed)
+to process_response res
+    check
+        res is "OK"         -> "Processed successfully"
+        res is "FAILED"     -> "Unknown failure"
+        res is ErrorMessage -> "Error {res.code}: {res.message}"
+    end
+end
+
+# 2. Explicit catch-all fallback with `else -> ...`
+to log_only_success res
+    check
+        res is "OK" -> say "Succeeded"
+        else        -> say "Something else happened"
+    end
+end
+
+# 3. Precondition arrow guard checklist
 to allow_entry name age
     check
         name is not text -> "Name must be text"
@@ -212,10 +251,12 @@ to allow_entry name age
     "Welcome {name}!"
 end
 
-# 2. All-must-hold check block with shared else fallback
+# 4. All-must-hold check block with shared multi-line else fallback
 to validate_vip code age
     check
+        code is text
         code is "VIP2026"
+        age is number
         age >= 18
     else
         "invalid"
@@ -223,7 +264,7 @@ to validate_vip code age
     "valid"
 end
 
-# 3. Single-line guard
+# 5. Single-line guard
 check status is "error" -> do fail "Aborted"
 ```
 
@@ -258,7 +299,7 @@ Ease strictly separates **format parsing**, **boundary contract validation**, an
 ```ease
 def api_user
     id   = 0
-    name = "Gast"
+    name = "Guest"
     role = "guest" | "admin"
 end
 
@@ -274,7 +315,7 @@ local_guest = api_user with id = 1
 
 test "strict as contract vs decode_json vs with defaults"
     u.name is "Ada"
-    local_guest.name is "Gast"
+    local_guest.name is "Guest"
 
     '{"id": 42, "name": "Ada", "role": "admin"}' as api_user raises "Cannot validate text"
     (do decode_json '{"id": 42, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
@@ -458,11 +499,12 @@ func_decl      ::= "to" ( IDENT | "ask" ) { IDENT }
                    { stmt [NL] }
                    "end"
 
-def_decl       ::= "def" IDENT "=" expr "|" term { "|" term } stmt_end    (* union decl *)
-                 | "def" IDENT "=" expr stmt_end                           (* constant decl *)
-                 | "def" IDENT stmt_end [NL] { def_field [NL] } "end"      (* record blueprint *)
+def_decl       ::= "def" IDENT "=" union_member "|" union_member { "|" union_member } stmt_end  (* union decl *)
+                 | "def" IDENT "=" expr stmt_end                                             (* constant decl *)
+                 | "def" IDENT stmt_end [NL] { def_field [NL] } "end"                        (* record blueprint *)
 
-def_field      ::= IDENT "=" expr { "|" expr } stmt_end
+union_member   ::= "text" | "number" | expr
+def_field      ::= IDENT "=" union_member { "|" union_member } stmt_end
 
 top_check_blk  ::= "check" STRING [NL] { check_item [NL] } "end"
 top_test_blk   ::= "test" [STRING] [NL] { check_item [NL] } "end"
@@ -493,7 +535,7 @@ for_stmt       ::= "for" IDENT "in" expr ["do"] [NL] { stmt [NL] } "end" stmt_en
                  | "for" expr "do" [NL] { stmt [NL] } "end" stmt_end
 
 check_guard    ::= "check" expr "->" stmt
-                 | "check" NL { check_rule [NL] } [ "else" [NL] { stmt [NL] } ] "end" stmt_end
+                 | "check" NL { check_rule [NL] } [ "else" ( "->" stmt | NL { stmt [NL] } ) ] "end" stmt_end
 
 check_rule     ::= expr ( "->" stmt | stmt_end )
 

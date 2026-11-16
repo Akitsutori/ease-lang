@@ -1622,3 +1622,402 @@ moved = cloud with x = x + vx
 		t.Fatalf("value semantics corrupted: b1=%v b2=%v", b1.Elements, b2.Elements)
 	}
 }
+
+func TestUnionTypesBuildingBlocksGuardrailsNarrowingAndExhaustiveness(t *testing.T) {
+	// 1. User's canonical outcome example: ErrorMessage, 4 building blocks, narrowing, exhaustive check, else -> ...
+	src := `
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+
+def status = "OK" | "FEHLER"
+def outcome = status | ErrorMessage
+def tagged = number | text | ErrorMessage
+
+def envelope
+    res = outcome
+end
+
+to handle res
+    check
+        res is "OK"         -> say "Alles super!"
+        res is "FEHLER"     -> say "Allgemeiner Fehler"
+        res is ErrorMessage -> say "Fehler {res.code}: {res.message}"
+    end
+end
+
+to process_response res
+    check
+        res is "OK"         -> "Erfolgreich verarbeitet"
+        res is "FEHLER"     -> "Unbekannter Fehler"
+        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
+    end
+end
+
+to log_only_success res
+    check
+        res is "OK" -> say "Hat geklappt"
+        else        -> say "Irgendetwas anderes ist passiert"
+    end
+end
+
+to inspect_if res
+    if res is ErrorMessage
+        "if:{res.code}:{res.message}"
+    else
+        "other"
+    end
+end
+
+to unwrap_err_guard res
+    check res is not ErrorMessage -> "not-error"
+    "guard:{res.code}"
+end
+
+to server_error_only res
+    check
+        res is ErrorMessage and res.code >= 500 -> "server:{res.code}:{res.message}"
+        else                                    -> "handled"
+    end
+end
+
+err_rec = ErrorMessage with code = 404, message = "Not Found"
+do handle "OK"
+do handle "FEHLER"
+do handle err_rec
+do log_only_success "OK"
+do log_only_success "FEHLER"
+do log_only_success err_rec
+
+test "orthogonal union building blocks, flattening, JSON as, narrowing, and else ->"
+    "OK" is outcome
+    "FEHLER" is outcome
+    err_rec is outcome
+    42 is tagged
+    "hello" is tagged
+    err_rec is tagged
+
+    # Explicit JSON -> union conversion picks ErrorMessage
+    raw_err = (do decode_json '{"code": 503, "message": "Unavailable"}') as outcome
+    raw_err is ErrorMessage
+    do process_response raw_err is "Fehler 503: Unavailable"
+    do process_response "OK" is "Erfolgreich verarbeitet"
+    do process_response "FEHLER" is "Unbekannter Fehler"
+
+    # Record field typed by union accepts literal and ErrorMessage from JSON
+    env1 = (do decode_json '{"res": "OK"}') as envelope
+    env1.res is "OK"
+    env2 = (do decode_json '{"res": {"code": 400, "message": "Bad"}}') as envelope
+    env2.res is ErrorMessage
+    do inspect_if env2.res is "if:400:Bad"
+    do inspect_if "OK" is "other"
+
+    # Heterogeneous union list + JSON array coercion
+    items = list as outcome
+    items = do push items "OK"
+    items = do push items err_rec
+    do len items is 2
+    items.1 is ErrorMessage
+
+    json_items = (do decode_json '["OK", {"code": 404, "message": "Missing"}]') as outcome
+    json_items.0 is "OK"
+    json_items.1 is ErrorMessage
+
+    # Early-exit guard narrowing & compound 'and' narrowing
+    do unwrap_err_guard err_rec is "guard:404"
+    do unwrap_err_guard "OK" is "not-error"
+    do server_error_only raw_err is "server:503:Unavailable"
+    do server_error_only err_rec is "handled"
+
+    # Reject incomplete map when decoding into union
+    (do decode_json '{"code": 1}') as outcome raises "Missing field"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed == 0 {
+		t.Fatalf("unexpected union check report: passed=%d failed=%d results=%+v", report.Passed, report.Failed, report.Results)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	wantOut := strings.Join([]string{
+		"Alles super!",
+		"Allgemeiner Fehler",
+		"Fehler 404: Not Found",
+		"Hat geklappt",
+		"Irgendetwas anderes ist passiert",
+		"Irgendetwas anderes ist passiert",
+	}, "\n") + "\n"
+	if out.String() != wantOut {
+		t.Fatalf("stdout mismatch:\ngot:\n%s\nwant:\n%s", out.String(), wantOut)
+	}
+
+	// 2. Test sub-union coverage in check (`res is status` covers both "OK" and "FEHLER")
+	subUnionCheck := `
+def ErrorMessage
+    code = 500
+    message = "err"
+end
+def status = "OK" | "FEHLER"
+def outcome = status | ErrorMessage
+
+to process res
+    check
+        res is status       -> "status-ok"
+        res is ErrorMessage -> "err:{res.code}"
+    end
+end
+`
+	if _, err := ParseProgram(subUnionCheck); err != nil {
+		t.Fatalf("expected sub-union exhaustive check to pass, got: %v", err)
+	}
+
+	// 3. Test distinguishable records (different field vs different type vs disjoint inline union)
+	distinguishable := `
+def AdminDiffField
+    name  = "Admin"
+    level = 1
+end
+def GuestDiffField
+    name   = "Guest"
+    ticket = "vip"
+end
+def actor1 = AdminDiffField | GuestDiffField
+
+def NumPayload
+    val = 0
+end
+def TextPayload
+    val = ""
+end
+def actor2 = NumPayload | TextPayload
+
+def RoleAdmin
+    kind = "admin" | "owner"
+    name = ""
+end
+def RoleGuest
+    kind = "guest" | "anon"
+    name = ""
+end
+def actor3 = RoleAdmin | RoleGuest
+
+test "distinguishable record unions decode cleanly"
+    a1 = (do decode_json '{"name": "Ada", "level": 9}') as actor1
+    a1 is AdminDiffField
+    g1 = (do decode_json '{"name": "Bob", "ticket": "day"}') as actor1
+    g1 is GuestDiffField
+
+    p1 = (do decode_json '{"val": 42}') as actor2
+    p1 is NumPayload
+    p2 = (do decode_json '{"val": "hi"}') as actor2
+    p2 is TextPayload
+
+    r1 = (do decode_json '{"kind": "admin", "name": "Ada"}') as actor3
+    r1 is RoleAdmin
+    r2 = (do decode_json '{"kind": "guest", "name": "Bob"}') as actor3
+    r2 is RoleGuest
+end
+`
+	if rep, err := RunChecks(distinguishable); err != nil || rep.Failed != 0 || rep.Passed != 6 {
+		t.Fatalf("distinguishable record unions failed: rep=%+v err=%v", rep, err)
+	}
+
+	// 4. Test the 3 Guardrails, Exhaustiveness Check, and Type Narrowing compile-time errors
+	errCases := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "guardrail 1 text redundant literal",
+			src:  "def bad = \"OK\" | text\n",
+			want: []string{"'OK' is already covered by 'text'"},
+		},
+		{
+			name: "guardrail 1 number redundant literal",
+			src:  "def bad = number | 404\n",
+			want: []string{"'404' is already covered by 'number'"},
+		},
+		{
+			name: "guardrail 1 redundancy via flattening",
+			src:  "def s = \"OK\" | \"FEHLER\"\ndef bad = s | text\n",
+			want: []string{"'OK' is already covered by 'text'"},
+		},
+		{
+			name: "guardrail 2 duplicate string literal",
+			src:  "def bad = \"OK\" | \"OK\"\n",
+			want: []string{"Duplicate union member", "\"OK\""},
+		},
+		{
+			name: "guardrail 2 duplicate record",
+			src:  "def User\n    id = 0\nend\ndef bad = User | User\n",
+			want: []string{"Duplicate union member", "User"},
+		},
+		{
+			name: "guardrail 2 duplicate via flattening",
+			src:  "def User\n    id = 0\nend\ndef a = \"OK\" | User\ndef b = \"TIMEOUT\" | User\ndef c = a | b\n",
+			want: []string{"Duplicate union member", "User"},
+		},
+		{
+			name: "guardrail 3 indistinguishable records",
+			src:  "def Admin\n    name = \"a\"\n    id = 0\nend\ndef Guest\n    name = \"g\"\n    id = 0\nend\ndef bad = Admin | Guest\n",
+			want: []string{"indistinguishable", "Admin", "Guest"},
+		},
+		{
+			name: "guardrail 3 overlapping inline union field",
+			src:  "def Admin\n    role = \"admin\" | \"shared\"\nend\ndef Guest\n    role = \"guest\" | \"shared\"\nend\ndef bad = Admin | Guest\n",
+			want: []string{"indistinguishable"},
+		},
+		{
+			name: "narrowing field outside ErrorMessage branch (in OK branch)",
+			src: `
+def ErrorMessage
+    code = 500
+    message = "err"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+to bad res
+    check
+        res is "OK"         -> say "{res.code}"
+        res is "FEHLER"     -> say "err"
+        res is ErrorMessage -> say "{res.code}"
+    end
+end
+`,
+			want: []string{"Cannot read field '.code'", "non-record"},
+		},
+		{
+			name: "narrowing field before check on union param",
+			src: `
+def ErrorMessage
+    code = 500
+    message = "err"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+to bad res
+    say "{res.code}"
+    check
+        res is "OK"         -> say "ok"
+        res is "FEHLER"     -> say "err"
+        res is ErrorMessage -> say "{res.code}"
+    end
+end
+`,
+			want: []string{"Cannot read field '.code'", "outcome", "before narrowing"},
+		},
+		{
+			name: "narrowing field in else branch",
+			src: `
+def ErrorMessage
+    code = 500
+    message = "err"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+to bad res
+    check
+        res is ErrorMessage -> say "{res.code}"
+        else                -> say "{res.code}"
+    end
+end
+`,
+			want: []string{"Cannot read field '.code'"},
+		},
+		{
+			name: "narrowing catches wrong field name on ErrorMessage",
+			src: `
+def ErrorMessage
+    code = 500
+    message = "err"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+to bad res
+    check
+        res is "OK"         -> "ok"
+        res is "FEHLER"     -> "err"
+        res is ErrorMessage -> "{res.nonexistent}"
+    end
+end
+`,
+			want: []string{"ErrorMessage has no field \"nonexistent\""},
+		},
+		{
+			name: "exhaustiveness check missing TIMEOUT",
+			src: `
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+
+def outcome = "OK" | "FEHLER" | "TIMEOUT" | ErrorMessage
+
+to process_response res
+    check
+        res is "OK"         -> "Erfolgreich verarbeitet"
+        res is "FEHLER"     -> "Unbekannter Fehler"
+        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
+    end
+end
+`,
+			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"TIMEOUT\"", "Add a branch for \"TIMEOUT\" or add an 'else -> ...' fallback."},
+		},
+		{
+			name: "narrowing field outside if branch on union variable",
+			src: `
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+to inspect res
+    if res is ErrorMessage
+        say "{res.code}"
+    end
+    say "{res.code}"
+end
+`,
+			want: []string{"Cannot read field '.code'", "outcome", "before narrowing"},
+		},
+		{
+			name: "exhaustiveness and narrowing inside for-loop over pushed union list",
+			src: `
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+def outcome = "OK" | "FEHLER" | ErrorMessage
+items = list as outcome
+items = do push items "OK"
+for item in items
+    check
+        item is "OK"         -> say "ok"
+        item is ErrorMessage -> say "{item.code}"
+    end
+end
+`,
+			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"FEHLER\""},
+		},
+	}
+
+	for _, tc := range errCases {
+		_, err := ParseProgram(tc.src)
+		if err == nil {
+			t.Fatalf("%s: expected TypeError, got nil", tc.name)
+		}
+		var easeErr *EaseError
+		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
+			t.Fatalf("%s: expected EaseError(TypeError), got %v", tc.name, err)
+		}
+		full := err.Error()
+		for _, sub := range tc.want {
+			if !strings.Contains(full, sub) {
+				t.Fatalf("%s: expected substring %q in error:\n%s", tc.name, sub, full)
+			}
+		}
+	}
+}
