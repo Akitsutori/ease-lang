@@ -405,7 +405,7 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 
 ## Standard Modules (`import`)
 
-Standard modules are embedded directly into the compiled binary (`internal/ease/std/*.ease`), with optional local overrides under `./std/`:
+Standard modules are embedded directly into the compiled binary (`internal/ease/std/*.ease`). Optional local overrides under `./std/` can be enabled explicitly via `EASE_STD=1` (or `EASE_STD=<dir>`):
 
 ### `import network`
 

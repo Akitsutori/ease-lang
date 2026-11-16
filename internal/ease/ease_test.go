@@ -2207,3 +2207,108 @@ end
 		}
 	}
 }
+
+func TestLargeInputsAndResourceLimitsIssue13(t *testing.T) {
+	// 1. Huge `do range 1 1000000000` must fail with RuntimeError instead of Go OOM.
+	_, err := EvalProgram("xs = do range 1 1000000000\nsay do len xs\n", &bytes.Buffer{})
+	var easeErr *EaseError
+	if !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "range too large") {
+		t.Fatalf("expected RuntimeError 'range too large', got: %v", err)
+	}
+
+	// Huge bounds beyond int64 range must also fail cleanly.
+	_, err = EvalProgram("xs = do range 1 100000000000000000000\n", &bytes.Buffer{})
+	if !errors.As(err, &easeErr) || !strings.Contains(easeErr.Message, "range too large") {
+		t.Fatalf("expected RuntimeError 'range too large' for huge float bound, got: %v", err)
+	}
+
+	// 2. 200,000 nested `(` in source must fail with SyntaxError instead of stack overflow.
+	nested := "say " + strings.Repeat("(", 200_000) + "1" + strings.Repeat(")", 200_000) + "\n"
+	_, err = ParseProgram(nested)
+	if !errors.As(err, &easeErr) || easeErr.Stage != "SyntaxError" || !strings.Contains(easeErr.Message, "Nesting deeper than") {
+		t.Fatalf("expected SyntaxError 'Nesting deeper than ...', got: %v", err)
+	}
+
+	// 3. Unbounded HTTP response body (>10 MB) must be capped cleanly without unbounded memory read.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		chunk := bytes.Repeat([]byte("A"), 1024*1024)
+		for i := 0; i < 12; i++ {
+			_, _ = w.Write(chunk)
+		}
+	}))
+	defer srv.Close()
+
+	httpSrc := fmt.Sprintf(`
+import network
+n = network with url = %q, timeout = 5
+body = do ask n "/big"
+body is ""
+
+req = http_request with method = "GET", url = "%s/big", timeout = 5
+resp = do http_call req
+`, srv.URL, srv.URL)
+	prog, err := ParseProgram(httpSrc)
+	if err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	ev := NewEvaluator("", prog, &bytes.Buffer{})
+	defer ev.Close()
+	if _, err := ev.ExecStatements(prog.Body, ev.global); err != nil {
+		t.Fatalf("ExecStatements failed: %v", err)
+	}
+	respVal, _ := ev.global.Lookup("resp")
+	respRec := respVal.(*RecordValue)
+	if respRec.Fields["body"] != "" {
+		t.Fatalf("expected empty body for oversized response, got %d bytes", len(FormatValue(respRec.Fields["body"])))
+	}
+	if !strings.Contains(FormatValue(respRec.Fields["error"]), "exceeds 10 MB limit") {
+		t.Fatalf("expected HTTP size limit error, got %q", respRec.Fields["error"])
+	}
+	bodyVal, _ := ev.global.Lookup("body")
+	if bodyVal != "" {
+		t.Fatalf("expected do ask to return \"\" on oversized HTTP response, got %q", bodyVal)
+	}
+
+	// 4. Unopted-in ./std/<name>.ease in working directory must NOT silently override embedded stdlib.
+	tmpDir := t.TempDir()
+	stdDir := filepath.Join(tmpDir, "std")
+	if err := os.MkdirAll(stdDir, 0755); err != nil {
+		t.Fatalf("mkdir std: %v", err)
+	}
+	customMod := "def poisoned\n    flag = \"override\"\nend\n"
+	if err := os.WriteFile(filepath.Join(stdDir, "network.ease"), []byte(customMod), 0644); err != nil {
+		t.Fatalf("write override module: %v", err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	// Without EASE_STD, the poisoned disk file must be ignored.
+	t.Setenv("EASE_STD", "")
+	pEmbedded, err := ParseProgram("import network\nn = network with url = \"https://example.test\"\n")
+	if err != nil || len(pEmbedded.Defs) == 0 {
+		t.Fatalf("expected embedded network stdlib to load cleanly, got err=%v", err)
+	}
+	for _, d := range pEmbedded.Defs {
+		if d.Name == "poisoned" {
+			t.Fatalf("unexpectedly loaded ./std/network.ease without EASE_STD opt-in")
+		}
+	}
+
+	// With EASE_STD=1, disk override is honored explicitly.
+	t.Setenv("EASE_STD", "1")
+	pOverride, err := ParseProgram("import network\nx = poisoned with flag = \"ok\"\n")
+	if err != nil {
+		t.Fatalf("expected EASE_STD=1 to load ./std/network.ease override, got err=%v", err)
+	}
+	if _, err := EvalProgram("import network\nx = poisoned with flag = \"ok\"\n", &bytes.Buffer{}); err != nil {
+		t.Fatalf("expected EvalProgram with EASE_STD=1 override to succeed, got: %v", err)
+	}
+	_ = pOverride
+}

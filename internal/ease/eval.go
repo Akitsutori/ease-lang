@@ -308,7 +308,11 @@ type reportSignal struct {
 	val Value
 }
 
-const maxCallDepth = 256
+const (
+	maxCallDepth     = 256
+	maxListSize      = 1_000_000
+	maxHTTPBodyBytes = 10 * 1024 * 1024
+)
 
 // Evaluator executes parsed Ease programs.
 type Evaluator struct {
@@ -1382,6 +1386,16 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 				if elemType == "" {
 					elemType = rb.ElemType
 				}
+				if len(la.Elements)+len(rb.Elements) > maxListSize {
+					return nil, newError(
+						"RuntimeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("list size exceeds limit (%d elements)", maxListSize),
+						fmt.Sprintf("Keep concatenated lists within %d elements.", maxListSize),
+					)
+				}
 				merged := make([]Value, 0, len(la.Elements)+len(rb.Elements))
 				merged = append(merged, la.Elements...)
 				merged = append(merged, rb.Elements...)
@@ -1530,7 +1544,28 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if !ok1 || !ok2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "range() requires two numbers", "")
 		}
-		start, end := int(s), int(e)
+		startF, endF := math.Trunc(s), math.Trunc(e)
+		if math.Abs(startF) > float64(math.MaxInt64/2) || math.Abs(endF) > float64(math.MaxInt64/2) {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("range too large (limit %d elements)", maxListSize),
+				fmt.Sprintf("Keep 'do range start end' within %d elements.", maxListSize),
+			)
+		}
+		if endF >= startF && (endF-startF+1) > float64(maxListSize) {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("range too large (limit %d elements)", maxListSize),
+				fmt.Sprintf("Keep 'do range start end' within %d elements.", maxListSize),
+			)
+		}
+		start, end := int(startF), int(endF)
 		out := make([]Value, 0, max(0, end-start+1))
 		for i := start; i <= end; i++ {
 			out = append(out, float64(i))
@@ -1544,6 +1579,16 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		listVal, ok := args[0].(*ListValue)
 		if !ok {
 			return nil, true, newError("TypeError", line, col, ev.source, "push() expects a list as first argument", "")
+		}
+		if len(listVal.Elements) >= maxListSize {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("list size exceeds limit (%d elements)", maxListSize),
+				fmt.Sprintf("Keep lists within %d elements.", maxListSize),
+			)
 		}
 		gotType := structuredTypeName(args[1])
 		elemType := listVal.ElemType
@@ -1780,9 +1825,16 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 	}
 	defer resp.Body.Close()
 
-	rawBody, err := io.ReadAll(resp.Body)
+	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBodyBytes+1))
 	if err != nil {
 		return ev.newHTTPResponseRecord(float64(resp.StatusCode), "", err.Error())
+	}
+	if len(rawBody) > maxHTTPBodyBytes {
+		return ev.newHTTPResponseRecord(
+			float64(resp.StatusCode),
+			"",
+			fmt.Sprintf("HTTP response body exceeds %d MB limit", maxHTTPBodyBytes/(1024*1024)),
+		)
 	}
 	return ev.newHTTPResponseRecord(float64(resp.StatusCode), string(rawBody), "")
 }

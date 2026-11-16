@@ -5,15 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed std/*.ease
 var stdFS embed.FS
 
 func loadStdModuleSource(name string) (string, error) {
-	diskPath := filepath.Join("std", name+".ease")
-	if raw, err := os.ReadFile(diskPath); err == nil {
-		return string(raw), nil
+	if stdEnv := strings.TrimSpace(os.Getenv("EASE_STD")); stdEnv != "" && stdEnv != "0" && !strings.EqualFold(stdEnv, "false") {
+		stdDir := stdEnv
+		if stdEnv == "1" || strings.EqualFold(stdEnv, "true") {
+			stdDir = "std"
+		}
+		diskPath := filepath.Join(stdDir, name+".ease")
+		if raw, err := os.ReadFile(diskPath); err == nil {
+			fmt.Fprintf(os.Stderr, "[ease] note: using std/%s.ease override from %s (EASE_STD)\n", name, diskPath)
+			return string(raw), nil
+		}
 	}
 	raw, err := stdFS.ReadFile("std/" + name + ".ease")
 	if err != nil {

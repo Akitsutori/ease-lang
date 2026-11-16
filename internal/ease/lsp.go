@@ -513,8 +513,10 @@ func (s *LSPServer) writePayload(v any) {
 	_, _ = s.out.Write(body)
 }
 
+const maxLSPContentLength = 16 * 1024 * 1024
+
 func readLSPFrame(r *bufio.Reader) ([]byte, error) {
-	contentLen := -1
+	var contentLen int64 = -1
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -528,17 +530,21 @@ func readLSPFrame(r *bufio.Reader) ([]byte, error) {
 			name := strings.ToLower(strings.TrimSpace(trimmed[:colon]))
 			val := strings.TrimSpace(trimmed[colon+1:])
 			if name == "content-length" {
-				n, convErr := strconv.Atoi(val)
-				if convErr == nil && n >= 0 {
-					contentLen = n
+				n, convErr := strconv.ParseInt(val, 10, 64)
+				if convErr != nil || n < 0 {
+					return nil, fmt.Errorf("invalid Content-Length header %q", val)
 				}
+				if n > maxLSPContentLength {
+					return nil, fmt.Errorf("Content-Length %d exceeds limit (%d bytes)", n, maxLSPContentLength)
+				}
+				contentLen = n
 			}
 		}
 	}
 	if contentLen < 0 {
 		return nil, fmt.Errorf("missing Content-Length header")
 	}
-	buf := make([]byte, contentLen)
+	buf := make([]byte, int(contentLen))
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}

@@ -189,3 +189,13 @@ func TestLSPHandleMessagePanicRecovery(t *testing.T) {
 		t.Fatalf("expected ease-lsp in initialize response, got %s", initFrame)
 	}
 }
+
+func TestLSPRejectsOversizedContentLength(t *testing.T) {
+	in := strings.NewReader("Content-Length: 3000000000\r\n\r\n")
+	var out bytes.Buffer
+	srv := NewLSPServer(in, &out)
+	err := srv.Run()
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("expected error mentioning Content-Length limit, got: %v", err)
+	}
+}

@@ -6,15 +6,38 @@ import (
 	"strings"
 )
 
+const maxParseDepth = 256
+
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
 	tokens           []Token
 	source           string
 	pos              int
+	depth            int
 	disallowTopIs    bool
 	disallowAs       bool
 	disallowDoAsArg  bool
 	disallowBareCall bool
+}
+
+func (p *Parser) enterDepth() error {
+	p.depth++
+	if p.depth > maxParseDepth {
+		tok := p.current()
+		return newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			fmt.Sprintf("Nesting deeper than %d levels", maxParseDepth),
+			"Simplify deeply nested parentheses, expressions, or blocks.",
+		)
+	}
+	return nil
+}
+
+func (p *Parser) exitDepth() {
+	p.depth--
 }
 
 // ParseProgram lexes and parses `source` into a complete Program AST.
@@ -588,6 +611,11 @@ func (p *Parser) parseCheckItem() (Stmt, error) {
 }
 
 func (p *Parser) parseStmt() (Stmt, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
 	tok := p.current()
 	switch tok.Type {
 	case TOK_DO:
@@ -976,6 +1004,11 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 // Expressions (precedence climbing)
 
 func (p *Parser) parseExpr() (Expr, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
 	return p.parseOr()
 }
 
@@ -1478,7 +1511,7 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 			return nil, err
 		}
 		offsetTokenPositions(subTokens, seg.Line, seg.Col)
-		subParser := &Parser{tokens: subTokens, source: p.source}
+		subParser := &Parser{tokens: subTokens, source: p.source, depth: p.depth}
 		expr, err := subParser.parseExpr()
 		if err != nil {
 			return nil, err
