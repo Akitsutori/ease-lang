@@ -78,6 +78,14 @@ for i in do range 1 3
     say "{i}: {do add i 10}"
 end
 
+# `for xs do ... end` binds only `it` (always access record fields via `it.<field>`; zero implicit field injection)
+users = list as user with
+    id = 1, name = "Aria"
+end
+for users do
+    say "{it.id}: {it.name}"
+end
+
 raw_map = do decode_json '{"id": 7, "name": "Guest", "role": "admin"}'
 parsed = raw_map as user
 encoded = do encode_json parsed

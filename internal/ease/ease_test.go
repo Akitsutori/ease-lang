@@ -558,7 +558,7 @@ names  = list "Aria", "Ben", "Cid"
 
 sum_x = 0
 for cloud do
-    sum_x = sum_x + x
+    sum_x = sum_x + it.x
 end
 
 test
@@ -653,8 +653,8 @@ end
 to update_particles items dt
     out = list as particle
     for items do
-        check state is "dead" -> out = do push out it
-        check state is "active" -> out = do push out do step_particle it dt
+        check it.state is "dead" -> out = do push out it
+        check it.state is "active" -> out = do push out do step_particle it dt
     end
     out
 end
@@ -2133,5 +2133,77 @@ end
 	}
 	if ValuesEqual(l1Val, l2Val) {
 		t.Fatalf("expected l1 (default a=pt{x:0}) != l2 (a=pt{x:9}), but ValuesEqual returned true")
+	}
+}
+
+func TestForLoopNoImplicitFieldInjectionAndTailoredHint(t *testing.T) {
+	// 1. Outer `vx = 100` and function parameter `vx` must NOT be shadowed by record field `vx = 5` inside `for ps do ... end`.
+	src := `
+def particle
+    vx = 0
+end
+
+to check_param_and_field vx items
+    outer_seen = 0
+    field_seen = 0
+    for items do
+        check vx is not 100 -> do fail "parameter vx was shadowed"
+        check it.vx is not 5 -> do fail "unexpected it.vx"
+        outer_seen = vx
+        field_seen = it.vx
+    end
+    outer_seen * 10 + field_seen
+end
+
+vx = 100
+p = particle with vx = 5
+ps = list as particle
+ps = do push ps p
+
+test "no implicit field injection in for ... do loops"
+    outer_seen = 0
+    field_seen = 0
+    for ps do
+        check vx is not 100 -> do fail "outer vx was shadowed"
+        check it.vx is not 5 -> do fail "unexpected it.vx"
+        outer_seen = vx
+        field_seen = it.vx
+    end
+    outer_seen is 100
+    field_seen is 5
+    do check_param_and_field 100 ps is 1005
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 3 {
+		t.Fatalf("expected 3 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// 2. Accessing an undefined bare field `vx` inside `for ps do ... end` produces a tailored error pointing to `it.vx`.
+	missingFieldSrc := `
+def particle
+    vx = 0
+end
+
+p = particle with vx = 5
+ps = list as particle
+ps = do push ps p
+
+for ps do
+    say "{vx}"
+end
+`
+	_, err = EvalProgram(missingFieldSrc, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected RuntimeError for bare record field access inside 'for ... do', got nil")
+	}
+	full := err.Error()
+	for _, want := range []string{"Unknown variable \"vx\"", "it.vx", "particle"} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("expected %q in tailored loop error, got:\n%s", want, full)
+		}
 	}
 }

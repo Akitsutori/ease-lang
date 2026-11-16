@@ -362,9 +362,9 @@ for i in do range 1 10
     say i
 end
 
-# Implicit `it` variable and direct record field access
+# Implicit `it` variable (access record fields explicitly via `it.<field>`)
 for cloud do
-    say "{it.x} (vx={vx})"
+    say "{it.x} (vx={it.vx})"
 end
 
 # Single-line for loop

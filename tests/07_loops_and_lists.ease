@@ -52,9 +52,20 @@ test "Listen, Schleifen & Verzweigungen"
 
     sum_x = 0
     for cloud do
-        sum_x = sum_x + x
+        sum_x = sum_x + it.x
     end
     sum_x is 10
+
+    vx = 100
+    seen_outer = 0
+    seen_vx = 0
+    for cloud do
+        check vx is not 100 -> do fail "vx shadowed"
+        seen_outer = vx
+        seen_vx = seen_vx + it.vx
+    end
+    seen_outer is 100
+    seen_vx is 7
 
     nums = do range 1 4
     do sum_squares nums is 30

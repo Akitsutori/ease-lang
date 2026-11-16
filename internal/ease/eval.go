@@ -734,11 +734,6 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			loopEnv := NewEnv(env)
 			if s.ItemName != "" {
 				loopEnv.Define(s.ItemName, item, false)
-			} else if rec, isRec := item.(*RecordValue); isRec {
-				for k, v := range rec.Fields {
-					loopEnv.Define(k, v, false)
-				}
-				loopEnv.Define("it", item, false)
 			} else {
 				loopEnv.Define("it", item, false)
 			}
@@ -875,6 +870,20 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 	case *IdentExpr:
 		val, ok := env.Lookup(e.Name)
 		if !ok {
+			if itVal, hasIt := env.Lookup("it"); hasIt {
+				if rec, isRec := itVal.(*RecordValue); isRec && rec != nil {
+					if _, hasField := rec.Fields[e.Name]; hasField {
+						return nil, newError(
+							"RuntimeError",
+							e.Line,
+							e.Col,
+							ev.source,
+							fmt.Sprintf("Unknown variable %q (field %q belongs to loop item 'it' of type %s — write 'it.%s')", e.Name, e.Name, rec.TypeName, e.Name),
+							fmt.Sprintf("Record fields are not injected into 'for ... do' loops. Use 'it.%s' instead of bare '%s'.", e.Name, e.Name),
+						)
+					}
+				}
+			}
 			return nil, newError(
 				"RuntimeError",
 				e.Line,
