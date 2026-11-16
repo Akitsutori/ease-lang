@@ -258,35 +258,74 @@ func ValuesEqual(a, b Value) bool {
 type binding struct {
 	val     Value
 	mutable bool
+	isParam bool
 }
 
-// Env implements lexical scopes with mutability tracking (immutable `def` constants vs mutable bindings).
+// Env implements lexical scopes with mutability tracking (immutable `def` constants/params vs mutable bindings).
 type Env struct {
-	parent *Env
-	vars   map[string]binding
+	parent         *Env
+	vars           map[string]binding
+	isFuncRoot     bool
+	assignedLocals map[string]bool
 }
 
 func NewEnv(parent *Env) *Env {
 	return &Env{parent: parent, vars: make(map[string]binding)}
 }
 
+func NewFuncEnv(global *Env, assignedLocals map[string]bool) *Env {
+	return &Env{
+		parent:         global,
+		vars:           make(map[string]binding),
+		isFuncRoot:     true,
+		assignedLocals: assignedLocals,
+	}
+}
+
 func (e *Env) Define(name string, val Value, mutable bool) {
 	e.vars[name] = binding{val: val, mutable: mutable}
 }
 
+func (e *Env) DefineParam(name string, val Value) {
+	e.vars[name] = binding{val: val, mutable: false, isParam: true}
+}
+
 func (e *Env) Lookup(name string) (Value, bool) {
+	val, ok, _ := e.LookupChecked(name)
+	return val, ok
+}
+
+func (e *Env) LookupChecked(name string) (Value, bool, bool) {
 	for cur := e; cur != nil; cur = cur.parent {
 		if b, ok := cur.vars[name]; ok {
-			return b.val, true
+			return b.val, true, false
+		}
+		if cur.isFuncRoot && cur.assignedLocals[name] {
+			if cur.parent != nil {
+				if _, isGlobal := cur.parent.Lookup(name); isGlobal {
+					return nil, false, true
+				}
+			}
+			return nil, false, false
 		}
 	}
-	return nil, false
+	return nil, false, false
 }
 
 func (e *Env) DefineOrAssign(name string, val Value, line, col int, source string) error {
 	for cur := e; cur != nil; cur = cur.parent {
 		if b, ok := cur.vars[name]; ok {
 			if !b.mutable {
+				if b.isParam {
+					return newError(
+						"RuntimeError",
+						line,
+						col,
+						source,
+						fmt.Sprintf("Cannot reassign parameter %q; assign to a new local variable instead.", name),
+						fmt.Sprintf("Use a new local variable like 'next_%s = ...' instead of reassigning '%s'.", name, name),
+					)
+				}
 				return newError(
 					"RuntimeError",
 					line,
@@ -299,9 +338,40 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 			cur.vars[name] = binding{val: val, mutable: true}
 			return nil
 		}
+		if cur.isFuncRoot {
+			break
+		}
 	}
 	e.vars[name] = binding{val: val, mutable: true}
 	return nil
+}
+
+func collectAssignedNames(stmts []Stmt) map[string]bool {
+	assigned := make(map[string]bool)
+	var walk func([]Stmt)
+	walk = func(list []Stmt) {
+		for _, stmt := range list {
+			switch s := stmt.(type) {
+			case *AssignStmt:
+				assigned[s.Name] = true
+			case *LetStmt:
+				assigned[s.Name] = true
+			case *RepeatStmt:
+				walk(s.Body)
+			case *ForStmt:
+				walk(s.Body)
+			case *CheckGuardStmt:
+				for _, r := range s.Rules {
+					if r.Action != nil {
+						walk([]Stmt{r.Action})
+					}
+				}
+				walk(s.ElseBody)
+			}
+		}
+	}
+	walk(stmts)
+	return assigned
 }
 
 type reportSignal struct {
@@ -628,8 +698,6 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: say ...", line)
 	case *CheckGuardStmt:
 		ev.logTrace("line %d: check guard (%d rule(s))", line, len(s.Rules))
-	case *IfStmt:
-		ev.logTrace("line %d: if ...", line)
 	case *ForStmt:
 		ev.logTrace("line %d: for %s in ...", line, s.ItemName)
 	case *RepeatStmt:
@@ -661,32 +729,6 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		}
 		fmt.Fprintln(ev.out, FormatValue(val))
 		return val, nil, nil
-
-	case *IfStmt:
-		condVal, err := ev.EvalExpr(s.Condition, env)
-		if err != nil {
-			return nil, nil, err
-		}
-		cond, ok := condVal.(bool)
-		if !ok {
-			line, col := s.Condition.Pos()
-			return nil, nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("'if' condition must be a condition, got %s (%s)", TypeName(condVal), FormatValue(condVal)),
-				"Use comparisons like 'x > 0', 'name is \"Ada\"', or 'status is \"open\"'.",
-			)
-		}
-		branchEnv := NewEnv(env)
-		if cond {
-			return ev.execBlock(s.ThenBody, branchEnv)
-		}
-		if len(s.ElseBody) > 0 {
-			return ev.execBlock(s.ElseBody, branchEnv)
-		}
-		return nil, nil, nil
 
 	case *RepeatStmt:
 		countVal, err := ev.EvalExpr(s.Count, env)
@@ -769,7 +811,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			}
 			if rule.Action != nil {
 				if condBool {
-					val, sig, err := ev.execStmt(rule.Action, env)
+					val, sig, err := ev.execStmt(rule.Action, NewEnv(env))
 					if err != nil || sig != nil {
 						return val, sig, err
 					}
@@ -872,8 +914,18 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		ev.logTrace("line %d: ask received %q", e.Line, res)
 		return res, nil
 	case *IdentExpr:
-		val, ok := env.Lookup(e.Name)
+		val, ok, blockedGlobal := env.LookupChecked(e.Name)
 		if !ok {
+			if blockedGlobal {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("Cannot modify global '%s' inside a function; pass it in and return the new value instead.", e.Name),
+					fmt.Sprintf("If you intended a local variable, assign '%s = ...' before reading it.", e.Name),
+				)
+			}
 			if itVal, hasIt := env.Lookup("it"); hasIt {
 				if rec, isRec := itVal.(*RecordValue); isRec && rec != nil {
 					if _, hasField := rec.Fields[e.Name]; hasField {
@@ -1476,9 +1528,9 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 	ev.callDepth++
 	defer func() { ev.callDepth-- }()
 
-	fnEnv := NewEnv(ev.global)
+	fnEnv := NewFuncEnv(ev.global, collectAssignedNames(fn.Body))
 	for i, param := range fn.Params {
-		fnEnv.Define(param, args[i], false)
+		fnEnv.DefineParam(param, args[i])
 	}
 
 	last, sig, err := ev.execBlock(fn.Body, fnEnv)

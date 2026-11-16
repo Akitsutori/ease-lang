@@ -850,10 +850,6 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 					}
 				}
 				collectFromStmts(st.ElseBody)
-			case *IfStmt:
-				collectFromExpr(st.Condition)
-				collectFromStmts(st.ThenBody)
-				collectFromStmts(st.ElseBody)
 			case *ForStmt:
 				collectFromStmts(st.Body)
 			case *RepeatStmt:
@@ -1020,28 +1016,6 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 
 	case *ExprStmt:
 		return v.checkExpr(st.Expression)
-
-	case *IfStmt:
-		if err := v.checkExpr(st.Condition); err != nil {
-			return err
-		}
-		thenScope := v.pushScope()
-		v.applyCondNarrowing(thenScope, st.Condition, true)
-		err := v.checkStmts(st.ThenBody, inFunction)
-		v.popScope()
-		if err != nil {
-			return err
-		}
-		if len(st.ElseBody) > 0 {
-			elseScope := v.pushScope()
-			v.applyCondNarrowing(elseScope, st.Condition, false)
-			err = v.checkStmts(st.ElseBody, inFunction)
-			v.popScope()
-			if err != nil {
-				return err
-			}
-		}
-		return nil
 
 	case *RepeatStmt:
 		if err := v.checkExpr(st.Count); err != nil {

@@ -529,7 +529,7 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 
 func (p *Parser) parseCheckItem() (Stmt, error) {
 	switch p.current().Type {
-	case TOK_IF, TOK_REPEAT, TOK_FOR:
+	case TOK_REPEAT, TOK_FOR:
 		return p.parseStmt()
 	case TOK_DO:
 		if p.peekNext().Type == TOK_SAY {
@@ -645,8 +645,6 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			return nil, err
 		}
 		return &SayStmt{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Value: val}, nil
-	case TOK_IF:
-		return p.parseIfStmt()
 	case TOK_REPEAT:
 		return p.parseRepeatStmt()
 	case TOK_FOR:
@@ -706,80 +704,6 @@ func (p *Parser) parseBareAssignStmt() (Stmt, error) {
 		return nil, err
 	}
 	return &AssignStmt{posInfo: posInfo{Line: nameTok.Line, Col: nameTok.Col}, Name: nameTok.Lexeme, Value: val}, nil
-}
-
-func (p *Parser) parseIfStmt() (Stmt, error) {
-	ifTok := p.advance()
-	cond, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	p.skipNewlines()
-
-	var thenBody []Stmt
-	for !p.check(TOK_ELSE) && !p.check(TOK_END) {
-		if p.check(TOK_EOF) {
-			return nil, newError(
-				"SyntaxError",
-				ifTok.Line,
-				ifTok.Col,
-				p.source,
-				"'if' block is missing a closing 'end'",
-				"Add 'end' after the 'if' branch.",
-			)
-		}
-		s, err := p.parseStmt()
-		if err != nil {
-			return nil, err
-		}
-		thenBody = append(thenBody, s)
-		p.skipNewlines()
-	}
-
-	var elseBody []Stmt
-	if p.match(TOK_ELSE) {
-		p.skipNewlines()
-		for !p.check(TOK_END) {
-			if p.check(TOK_EOF) {
-				return nil, newError(
-					"SyntaxError",
-					ifTok.Line,
-					ifTok.Col,
-					p.source,
-					"'if ... else' block is missing a closing 'end'",
-					"Add 'end' after the 'else' branch.",
-				)
-			}
-			s, err := p.parseStmt()
-			if err != nil {
-				return nil, err
-			}
-			elseBody = append(elseBody, s)
-			p.skipNewlines()
-		}
-	}
-
-	if !p.match(TOK_END) {
-		tok := p.current()
-		return nil, newError(
-			"SyntaxError",
-			tok.Line,
-			tok.Col,
-			p.source,
-			"Expected 'end' to close 'if' block",
-			"Add 'end' on its own line.",
-		)
-	}
-	if err := p.expectStmtEnd("'if' block"); err != nil {
-		return nil, err
-	}
-
-	return &IfStmt{
-		posInfo:   posInfo{Line: ifTok.Line, Col: ifTok.Col},
-		Condition: cond,
-		ThenBody:  thenBody,
-		ElseBody:  elseBody,
-	}, nil
 }
 
 func (p *Parser) parseRepeatStmt() (Stmt, error) {

@@ -98,15 +98,6 @@ type SayStmt struct {
 
 func (*SayStmt) stmtNode() {}
 
-type IfStmt struct {
-	posInfo
-	Condition Expr
-	ThenBody  []Stmt
-	ElseBody  []Stmt
-}
-
-func (*IfStmt) stmtNode() {}
-
 type RepeatStmt struct {
 	posInfo
 	Count Expr

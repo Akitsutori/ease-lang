@@ -1217,11 +1217,8 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 func TestMinusRuleAtomicLiteralVsSubtraction(t *testing.T) {
 	src := `
 to classify n
-    if n > 0
-        "positive"
-    else
-        "non-positive"
-    end
+    check n > 0 -> "positive"
+    "non-positive"
 end
 
 to get_count
@@ -1662,11 +1659,10 @@ to log_only_success res
     end
 end
 
-to inspect_if res
-    if res is ErrorMessage
-        "if:{res.code}:{res.message}"
-    else
-        "other"
+to inspect_check res
+    check
+        res is ErrorMessage -> "check:{res.code}:{res.message}"
+        else                -> "other"
     end
 end
 
@@ -1710,8 +1706,8 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     env1.res is "OK"
     env2 = (do decode_json '{"res": {"code": 400, "message": "Bad"}}') as envelope
     env2.res is ErrorMessage
-    do inspect_if env2.res is "if:400:Bad"
-    do inspect_if "OK" is "other"
+    do inspect_check env2.res is "check:400:Bad"
+    do inspect_check "OK" is "other"
 
     # Heterogeneous union list + JSON array coercion
     items = list as outcome
@@ -1967,7 +1963,7 @@ end
 			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"TIMEOUT\"", "Add a branch for \"TIMEOUT\" or add an 'else -> ...' fallback."},
 		},
 		{
-			name: "narrowing field outside if branch on union variable",
+			name: "narrowing field outside check branch on union variable",
 			src: `
 def ErrorMessage
     code    = 500
@@ -1975,8 +1971,9 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to inspect res
-    if res is ErrorMessage
-        say "{res.code}"
+    check
+        res is ErrorMessage -> say "{res.code}"
+        else                -> say "other"
     end
     say "{res.code}"
 end
@@ -2311,4 +2308,130 @@ resp = do http_call req
 		t.Fatalf("expected EvalProgram with EASE_STD=1 override to succeed, got: %v", err)
 	}
 	_ = pOverride
+}
+
+func TestFunctionScopingReadOnlyGlobalsBlockScopeAndNoIf(t *testing.T) {
+	// 1. Function local assignment does not overwrite global, and reading global works.
+	src := `
+tax_rate = 0.2
+total = 100
+
+to sum_to n
+    total = 0
+    for do range 1 n do
+        total = total + it
+    end
+    total
+end
+
+to with_tax price
+    price + (price * tax_rate)
+end
+
+say do sum_to 3
+say total
+say do with_tax 10
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("expected valid scoping program, got error: %v", err)
+	}
+	if got, want := strings.TrimSpace(out.String()), "6\n100\n12"; got != want {
+		t.Fatalf("unexpected output: got %q, want %q", got, want)
+	}
+
+	// 2. Attempting to mutate a global (read before local assignment) raises clear RuntimeError.
+	mutateGlobalSrc := `
+count = 0
+to bump
+    count = count + 1
+end
+do bump
+`
+	if _, err := EvalProgram(mutateGlobalSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot modify global 'count' inside a function; pass it in and return the new value instead.") {
+		t.Fatalf("expected global mutation error, got: %v", err)
+	}
+
+	// 3. Reading a global earlier in a function when it is assigned later in a block also fails cleanly.
+	mixedScopeSrc := `
+total = 100
+to mixed n
+    for do range 1 n do
+        total = 0
+    end
+    total
+end
+say do mixed 2
+`
+	if _, err := EvalProgram(mixedScopeSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot modify global 'total' inside a function") {
+		t.Fatalf("expected mixed global/local error, got: %v", err)
+	}
+
+	// 4. Block scope in check (-> and else) keeps newly assigned variables local to the branch.
+	checkArrowLeakSrc := `
+to describe x
+    check x > 0 -> r = "pos"
+    "got {r}"
+end
+say do describe 1
+`
+	if _, err := EvalProgram(checkArrowLeakSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Unknown variable "r"`) {
+		t.Fatalf("expected block-scoped r inside check -> to be unknown outside, got: %v", err)
+	}
+
+	checkElseLeakSrc := `
+to describe x
+    check
+        x > 0 -> r = "pos"
+        else
+            r = "non-pos"
+    end
+    "got {r}"
+end
+say do describe 0
+`
+	if _, err := EvalProgram(checkElseLeakSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Unknown variable "r"`) {
+		t.Fatalf("expected block-scoped r inside check else to be unknown outside, got: %v", err)
+	}
+
+	// Updating a pre-declared local variable inside check works.
+	checkUpdateLocalSrc := `
+to describe x
+    r = "non-pos"
+    check x > 0 -> r = "pos"
+    "got {r}"
+end
+say do describe 1
+`
+	var out2 bytes.Buffer
+	if _, err := EvalProgram(checkUpdateLocalSrc, &out2); err != nil {
+		t.Fatalf("expected pre-declared local update inside check to succeed, got: %v", err)
+	}
+	if got := strings.TrimSpace(out2.String()); got != "got pos" {
+		t.Fatalf("unexpected output: got %q, want %q", got, "got pos")
+	}
+
+	// 5. Reassigning a function parameter gives a parameter-specific error (not 'def' constant).
+	paramReassignSrc := `
+to inc n
+    n = n + 1
+    n
+end
+say do inc 1
+`
+	if _, err := EvalProgram(paramReassignSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Cannot reassign parameter "n"; assign to a new local variable instead.`) {
+		t.Fatalf("expected parameter reassignment error, got: %v", err)
+	}
+
+	// 6. 'if ... end' is removed from Ease.
+	ifStmtSrc := `
+to f x
+    if x > 0
+        "pos"
+    end
+end
+`
+	if _, err := ParseProgram(ifStmtSrc); err == nil {
+		t.Fatalf("expected 'if ... end' to fail parsing after removal")
+	}
 }

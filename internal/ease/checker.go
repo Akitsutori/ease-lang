@@ -65,7 +65,7 @@ func RunChecksWithTrace(source string, trace io.Writer) (*CheckReport, error) {
 func runCheckList(ev *Evaluator, scope string, items []Stmt, env *Env, report *CheckReport) {
 	for _, item := range items {
 		switch c := item.(type) {
-		case *LetStmt, *AssignStmt, *IfStmt, *RepeatStmt, *ForStmt:
+		case *LetStmt, *AssignStmt, *RepeatStmt, *ForStmt:
 			if _, _, err := ev.execStmt(c, env); err != nil {
 				line, _ := c.Pos()
 				report.Total++

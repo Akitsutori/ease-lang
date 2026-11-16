@@ -46,11 +46,10 @@ end
 say "--- Einlasskontrolle ---"
 user_name = ask "Wie heißt du?"
 raw_age   = ask "Wie alt bist du?"
-if raw_age is ""
-    result = do allow_entry user_name raw_age
-    say result
-else
-    user_age = raw_age as number
-    result = do allow_entry user_name user_age
-    say result
+check
+    raw_age is "" -> say (do allow_entry user_name raw_age)
+    else
+        user_age = raw_age as number
+        result = do allow_entry user_name user_age
+        say result
 end

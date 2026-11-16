@@ -18,7 +18,7 @@
    - [Variables, Constants & Types](#variables-constants--types)
    - [Functions (`to ... end`) & Calls (`do`)](#functions-to--end--calls-do)
    - [Records (`def`), `with` Copies & Union Types](#records-def-with-copies--union-types)
-   - [Guards (`check`), Type Narrowing & Exhaustiveness (`if`, `check`)](#guards-check-type-narrowing--exhaustiveness-if-check)
+   - [Guards (`check`), Type Narrowing & Exhaustiveness](#guards-check-type-narrowing--exhaustiveness)
    - [Type Checks & Conversions (`is`, `is not`, `as`)](#type-checks--conversions-is-is-not-as)
    - [Lists & Loops (`list`, `repeat`, `for`)](#lists--loops-list-repeat-for)
    - [Built-in Tests (`test` & `check`)](#built-in-tests-test--check)
@@ -85,7 +85,7 @@ Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <fi
 Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`.
 
 By design, **Boolean (`bool`) and `true`/`false` literals do not exist in Ease** — omitting `bool` eliminates *boolean blindness* and makes code simpler to reason about:
-1. **Conditions stay inside control flow**: Comparisons (`amount >= 50`, `status is "open"`) and combinators (`and`, `or`, `not`) evaluate directly in `check`, `if`, and `test` instead of being passed around as raw flags.
+1. **Conditions stay inside control flow**: Comparisons (`amount >= 50`, `status is "open"`) and combinators (`and`, `or`, `not`) evaluate directly in `check` and `test` instead of being passed around as raw flags.
 2. **Stored or returned outcomes use explicit `def` states**: Instead of returning anonymous `true`/`false`, you name what was decided (`def decision` with `answer = "yes" | "no"`, or domain variants like `def door_state = "open" | "locked"`). Every state documents itself at the call site and rejects invalid values automatically.
 
 ```ease
@@ -105,6 +105,12 @@ raw_json = '{"id": 7, "name": "Guest", "role": "admin"}'
 ```
 
 Line comments start with `#`.
+
+**Scoping Rules** (zero implicit global mutation):
+- **Read-only globals in functions**: Top-level variables and `def` constants can be read inside `to` functions, never mutated.
+- **Assigned-in-Function = Local**: Any assignment `x = ...` inside a function creates or updates a local variable without touching a global of the same name. Reading a global name before assigning it locally in the same function raises `RuntimeError` (`Cannot modify global '<name>' inside a function; pass it in and return the new value instead.`).
+- **Immutable parameters**: Function parameters cannot be reassigned; bind a new local variable instead.
+- **Block scope**: `check` (both `->` and `else` branches), `for`, and `repeat` create their own block scope; loop variables (`it` or named item) stay strictly loop-local.
 
 ---
 
@@ -216,11 +222,11 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 
 ---
 
-### Guards (`check`), Type Narrowing & Exhaustiveness (`if`, `check`)
+### Guards (`check`), Type Narrowing & Exhaustiveness
 
-`check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals.
+`check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals (Ease has no `if` statement — all conditional branching uses `check` with optional `else`).
 
-- **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or inside `if res is ErrorMessage ... end`, or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
+- **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
 - **Exhaustiveness Check**: A `check ... end` block matching a closed union without a fallback (`else -> ...` or a post-`end` expression) must handle every flattened variant — otherwise compilation stops with `Non-exhaustive check on '<union>' (Missing case: ...)`.
 - **Explicit fallback (`else -> ...`)**: When only specific variants matter, add `else -> ...` to handle everything else explicitly.
 
@@ -268,14 +274,13 @@ end
 check status is "error" -> do fail "Aborted"
 ```
 
-Standard conditional branching uses `if ... [else ...] end`:
+Conditional branching with `else` uses `check`:
 
 ```ease
 to classify n
-    if n > 0
-        "positive"
-    else
-        "non-positive"
+    check
+        n > 0 -> "positive"
+        else  -> "non-positive"
     end
 end
 ```
@@ -397,7 +402,7 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 
 1. **One-page learnable grammar ([`llms.txt`](llms.txt))**: A model with zero prior Ease training data can load the entire formal grammar and standard library in a single small prompt without conflicting dialects.
 2. **One canonical syntax per construct**: Function declarations (`to add a b`) and calls (`do add 2 3`) never use brackets or commas; equality and type assertions both use `is` / `is not` (no `==`/`!=`/`is-not` aliases); blocks always close with `end`. Commas appear only in `list` literals and single-line `with` updates.
-3. **Self-documenting states instead of `bool`, enforced by `def`/`to`/`do`**: Removing `bool` eliminates boolean blindness — conditions (`amount >= 50`) live inside `check`/`if`/`test`, while returned states use explicit `def` union types (`"yes" | "no"`, `"open" | "locked"`). At the same time, the `def` (noun) / `to` (infinitive verb) / `do` (imperative call) triad exposes sloppy names like `to can_ship` immediately when read aloud.
+3. **Self-documenting states instead of `bool`, enforced by `def`/`to`/`do`**: Removing `bool` eliminates boolean blindness — conditions (`amount >= 50`) live inside `check` and `test`, while returned states use explicit `def` union types (`"yes" | "no"`, `"open" | "locked"`). At the same time, the `def` (noun) / `to` (infinitive verb) / `do` (imperative call) triad exposes sloppy names like `to can_ship` immediately when read aloud.
 4. **Zero implicit magic + repairable diagnostics**: Parsing (`do decode_json`) is strictly separated from schema validation (`as <def>`, where every declared field is mandatory without silent default-filling; defaults stay exclusively in `with`). Unknown types (`as ö`, `as bool`) and mismatched fields abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
 5. **Built-in self-verification & machine interfaces**: Agents can verify their own output in one command with `ease test` (including `raises` error assertions) and inspect structure deterministically via `ease ast`, `ease tokens`, and `ease lsp`.
 
@@ -477,7 +482,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```text
 Keywords:
   to  import  def  with  end  test  check  is  raises
-  do  say  ask  as  if  else  repeat  for  in
+  do  say  ask  as  else  repeat  for  in
   and  or  not  text  number  list
 
 Operators & Punctuation:
@@ -520,7 +525,6 @@ top_test_blk   ::= "test" [STRING] [NL] { check_item [NL] } "end"
 stmt           ::= "do" "say" expr stmt_end
                  | "do" expr stmt_end
                  | "say" expr stmt_end
-                 | if_stmt
                  | repeat_stmt
                  | for_stmt
                  | check_guard
@@ -528,10 +532,6 @@ stmt           ::= "do" "say" expr stmt_end
                  | expr stmt_end
 
 assign_stmt    ::= IDENT "=" expr stmt_end
-
-if_stmt        ::= "if" expr [NL] { stmt [NL] }
-                   [ "else" [NL] { stmt [NL] } ]
-                   "end" stmt_end
 
 repeat_stmt    ::= "repeat" expr [NL] { stmt [NL] } "end" stmt_end
 
