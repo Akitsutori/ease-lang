@@ -1406,9 +1406,12 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	case TOK_LPAREN:
 		p.advance()
 		prevDisallowAs := p.disallowAs
+		prevDisallowTopIs := p.disallowTopIs
 		p.disallowAs = false
+		p.disallowTopIs = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
+		p.disallowTopIs = prevDisallowTopIs
 		if err != nil {
 			return nil, err
 		}

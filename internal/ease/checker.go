@@ -103,7 +103,18 @@ func runCheckList(ev *Evaluator, scope string, items []Stmt, env *Env, report *C
 				})
 				continue
 			}
-			if ValuesEqual(actual, expected) {
+			matched, errM := ev.evalIs(actual, expected, c.Line, c.Col)
+			if errM != nil {
+				report.Failed++
+				report.Results = append(report.Results, CheckOutcome{
+					Scope:   scope,
+					Line:    c.Line,
+					Passed:  false,
+					Message: fmt.Sprintf("Line %d ('is'): unexpected error: %v", c.Line, errM),
+				})
+				continue
+			}
+			if matched {
 				report.Passed++
 				report.Results = append(report.Results, CheckOutcome{
 					Scope:   scope,
@@ -145,7 +156,18 @@ func runCheckList(ev *Evaluator, scope string, items []Stmt, env *Env, report *C
 				})
 				continue
 			}
-			if !ValuesEqual(actual, unexpected) {
+			matched, errM := ev.evalIs(actual, unexpected, c.Line, c.Col)
+			if errM != nil {
+				report.Failed++
+				report.Results = append(report.Results, CheckOutcome{
+					Scope:   scope,
+					Line:    c.Line,
+					Passed:  false,
+					Message: fmt.Sprintf("Line %d ('is-not'): unexpected error: %v", c.Line, errM),
+				})
+				continue
+			}
+			if !matched {
 				report.Passed++
 				report.Results = append(report.Results, CheckOutcome{
 					Scope:   scope,

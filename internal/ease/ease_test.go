@@ -2021,3 +2021,117 @@ end
 		}
 	}
 }
+
+func TestStrictIsTypeInstanceSeparationAndNestedRecordDefaults(t *testing.T) {
+	// Acceptance criteria:
+	// 1. a = user with id = 1 -> a is user == true
+	// 2. b = user with id = 2 -> b is user == true
+	// 3. a is b == false (value equality, transitive)
+	// 4. user is a -> error (TypeError, not false) and user is user -> error
+	// 5. (line with a = pt) is (line with a = (pt with x = 9)) -> false (nested record defaults are instantiated)
+	src := `
+def user
+    id = 0
+end
+
+def pt
+    x = 0
+end
+
+def line
+    a = pt
+end
+
+a = user with id = 1
+b = user with id = 2
+c = user with id = 1
+
+l_default = line with a = pt
+l_x0      = line with a = (pt with x = 0)
+l_x9      = line with a = (pt with x = 9)
+
+test "strict asymmetric is and instantiated nested record defaults"
+    a is user
+    b is user
+    a is not b
+    a is c
+    l_default.a is pt
+    l_default is l_x0
+    l_default is not l_x9
+    (user is a) raises "cannot use record type 'user' as a value on the left side of 'is'"
+    (user is user) raises "cannot use record type 'user' as a value on the left side of 'is'"
+    (user is not a) raises "cannot use record type 'user' as a value on the left side of 'is'"
+    (user is text) raises "cannot use record type 'user' as a value on the left side of 'is'"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 11 {
+		t.Fatalf("expected 11 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Verify runtime failures when a prototype or union appears on the left of `is` (must error, never return false).
+	leftTypeErrCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "user is a",
+			src:  "def user\n    id = 0\nend\na = user with id = 1\nsay user is a\n",
+			want: "cannot use record type 'user' as a value on the left side of 'is'",
+		},
+		{
+			name: "user is user",
+			src:  "def user\n    id = 0\nend\nsay user is user\n",
+			want: "cannot use record type 'user' as a value on the left side of 'is'",
+		},
+		{
+			name: "union on left of is",
+			src:  "def role = \"guest\" | \"admin\"\nsay role is \"guest\"\n",
+			want: "cannot use union type 'role' as a value on the left side of 'is'",
+		},
+	}
+	for _, tc := range leftTypeErrCases {
+		_, err := EvalProgram(tc.src, &bytes.Buffer{})
+		if err == nil {
+			t.Fatalf("%s: expected TypeError when type is on left of 'is', got nil", tc.name)
+		}
+		var easeErr *EaseError
+		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
+			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected %q in error, got:\n%s", tc.name, tc.want, err.Error())
+		}
+	}
+
+	// Verify pure ValuesEqual directly (no prototype bypass).
+	proto := &RecordValue{TypeName: "user", Fields: map[string]Value{"id": 0.0}, IsPrototype: true}
+	inst := &RecordValue{TypeName: "user", Fields: map[string]Value{"id": 1.0}, IsPrototype: false}
+	if ValuesEqual(inst, proto) || ValuesEqual(proto, inst) || ValuesEqual(proto, proto) {
+		t.Fatalf("ValuesEqual must never return true for record prototypes")
+	}
+
+	// Verify nested record default on prototype `line` is already instantiated (IsPrototype == false).
+	prog, err := ParseProgram("def pt\n    x = 0\nend\ndef line\n    a = pt\n    b = 0\nend\nl1 = line with b = 1\nl2 = line with a = (pt with x = 9), b = 1\n")
+	if err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	ev := NewEvaluator("", prog, &bytes.Buffer{})
+	defer ev.Close()
+	if _, err := ev.ExecStatements(prog.Body, ev.global); err != nil {
+		t.Fatalf("ExecStatements failed: %v", err)
+	}
+	l1Val, _ := ev.global.Lookup("l1")
+	l2Val, _ := ev.global.Lookup("l2")
+	l1A := l1Val.(*RecordValue).Fields["a"].(*RecordValue)
+	if l1A.IsPrototype {
+		t.Fatalf("expected nested record default l1.a to be instantiated (IsPrototype=false), got IsPrototype=true")
+	}
+	if ValuesEqual(l1Val, l2Val) {
+		t.Fatalf("expected l1 (default a=pt{x:0}) != l2 (a=pt{x:9}), but ValuesEqual returned true")
+	}
+}

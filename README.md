@@ -286,7 +286,11 @@ end
 
 Ease strictly separates **format parsing**, **boundary contract validation**, and **internal construction**:
 
-- **Equality, type, and union checks**: `is`, `is not` (plus `<`, `<=`, `>`, `>=`, `and`, `or`, `not`).
+- **Asymmetric type & value checks (`is`, `is not`)**:
+  - `<value> is <type>` checks type or union membership (e.g., `a is user`, `"OK" is status`, `x is text`).
+  - `<value> is <value>` checks structural value equality between concrete values (e.g., `a is b`, `x is 5`).
+  - **Types are never allowed on the left side of `is`** (`user is a` or `user is user` immediately raises `TypeError`). Nested record defaults inside a `def` (e.g., `a = pt`) are automatically instantiated so value equality remains strictly transitive.
+  - Ordering and logic operators: `<`, `<=`, `>`, `>=`, `and`, `or`, `not`.
 - **Explicit JSON parsing & encoding**: `do decode_json <text>` parses JSON text into structured data (`map`, `list`, primitives) and fails immediately on empty or invalid JSON; `do encode_json <val>` serializes structured values (`def` records, `map`, `list`, atomic values) into JSON text.
 - **Strict structural contract with `as` (zero implicit JSON magic)**:
   - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (`as ö`, `as bool`, `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time.

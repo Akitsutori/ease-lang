@@ -32,7 +32,8 @@ test "Showcase Kernfeatures"
 
     do greet ada is "Admin-Zugang für Ada"
     do greet bob is "Konto deaktiviert"
-    do greet account is "Willkommen, Gast!"
+    guest = account with status = "active"
+    do greet guest is "Willkommen, Gast!"
 
     xs = do range 1 5
     do len xs is 5

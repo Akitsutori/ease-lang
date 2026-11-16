@@ -197,19 +197,10 @@ func matchesEaseType(v Value, typeName string) bool {
 	}
 }
 
-// ValuesEqual performs structural equality on Ease values.
+// ValuesEqual performs strict structural equality between concrete Ease values.
 func ValuesEqual(a, b Value) bool {
 	if a == nil && b == nil {
 		return true
-	}
-	if ua, ok := a.(*UnionValue); ok {
-		if ub, ok2 := b.(*UnionValue); ok2 {
-			return ua.TypeName == ub.TypeName
-		}
-		return valueInUnion(b, ua)
-	}
-	if ub, ok := b.(*UnionValue); ok {
-		return valueInUnion(a, ub)
 	}
 	switch va := a.(type) {
 	case bool:
@@ -234,11 +225,8 @@ func ValuesEqual(a, b Value) bool {
 		return true
 	case *RecordValue:
 		vb, ok := b.(*RecordValue)
-		if !ok || va.TypeName != vb.TypeName {
+		if !ok || va.IsPrototype || vb.IsPrototype || va.TypeName != vb.TypeName {
 			return false
-		}
-		if va.IsPrototype || vb.IsPrototype {
-			return true
 		}
 		if len(va.Fields) != len(vb.Fields) {
 			return false
@@ -456,7 +444,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 					}
 					continue
 				}
-				fields[f.Name] = val
+				fields[f.Name] = instantiateRecordValue(val)
 			}
 			ev.global.Define(def.Name, &RecordValue{
 				TypeName:    def.Name,
@@ -483,6 +471,26 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		}
 	}
 	return ev
+}
+
+func instantiateRecordValue(v Value) Value {
+	rec, ok := v.(*RecordValue)
+	if !ok || rec == nil || !rec.IsPrototype {
+		return v
+	}
+	fieldsCopy := make(map[string]Value, len(rec.Fields))
+	for k, fv := range rec.Fields {
+		fieldsCopy[k] = instantiateRecordValue(fv)
+	}
+	orderCopy := make([]string, len(rec.Order))
+	copy(orderCopy, rec.Order)
+	return &RecordValue{
+		TypeName:    rec.TypeName,
+		Fields:      fieldsCopy,
+		Allowed:     rec.Allowed,
+		Order:       orderCopy,
+		IsPrototype: false,
+	}
 }
 
 func (ev *Evaluator) evalUnionVariantExpr(expr Expr, env *Env) ([]Value, error) {
@@ -513,7 +521,7 @@ func defaultValueForUnionOption(opt Value) Value {
 	case *RecordValue:
 		fieldsCopy := make(map[string]Value, len(o.Fields))
 		for k, v := range o.Fields {
-			fieldsCopy[k] = v
+			fieldsCopy[k] = instantiateRecordValue(v)
 		}
 		orderCopy := make([]string, len(o.Order))
 		copy(orderCopy, o.Order)
@@ -1051,6 +1059,9 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ev.checkLeftOfIsNotType(targetVal, e.Line, e.Col); err != nil {
+			return nil, err
+		}
 		matched := matchesEaseType(targetVal, e.TypeName)
 		if e.Negated {
 			return !matched, nil
@@ -1230,7 +1241,7 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFieldUpdate, env *Env) (*RecordValue, error) {
 	cloned := make(map[string]Value, len(rec.Fields))
 	for k, v := range rec.Fields {
-		cloned[k] = v
+		cloned[k] = instantiateRecordValue(v)
 	}
 	for _, upd := range updates {
 		if _, exists := cloned[upd.Name]; !exists {
@@ -1275,7 +1286,7 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 				fmt.Sprintf("Keep the field type of '%s.%s' (%s).", rec.TypeName, upd.Name, TypeName(origVal)),
 			)
 		}
-		cloned[upd.Name] = newVal
+		cloned[upd.Name] = instantiateRecordValue(newVal)
 	}
 	orderCopy := make([]string, len(rec.Order))
 	copy(orderCopy, rec.Order)
@@ -1288,12 +1299,57 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 	}, nil
 }
 
+func (ev *Evaluator) checkLeftOfIsNotType(left Value, line, col int) error {
+	if rec, ok := left.(*RecordValue); ok && rec.IsPrototype {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("cannot use record type '%s' as a value on the left side of 'is'", rec.TypeName),
+			fmt.Sprintf("Put the value on the left and the type on the right (e.g. 'item is %s'), or create an instance with '%s with ...'.", rec.TypeName, rec.TypeName),
+		)
+	}
+	if u, ok := left.(*UnionValue); ok {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("cannot use union type '%s' as a value on the left side of 'is'", u.TypeName),
+			fmt.Sprintf("Put a concrete value on the left side of 'is' (e.g. 'val is %s').", u.TypeName),
+		)
+	}
+	return nil
+}
+
+func (ev *Evaluator) evalIs(left, right Value, line, col int) (bool, error) {
+	if err := ev.checkLeftOfIsNotType(left, line, col); err != nil {
+		return false, err
+	}
+	if recRight, ok := right.(*RecordValue); ok && recRight.IsPrototype {
+		recLeft, isRec := left.(*RecordValue)
+		return isRec && !recLeft.IsPrototype && recLeft.TypeName == recRight.TypeName, nil
+	}
+	if uRight, ok := right.(*UnionValue); ok {
+		return valueInUnion(left, uRight), nil
+	}
+	if btRight, ok := right.(BaseTypeValue); ok {
+		return matchesEaseType(left, string(btRight)), nil
+	}
+	return ValuesEqual(left, right), nil
+}
+
 func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (Value, error) {
 	switch op {
 	case "==", "is":
-		return ValuesEqual(left, right), nil
+		return ev.evalIs(left, right, line, col)
 	case "!=", "is-not":
-		return !ValuesEqual(left, right), nil
+		eq, err := ev.evalIs(left, right, line, col)
+		if err != nil {
+			return nil, err
+		}
+		return !eq, nil
 	case "+":
 		if _, lok := left.(string); lok {
 			return FormatValue(left) + FormatValue(right), nil
@@ -1815,7 +1871,7 @@ func valueMatchesUnionOption(v Value, opt Value) bool {
 	}
 	if recOpt, ok := opt.(*RecordValue); ok && recOpt.IsPrototype {
 		recVal, isRec := v.(*RecordValue)
-		return isRec && recVal.TypeName == recOpt.TypeName
+		return isRec && !recVal.IsPrototype && recVal.TypeName == recOpt.TypeName
 	}
 	return ValuesEqual(v, opt)
 }
