@@ -1017,6 +1017,56 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		}
 		return ev.cloneRecordWithUpdates(rec, e.Updates, env)
 
+	case *WhereExpr:
+		targetVal, err := ev.EvalExpr(e.Target, env)
+		if err != nil {
+			return nil, err
+		}
+		lv, ok := targetVal.(*ListValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'where' on %s", TypeName(targetVal)),
+				"'where' filters a list, e.g.: orders where it.amount > 50.",
+			)
+		}
+		out := make([]Value, 0)
+		for idx, el := range lv.Elements {
+			iterEnv := NewEnv(env)
+			iterEnv.Define("it", el, false)
+			iterEnv.SetLoopIndex(float64(idx))
+			keep := true
+			for _, cond := range e.Conditions {
+				condVal, err := ev.EvalExpr(cond, iterEnv)
+				if err != nil {
+					return nil, err
+				}
+				b, isBool := condVal.(bool)
+				if !isBool {
+					cLine, cCol := cond.Pos()
+					return nil, newError(
+						"TypeError",
+						cLine,
+						cCol,
+						ev.source,
+						fmt.Sprintf("'where' condition must evaluate to a condition, got %s", TypeName(condVal)),
+						"Write a comparison like 'it.amount > 50' or 'it.status is \"paid\"'.",
+					)
+				}
+				if !b {
+					keep = false
+					break
+				}
+			}
+			if keep {
+				out = append(out, el)
+			}
+		}
+		return &ListValue{ElemType: lv.ElemType, Elements: out}, nil
+
 	case *CallExpr:
 		args := make([]Value, len(e.Args))
 		for i, a := range e.Args {
@@ -1090,7 +1140,7 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 
 	out := make([]Value, 0, len(lv.Elements))
 	elemType := lv.ElemType
-	for _, item := range lv.Elements {
+	for idx, item := range lv.Elements {
 		rec, ok := item.(*RecordValue)
 		if !ok {
 			return nil, newError(
@@ -1106,10 +1156,8 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 			elemType = rec.TypeName
 		}
 		itemEnv := NewEnv(env)
-		for k, v := range rec.Fields {
-			itemEnv.Define(k, v, false)
-		}
 		itemEnv.Define("it", rec, false)
+		itemEnv.SetLoopIndex(float64(idx))
 		inst, err := ev.cloneRecordWithUpdates(rec, updates, itemEnv)
 		if err != nil {
 			return nil, err

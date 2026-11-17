@@ -15,6 +15,7 @@ type Parser struct {
 	pos           int
 	depth         int
 	disallowTopIs bool
+	stopChainedIs bool
 	disallowAs    bool
 	inTestBlock   bool
 	funcArities   map[string]int
@@ -137,7 +138,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, extraArities map[string
 				(p.tokens[i+1].Type == TOK_STRING && i+2 < len(p.tokens) && p.tokens[i+2].Type == TOK_NEWLINE)) {
 				blockDepth++
 			}
-		case TOK_WITH:
+		case TOK_WITH, TOK_WHERE:
 			if i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_NEWLINE {
 				blockDepth++
 			}
@@ -1176,6 +1177,7 @@ func (p *Parser) parseComparison() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	hasComparison := false
 	for {
 		if p.check(TOK_LT) || p.check(TOK_LTE) || p.check(TOK_GT) || p.check(TOK_GTE) {
 			opTok := p.advance()
@@ -1184,9 +1186,10 @@ func (p *Parser) parseComparison() (Expr, error) {
 				return nil, err
 			}
 			left = &BinaryExpr{posInfo: posInfo{Line: opTok.Line, Col: opTok.Col}, Left: left, Op: opTok.Lexeme, Right: right}
+			hasComparison = true
 			continue
 		}
-		if !p.disallowTopIs && p.check(TOK_IS) {
+		if !p.disallowTopIs && !(hasComparison && p.stopChainedIs) && p.check(TOK_IS) {
 			opTok := p.advance()
 			negated := p.match(TOK_NOT)
 			isBareListType := p.check(TOK_LIST_KW) && p.isTypeAssertionEnd(p.peekNext().Type)
@@ -1198,6 +1201,7 @@ func (p *Parser) parseComparison() (Expr, error) {
 					TypeName: typeTok.Lexeme,
 					Negated:  negated,
 				}
+				hasComparison = true
 				continue
 			}
 			right, err := p.parseTerm()
@@ -1209,6 +1213,7 @@ func (p *Parser) parseComparison() (Expr, error) {
 				op = "is-not"
 			}
 			left = &BinaryExpr{posInfo: posInfo{Line: opTok.Line, Col: opTok.Col}, Left: left, Op: op, Right: right}
+			hasComparison = true
 			continue
 		}
 		break
@@ -1373,6 +1378,75 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				}
 			}
 			expr = &WithExpr{posInfo: posInfo{Line: line, Col: col}, Base: expr, Updates: updates}
+			continue
+		}
+
+		if p.match(TOK_WHERE) {
+			line, col := expr.Pos()
+			prevDisallowTopIs := p.disallowTopIs
+			prevStopChainedIs := p.stopChainedIs
+			p.disallowTopIs = false
+
+			var conditions []Expr
+			isBlock := false
+			if p.match(TOK_NEWLINE) {
+				isBlock = true
+				p.stopChainedIs = false
+				p.skipNewlines()
+				for !p.check(TOK_END) {
+					if p.check(TOK_EOF) {
+						p.disallowTopIs = prevDisallowTopIs
+						p.stopChainedIs = prevStopChainedIs
+						return nil, newError(
+							"SyntaxError",
+							line,
+							col,
+							p.source,
+							"Multiline 'where' block is missing 'end'",
+							"Close every multiline 'where' block with 'end'.",
+						)
+					}
+					cond, err := p.parseExpr()
+					if err != nil {
+						p.disallowTopIs = prevDisallowTopIs
+						p.stopChainedIs = prevStopChainedIs
+						return nil, err
+					}
+					conditions = append(conditions, cond)
+					if err := p.expectStmtEnd("'where' condition"); err != nil {
+						p.disallowTopIs = prevDisallowTopIs
+						p.stopChainedIs = prevStopChainedIs
+						return nil, err
+					}
+					p.skipNewlines()
+				}
+				p.advance() // consume `end`
+				if len(conditions) == 0 {
+					p.disallowTopIs = prevDisallowTopIs
+					p.stopChainedIs = prevStopChainedIs
+					return nil, newError(
+						"SyntaxError",
+						line,
+						col,
+						p.source,
+						"'where' block requires at least one condition",
+						"Write one condition per line inside 'where ... end'.",
+					)
+				}
+			} else {
+				p.stopChainedIs = prevDisallowTopIs
+				cond, err := p.parseExpr()
+				if err != nil {
+					p.disallowTopIs = prevDisallowTopIs
+					p.stopChainedIs = prevStopChainedIs
+					return nil, err
+				}
+				conditions = []Expr{cond}
+			}
+
+			p.disallowTopIs = prevDisallowTopIs
+			p.stopChainedIs = prevStopChainedIs
+			expr = &WhereExpr{posInfo: posInfo{Line: line, Col: col}, Target: expr, Conditions: conditions, IsBlock: isBlock}
 			continue
 		}
 

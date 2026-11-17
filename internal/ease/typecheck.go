@@ -724,6 +724,11 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if baseSt.exactRecord != "" {
 			return varTypeState{exactRecord: baseSt.exactRecord}
 		}
+		if baseSt.listElemType != "" {
+			return varTypeState{listElemType: baseSt.listElemType}
+		}
+	case *WhereExpr:
+		return v.inferExprTypeState(ex.Target)
 	case *FieldExpr:
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 			return varTypeState{exactNonRecord: true}
@@ -1022,6 +1027,36 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkExpr(ex.Base); err != nil {
 			return err
 		}
+		baseSt := v.inferExprTypeState(ex.Base)
+		if baseSt.listElemType != "" {
+			if !v.inErrorTestExpr && (baseSt.listElemType == "number" || baseSt.listElemType == "text") {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Cannot use 'with' on list of %s", baseSt.listElemType),
+					"'with' on a list only supports lists of 'def' records.",
+				)
+			}
+			withScope := v.pushScope()
+			withScope.vars["it"] = v.inferIterableElemState(ex.Base)
+			v.loopDepth++
+			var updErr error
+			for _, upd := range ex.Updates {
+				if err := v.checkExpr(upd.Value); err != nil {
+					updErr = err
+					break
+				}
+				if err := v.checkNotCondition(upd.Value); err != nil {
+					updErr = err
+					break
+				}
+			}
+			v.loopDepth--
+			v.popScope()
+			return updErr
+		}
 		for _, upd := range ex.Updates {
 			if err := v.checkExpr(upd.Value); err != nil {
 				return err
@@ -1030,6 +1065,36 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return err
 			}
 		}
+
+	case *WhereExpr:
+		if err := v.checkExpr(ex.Target); err != nil {
+			return err
+		}
+		targetSt := v.inferExprTypeState(ex.Target)
+		if !v.inErrorTestExpr && (targetSt.exactRecord != "" || targetSt.exactNonRecord || targetSt.unionName != "") {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"Cannot use 'where' on non-list value",
+				"'where' filters a list, e.g.: orders where it.amount > 50.",
+			)
+		}
+		whereScope := v.pushScope()
+		whereScope.vars["it"] = v.inferIterableElemState(ex.Target)
+		v.loopDepth++
+		var condErr error
+		for _, cond := range ex.Conditions {
+			if err := v.checkExpr(cond); err != nil {
+				condErr = err
+				break
+			}
+			v.applyCondNarrowing(whereScope, cond, true)
+		}
+		v.loopDepth--
+		v.popScope()
+		return condErr
 
 	case *CallExpr:
 		if !v.inErrorTestExpr && (ex.Callee == "sum" || ex.Callee == "avg") && len(ex.Args) >= 1 {

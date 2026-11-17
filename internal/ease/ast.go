@@ -313,6 +313,16 @@ type WithExpr struct {
 
 func (*WithExpr) exprNode() {}
 
+// WhereExpr filters a list using `it` and `it.index` against one or more conditions.
+type WhereExpr struct {
+	posInfo
+	Target     Expr
+	Conditions []Expr
+	IsBlock    bool
+}
+
+func (*WhereExpr) exprNode() {}
+
 type CallExpr struct {
 	posInfo
 	Callee string

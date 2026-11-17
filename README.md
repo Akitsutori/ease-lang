@@ -425,6 +425,20 @@ combined = append (list 1, 2) (list 3, 4)
 total_sum = sum totals
 mean_price = avg prices
 ordered = sort (list 30, 10, 20)        # returns a sorted copy [10, 20, 30]
+
+# Declarative filtering with `where` (uses `it` and `it.index`)
+paid = orders where it.status is "paid" and it.amount > 50
+
+vip = orders where
+    it.status is "paid"
+    it.amount >= 100
+end
+
+# Union narrowing works inside `where` as well
+server_errors = items where it is ErrorMessage and it.code >= 500
+
+# Batch `with` on record lists (uses `it` and `it.index`, never implicit field injection)
+moved = cloud with x = it.x + it.vx
 ```
 
 > **Note:** `def` records cannot declare a field named `index` (reserved for `it.index` inside `loop`), and `loop` requires a list or `range` (e.g. `loop range 1 3`, not `loop 3`).
@@ -573,7 +587,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 
 ```text
 Keywords:
-  to  import  def  with  end  test  check  is
+  to  import  def  with  where  end  test  check  is
   say  as  else  loop
   and  or  not  text  number  list
 
@@ -664,12 +678,16 @@ postfix        ::= primary { "." IDENT
                            | "." INT_PATH                (* e.g. .0 or .0.1 *)
                            | "." "(" expr ")"            (* computed list/string index *)
                            | with_clause
+                           | where_clause
                            | "as" cast_type
                            | call_args }                 (* when base IDENT is a known function of arity k *)
 
 with_clause    ::= "with" NL { with_field stmt_end [NL] } "end"
                  | "with" with_field { "," with_field }
 with_field     ::= IDENT "=" expr
+
+where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
+                 | "where" expr
 
 cast_type      ::= "text" | "number" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
 

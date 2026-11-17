@@ -1933,3 +1933,110 @@ end
 		t.Fatalf("expected 1 failed check when error block succeeds, got rep=%+v err=%v", noErrRep, err)
 	}
 }
+
+func TestWhereFilterAndBatchWithIt(t *testing.T) {
+	src := `
+def order
+    id     = 0
+    status = "open" | "paid"
+    amount = 0
+end
+
+def ErrorMessage
+    code    = 500
+    message = "Unknown"
+end
+
+def outcome = "OK" | ErrorMessage
+
+def particle
+    x  = 0
+    vx = 0
+end
+
+test "where filters and batch-with using it"
+    orders = list as order with
+        id = 1, status = "open", amount = 120
+        id = 2, status = "paid", amount = 40
+        id = 3, status = "paid", amount = 80
+        id = 4, status = "paid", amount = 150
+    end
+
+    expected_orders = list as order with
+        id = 3, status = "paid", amount = 80
+        id = 4, status = "paid", amount = 150
+    end
+
+    # Single-line where inside test assertion (no parens needed around where-clause!)
+    orders where it.status is "paid" and it.amount > 50 is expected_orders
+
+    # Multi-line where block with it.index
+    tail_paid = orders where
+        it.status is "paid"
+        it.index >= 3
+    end
+    count tail_paid is 1
+    tail_paid.0.id is 4
+
+    # Union narrowing inside where
+    e1 = ErrorMessage with code = 404, message = "Not Found"
+    e2 = ErrorMessage with code = 503, message = "Unavailable"
+    items = list as outcome
+    items = append items "OK"
+    items = append items e1
+    items = append items e2
+
+    server_errs = items where it is ErrorMessage and it.code >= 500
+    count server_errs is 1
+    server_errs.0 is e2
+
+    # Batch-with using it and it.index
+    cloud = list as particle with
+        x = 10, vx = 5
+        x = 20, vx = -3
+    end
+    moved = cloud with x = it.x + it.vx
+    moved.0.x is 15
+    moved.1.x is 17
+    cloud.0.x is 10
+
+    indexed = cloud with x = it.index * 100
+    indexed.0.x is 0
+    indexed.1.x is 100
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 10 {
+		t.Fatalf("expected 10 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	negCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "where condition not boolean",
+			src:  "say (list 1, 2) where it + 1\n",
+			want: "'where' condition must evaluate to a condition, got number",
+		},
+		{
+			name: "where on non-list",
+			src:  "say 42 where it > 0\n",
+			want: "Cannot use 'where' on",
+		},
+		{
+			name: "batch-with without it prefix fails",
+			src:  "def particle\n  x = 0\n  vx = 0\nend\ncloud = list as particle with\n  x = 1, vx = 2\nend\nmoved = cloud with x = x + vx\n",
+			want: "Unknown variable \"x\"",
+		},
+	}
+	for _, tc := range negCases {
+		if _, err := EvalProgram(tc.src, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
+		}
+	}
+}

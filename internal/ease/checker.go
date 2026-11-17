@@ -355,6 +355,8 @@ func (r *testRunner) buildVarsDetail(exprs []Expr, suffix string, env *Env) stri
 			for _, upd := range ex.Updates {
 				walk(upd.Value)
 			}
+		case *WhereExpr:
+			walk(ex.Target)
 		case *CastExpr:
 			walk(ex.Target)
 		case *TypeCheckExpr:

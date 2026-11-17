@@ -394,7 +394,7 @@ test "Rule 4: batch-with on record lists"
         x = 0, vx = 5, life = 20
         x = 10, vx = 2, life = 5
     end
-    moved = cloud with x = x + vx
+    moved = cloud with x = it.x + it.vx
     count moved is 2
     moved.0 is particle
     moved.0.x is 5
@@ -403,7 +403,7 @@ test "Rule 4: batch-with on record lists"
 
     p1 = particle with x = 1, vx = 3
     p2 = particle with x = 4, vx = 6
-    moved2 = (list p1, p2) with x = x + vx
+    moved2 = (list p1, p2) with x = it.x + it.vx
     moved2.0.x is 4
     moved2.1.x is 10
     (append moved2 (list p1)).2.x is 1
@@ -465,7 +465,7 @@ end
 cloud = list as particle with
     x = 1, vx = 2
 end
-moved = cloud with x = x + vx
+moved = cloud with x = it.x + it.vx
 `)
 	if err != nil {
 		t.Fatalf("ParseProgram failed: %v", err)

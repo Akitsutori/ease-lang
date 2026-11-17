@@ -719,3 +719,43 @@ say inspect_decision d
 		t.Fatalf("expected runtime union literal typo error, got: %v", err)
 	}
 }
+
+func TestWhereUnionNarrowingAndIndexTypecheck(t *testing.T) {
+	valid := `
+def ErrorMessage
+    code    = 500
+    message = "Error"
+end
+
+def outcome = "OK" | ErrorMessage
+
+items = list as outcome
+items = append items "OK"
+items = append items ErrorMessage
+
+errs = items where
+    it is ErrorMessage
+    it.code >= 500
+    it.index >= 0
+end
+say count errs
+`
+	if _, err := ParseProgram(valid); err != nil {
+		t.Fatalf("expected valid where union narrowing to typecheck cleanly, got: %v", err)
+	}
+
+	unnarrowed := `
+def ErrorMessage
+    code    = 500
+    message = "Error"
+end
+
+def outcome = "OK" | ErrorMessage
+
+items = list as outcome
+bad = items where it.code >= 500
+`
+	if _, err := ParseProgram(unnarrowed); err == nil || !strings.Contains(err.Error(), "Cannot read field '.code' on union variable \"it\"") {
+		t.Fatalf("expected union narrowing error in where, got: %v", err)
+	}
+}

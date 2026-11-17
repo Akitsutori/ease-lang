@@ -17,6 +17,7 @@ const (
 	TOK_IMPORT TokenType = "import"
 	TOK_DEF    TokenType = "def"
 	TOK_WITH   TokenType = "with"
+	TOK_WHERE  TokenType = "where"
 	TOK_END    TokenType = "end"
 	TOK_TEST   TokenType = "test"
 	TOK_CHECK  TokenType = "check"
@@ -59,6 +60,7 @@ var keywords = map[string]TokenType{
 	"import": TOK_IMPORT,
 	"def":    TOK_DEF,
 	"with":   TOK_WITH,
+	"where":  TOK_WHERE,
 	"end":    TOK_END,
 	"test":   TOK_TEST,
 	"check":  TOK_CHECK,

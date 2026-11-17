@@ -105,8 +105,8 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   9. Invalid number / union / JSON in `decode_json` (`"abc" as number`, `"pending" as ticket`, `decode_json '{broken'` -> `is error` in `.ease`)
   10. Wrong JSON shape / field type (`decode_json '[1, 2]' as api_user`, `decode_json '{"id": "abc", ...}' as api_user` -> `is error` in `.ease`)
 
-## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `.(expr)`, `loop`) (`README.md`)
-- **Happy Path**: `list 10, 25, 40`, `scores.0`, `scores.(it.index)`, `list as number`, `list as player with ... end`, `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
+## 8. Lists, Dot Indexing, `where` Filters, Batch `with` & Loops (`README.md`)
+- **Happy Path**: `list 10, 25, 40`, `scores.0`, `scores.(it.index)`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `cloud with x = it.x + it.vx`, `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
 - **10 Negative Cases**:
   1. Legacy list literal `[1, 2, 3]`
   2. Legacy indexing `scores[0]`
@@ -119,8 +119,8 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   9. Named loop variable (`loop x in xs ... end`) or `def` field named `index`
   10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `xs.(1.5)` -> `is error` in `.ease`)
 
-## 9. Built-in Tests (`test`, `check "label"`) & Imports (`import`) (`README.md`)
-- **Happy Path**: `test ... end`, `test "label" ... end`, `check "label" ... end`, `import network`, `import screen`
+## 9. Built-in Tests (`test`) & Imports (`import`) (`README.md`)
+- **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network`, `import screen`
 - **10 Negative Cases**:
   1. `test` missing `end`
   2. Nested `test` inside `to`
