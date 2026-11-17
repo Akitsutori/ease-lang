@@ -16,7 +16,7 @@ to greet name
 end
 
 test
-    do greet "World" is "Hello World"
+    greet "World" is "Hello World"
 end
 `
 	if diags := DiagnoseSource(valid); len(diags) != 0 {
@@ -27,7 +27,7 @@ end
 to greet name
     "Hello {name}"
 test
-    do greet "World" is "Hello World"
+    greet "World" is "Hello World"
 end
 `
 	if diags := DiagnoseSource(nestedTest); len(diags) == 0 {

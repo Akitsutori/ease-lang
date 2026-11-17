@@ -12,7 +12,7 @@
 #      beim lauten Lesen sofort falsch und lenkt automatisch auf ein echtes Handlungsverb:
 #        def = Substantiv (passiver Bauplan:  def decision)
 #        to  = Infinitiv  (Absicht/Fähigkeit:  to decide_if_to_ship amount)
-#        do  = Imperativ  (konkrete Ausführung: do decide_if_to_ship 80)
+#         = Imperativ  (konkrete Ausführung: decide_if_to_ship 80)
 
 # --- Schritt 1: Explizite Ja/Nein-Entscheidung statt anonymem Boolean ---
 
@@ -26,16 +26,16 @@ to decide_if_to_ship amount
     decision with answer = "no"
 end
 
-test "Rollenverteilung def (Substantiv) / to (Infinitiv) / do (Imperativ)"
-    d1 = do decide_if_to_ship 80
+test "Rollenverteilung def (Substantiv) / to (Infinitiv) / (Imperativ)"
+    d1 = decide_if_to_ship 80
     d1.answer is "yes"
 
-    d2 = do decide_if_to_ship 20
+    d2 = decide_if_to_ship 20
     d2.answer is "no"
 
     # Anders als freier Text prüft `def decision` den Wertebereich strikt:
-    (decision with answer = "maybe") raises "Invalid value"
-    (decision with answer = "true")  raises "Invalid value"
+    (decision with answer = "maybe") is error
+    (decision with answer = "true") is error
 end
 
 # --- Schritt 2: Von Ja/Nein nahtlos zu sprechenden Fachzuständen ---
@@ -56,17 +56,17 @@ to plan_shipment amount risk_level
 end
 
 test "Ohne Booleans: sprechende Zustände statt kryptischer Flags"
-    p1 = do plan_shipment 80 "low"
+    p1 = plan_shipment 80 "low"
     p1.status is "ship"
     p1.reason is "ready"
 
-    p2 = do plan_shipment 20 "low"
+    p2 = plan_shipment 20 "low"
     p2.status is "below_minimum"
     p2.reason is "minimum 50"
 
-    p3 = do plan_shipment 120 "high"
+    p3 = plan_shipment 120 "high"
     p3.status is "manual_review"
     p3.reason is "high risk"
 
-    (shipping_plan with status = "cancelled") raises "Invalid value"
+    (shipping_plan with status = "cancelled") is error
 end

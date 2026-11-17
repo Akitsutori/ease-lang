@@ -1,4 +1,4 @@
-﻿package ease
+package ease
 
 import (
 	"fmt"

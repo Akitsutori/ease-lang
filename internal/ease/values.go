@@ -1,4 +1,4 @@
-﻿package ease
+package ease
 
 import (
 	"fmt"
@@ -239,4 +239,3 @@ func ValuesEqual(a, b Value) bool {
 		return false
 	}
 }
-

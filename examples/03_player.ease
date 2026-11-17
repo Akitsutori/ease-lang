@@ -13,8 +13,8 @@ end
 
 test "Unveränderliche Records & with-Kopien"
     hero = player with name = "Aria", x = 10
-    injured = do take_damage hero 35
-    defeated = do take_damage injured 80
+    injured = take_damage hero 35
+    defeated = take_damage injured 80
 
     hero.hp is 100
     injured.hp is 65

@@ -19,7 +19,7 @@ to count_down start
     out = list as number
     cur = start
     loop range 1 start
-        out = do push out cur
+        out = append out cur
         cur = cur - 1
     end
     out
@@ -35,17 +35,17 @@ end
 test "Listen, Schleifen & Verzweigungen"
     scores = list 10, 25, 40
     scores.0 is 10
-    do len scores is 3
+    count scores is 3
 
     empty_nums = list as number
     empty_nums is list
-    do len empty_nums is 0
+    count empty_nums is 0
 
     cloud = list as particle with
         x = 0, vx = 5, life = 20
         x = 10, vx = 2, life = 5
     end
-    do len cloud is 2
+    count cloud is 2
     cloud.0.vx is 5
     cloud.1.state is "active"
 
@@ -59,16 +59,16 @@ test "Listen, Schleifen & Verzweigungen"
     seen_outer = 0
     seen_vx = 0
     loop cloud
-        check vx is not 100 -> do fail "vx shadowed"
+        vx is 100
         seen_outer = vx
         seen_vx = seen_vx + it.vx
     end
     seen_outer is 100
     seen_vx is 7
 
-    nums = do range 1 4
-    do sum_squares nums is 30
-    do count_down 3 is list 3, 2, 1
-    do classify 5 is "positiv"
-    do classify 0 is "nicht-positiv"
+    nums = range 1 4
+    sum_squares nums is 30
+    count_down 3 is list 3, 2, 1
+    classify 5 is "positiv"
+    classify 0 is "nicht-positiv"
 end

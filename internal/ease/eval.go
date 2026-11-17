@@ -620,8 +620,8 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 								rule.Line,
 								rule.Col,
 								ev.source,
-								"Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.",
-								"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'do fail \"...\"'.",
+								"Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.",
+								"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
 							)
 						}
 					}
@@ -700,26 +700,6 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		return b.String(), nil
 	case *BoolExpr:
 		return e.Value, nil
-	case *AskExpr:
-		if e.Prompt != nil {
-			promptVal, err := ev.EvalExpr(e.Prompt, env)
-			if err != nil {
-				return nil, err
-			}
-			promptText := FormatValue(promptVal)
-			if promptText != "" && !strings.HasSuffix(promptText, " ") {
-				promptText += " "
-			}
-			fmt.Fprint(ev.out, promptText)
-		}
-		ev.logTrace("line %d: ask (waiting for stdin...)", e.Line)
-		line, err := ev.inReader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "Failed to read input: "+err.Error(), "")
-		}
-		res := strings.TrimRight(line, "\r\n")
-		ev.logTrace("line %d: ask received %q", e.Line, res)
-		return res, nil
 	case *IdentExpr:
 		val, ok, blockedGlobal := env.LookupChecked(e.Name)
 		if !ok {
@@ -1252,72 +1232,46 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 		}
 		return !eq, nil
 	case "+":
+		if _, isLeftList := left.(*ListValue); isLeftList {
+			return ev.evalVectorArithmetic("+", left, right, line, col)
+		}
+		if _, isRightList := right.(*ListValue); isRightList {
+			return ev.evalVectorArithmetic("+", left, right, line, col)
+		}
 		if _, lok := left.(string); lok {
 			return FormatValue(left) + FormatValue(right), nil
 		}
 		if _, rok := right.(string); rok {
 			return FormatValue(left) + FormatValue(right), nil
 		}
-		if la, ok := left.(*ListValue); ok {
-			if rb, ok2 := right.(*ListValue); ok2 {
-				if la.ElemType != "" && rb.ElemType != "" && la.ElemType != rb.ElemType {
-					return nil, newError(
-						"TypeError",
-						line,
-						col,
-						ev.source,
-						fmt.Sprintf("Cannot concatenate list of %s and list of %s", la.ElemType, rb.ElemType),
-						"Both lists in '+' must have the same element type.",
-					)
-				}
-				elemType := la.ElemType
-				if elemType == "" {
-					elemType = rb.ElemType
-				}
-				if len(la.Elements)+len(rb.Elements) > maxListSize {
-					return nil, newError(
-						"RuntimeError",
-						line,
-						col,
-						ev.source,
-						fmt.Sprintf("list size exceeds limit (%d elements)", maxListSize),
-						fmt.Sprintf("Keep concatenated lists within %d elements.", maxListSize),
-					)
-				}
-				merged := make([]Value, 0, len(la.Elements)+len(rb.Elements))
-				merged = append(merged, la.Elements...)
-				merged = append(merged, rb.Elements...)
-				return &ListValue{ElemType: elemType, Elements: merged}, nil
-			}
-		}
 		ln, lok := left.(float64)
 		rn, rok := right.(float64)
 		if lok && rok {
 			return ln + rn, nil
 		}
-		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot add %s and %s", TypeName(left), TypeName(right)), "Use numbers, strings, or two lists with '+'.")
+		return nil, newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot add %s and %s", TypeName(left), TypeName(right)), "Use numbers, numeric lists, or strings with '+'.")
 
-	case "-", "*", "/", "%", "<", "<=", ">", ">=":
+	case "-", "*", "/", "%":
+		if _, isLeftList := left.(*ListValue); isLeftList {
+			return ev.evalVectorArithmetic(op, left, right, line, col)
+		}
+		if _, isRightList := right.(*ListValue); isRightList {
+			return ev.evalVectorArithmetic(op, left, right, line, col)
+		}
 		ln, lok := left.(float64)
 		rn, rok := right.(float64)
 		if !lok || !rok {
-			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Operator %q requires numbers, got %s and %s", op, TypeName(left), TypeName(right)), "Convert strings to numbers with num(...) if needed.")
+			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Operator %q requires numbers or numeric lists, got %s and %s", op, TypeName(left), TypeName(right)), "Convert strings to numbers with num if needed.")
+		}
+		return ev.evalNumericScalarOp(op, ln, rn, line, col)
+
+	case "<", "<=", ">", ">=":
+		ln, lok := left.(float64)
+		rn, rok := right.(float64)
+		if !lok || !rok {
+			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Operator %q requires numbers, got %s and %s", op, TypeName(left), TypeName(right)), "Convert strings to numbers with num if needed.")
 		}
 		switch op {
-		case "-":
-			return ln - rn, nil
-		case "*":
-			return ln * rn, nil
-		case "/":
-			if rn == 0 {
-				return nil, newError("RuntimeError", line, col, ev.source, "Division by zero", "Check that the divisor is not 0 before dividing.")
-			}
-			return ln / rn, nil
-		case "%":
-			if rn == 0 {
-				return nil, newError("RuntimeError", line, col, ev.source, "Modulo by zero", "The right-hand divisor of '%' cannot be 0.")
-			}
-			return math.Mod(ln, rn), nil
 		case "<":
 			return ln < rn, nil
 		case "<=":
@@ -1329,6 +1283,161 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 		}
 	}
 	return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Unknown operator %q", op), "")
+}
+
+func (ev *Evaluator) evalNumericScalarOp(op string, ln, rn float64, line, col int) (float64, error) {
+	switch op {
+	case "-":
+		return ln - rn, nil
+	case "+":
+		return ln + rn, nil
+	case "*":
+		return ln * rn, nil
+	case "/":
+		if rn == 0 {
+			return 0, newError("RuntimeError", line, col, ev.source, "Division by zero", "Check that the divisor is not 0 before dividing.")
+		}
+		return ln / rn, nil
+	case "%":
+		if rn == 0 {
+			return 0, newError("RuntimeError", line, col, ev.source, "Modulo by zero", "The right-hand divisor of '%' cannot be 0.")
+		}
+		return math.Mod(ln, rn), nil
+	default:
+		return 0, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Unknown operator %q", op), "")
+	}
+}
+
+func (ev *Evaluator) evalVectorArithmetic(op string, left, right Value, line, col int) (Value, error) {
+	la, leftIsList := left.(*ListValue)
+	rb, rightIsList := right.(*ListValue)
+
+	if leftIsList && !isNumericList(la) {
+		if op == "+" {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use '+' on %s", describeListOrType(la)),
+				"Use 'append xs ys' to combine lists; '+' on lists performs element-wise numeric addition.",
+			)
+		}
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Operator %q requires numbers or numeric lists, got %s and %s", op, describeListOrType(left), describeListOrType(right)),
+			"Vector arithmetic only supports numeric lists.",
+		)
+	}
+	if rightIsList && !isNumericList(rb) {
+		if op == "+" {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use '+' on %s", describeListOrType(rb)),
+				"Use 'append xs ys' to combine lists; '+' on lists performs element-wise numeric addition.",
+			)
+		}
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Operator %q requires numbers or numeric lists, got %s and %s", op, describeListOrType(left), describeListOrType(right)),
+			"Vector arithmetic only supports numeric lists.",
+		)
+	}
+
+	if leftIsList && rightIsList {
+		if len(la.Elements) != len(rb.Elements) {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("List length mismatch for operator %q: left has %d element(s), right has %d element(s)", op, len(la.Elements), len(rb.Elements)),
+				"Both lists in element-wise arithmetic must have the same length.",
+			)
+		}
+		out := make([]Value, len(la.Elements))
+		for i := range la.Elements {
+			res, err := ev.evalNumericScalarOp(op, la.Elements[i].(float64), rb.Elements[i].(float64), line, col)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = res
+		}
+		return &ListValue{ElemType: "number", Elements: out}, nil
+	}
+
+	if leftIsList {
+		scalar, ok := right.(float64)
+		if !ok {
+			if op == "+" {
+				return nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot use '+' on %s and %s", describeListOrType(left), TypeName(right)),
+					"Use 'append xs item' to add elements or pass a number for broadcasting.",
+				)
+			}
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Operator %q requires numbers or numeric lists, got %s and %s", op, describeListOrType(left), TypeName(right)),
+				"Broadcast arithmetic requires a numeric scalar.",
+			)
+		}
+		out := make([]Value, len(la.Elements))
+		for i, el := range la.Elements {
+			res, err := ev.evalNumericScalarOp(op, el.(float64), scalar, line, col)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = res
+		}
+		return &ListValue{ElemType: "number", Elements: out}, nil
+	}
+
+	scalar, ok := left.(float64)
+	if !ok {
+		if op == "+" {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot use '+' on %s and %s", TypeName(left), describeListOrType(right)),
+				"Use 'append xs item' to add elements or pass a number for broadcasting.",
+			)
+		}
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Operator %q requires numbers or numeric lists, got %s and %s", op, TypeName(left), describeListOrType(right)),
+			"Broadcast arithmetic requires a numeric scalar.",
+		)
+	}
+	out := make([]Value, len(rb.Elements))
+	for i, el := range rb.Elements {
+		res, err := ev.evalNumericScalarOp(op, scalar, el.(float64), line, col)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = res
+	}
+	return &ListValue{ElemType: "number", Elements: out}, nil
 }
 
 func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Value, error) {
@@ -1384,4 +1493,3 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 	}
 	return last, nil
 }
-

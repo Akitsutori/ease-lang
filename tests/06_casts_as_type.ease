@@ -1,7 +1,7 @@
 # Feature 06: Explizites JSON-Parsing (decode_json / encode_json) & strikter Strukturvertrag (as)
 #
 # Trennung der Verantwortlichkeiten:
-#   1. Format-Parsing:     do decode_json <text> / do encode_json <val>
+#   1. Format-Parsing:     decode_json <text> / encode_json <val>
 #   2. Strukturvertrag:    <map|record> as <def> (alle def-Felder PFLICHT, keine Defaults!)
 #   3. Internes Bauen:     <def> with ... (Default-Werte aus def werden hier genutzt)
 #   4. Atomare Textform:   as text & "{expr}" nur für text und number
@@ -22,7 +22,7 @@ raw_ok = "42" as number
 num_as_text = 123 as text
 vip_ticket = "vip" as ticket
 
-parsed_map = do decode_json '{"id": 7, "name": "Aria", "role": "admin", "ignored": true}'
+parsed_map = decode_json '{"id": 7, "name": "Aria", "role": "admin", "ignored": true}'
 valid_user = parsed_map as api_user
 default_user = api_user with id = 9
 
@@ -38,7 +38,7 @@ test "Explizites JSON-Parsing & striktes as (Ausgang A: gültige Daten)"
     default_user.role is "member"
 
     # Zweistufiger Weg: decode_json -> as api_user
-    do type parsed_map is "map"
+    type parsed_map is "map"
     parsed_map.id is 7
     valid_user is api_user
     valid_user.id is 7
@@ -46,35 +46,35 @@ test "Explizites JSON-Parsing & striktes as (Ausgang A: gültige Daten)"
     valid_user.role is "admin"
 
     # Expliziter Roundtrip: encode_json -> decode_json -> as api_user
-    json_out = do encode_json valid_user
-    roundtrip = (do decode_json json_out) as api_user
+    json_out = encode_json valid_user
+    roundtrip = (decode_json json_out) as api_user
     roundtrip is api_user
     roundtrip.id is 7
     roundtrip.name is "Aria"
 end
 
 test "Striktes as, Pflichtfelder & atomare Textgrenze (Ausgang B: Fehlerabbruch)"
-    "abc" as number raises "Cannot convert text"
-    "gold" as ticket raises "not valid for union"
+    "abc" as number is error
+    "gold" as ticket is error
 
     # Rohtext direkt an `as <def>` muss sofort scheitern
-    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user raises "Cannot validate text as api_user"
-    "" as api_user raises "Cannot validate text as api_user"
+    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user is error
+    "" as api_user is error
 
     # Fehlendes Pflichtfeld in `as <def>` (kein stilles Auffüllen mit Defaults)
-    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
 
     # Ungültiges JSON oder falscher Strukturtyp
-    do decode_json "" raises "empty text"
-    do decode_json '{broken' raises "Invalid JSON"
-    (do decode_json 'null') as api_user raises "Cannot validate none as api_user"
-    (do decode_json '[1, 2]') as api_user raises "Cannot validate list as api_user"
-    (do decode_json '{"id": "keine-zahl", "name": "Aria", "role": "admin"}') as api_user raises "api_user.id"
-    (do decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user raises "api_user.role"
-    42 as api_user raises "expected structured map or api_user record"
+    decode_json "" is error
+    decode_json '{broken' is error
+    (decode_json 'null') as api_user is error
+    (decode_json '[1, 2]') as api_user is error
+    (decode_json '{"id": "keine-zahl", "name": "Aria", "role": "admin"}') as api_user is error
+    (decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user is error
+    42 as api_user is error
 
     # Symmetrie: strukturierte Werte nicht in `as text` oder `{...}` Interpolation
-    valid_user as text raises "Cannot convert api_user to text"
-    (list 1, 2) as text raises "Cannot convert list to text"
-    do bad_interp valid_user raises "Cannot interpolate api_user into text"
+    valid_user as text is error
+    (list 1, 2) as text is error
+    bad_interp valid_user is error
 end

@@ -16,7 +16,7 @@ to add a b
     a + b
 end
 
-to ask client path
+to mock_fetch client path
     "{client.url}{path}"
 end
 
@@ -96,102 +96,101 @@ test "Happy Paths gemäß README"
     counter is 15
     greeting is "Hallo \{Ease\}: 15"
 
-    do add 2 3 is 5
+    add 2 3 is 5
     client = network with url = "https://example.test"
-    do ask client "/posts/1" is "https://example.test/posts/1"
+    mock_fetch client "/posts/1" is "https://example.test/posts/1"
 
     hero.hp is 80
     ko.state is "KO"
     "vip" is ticket
 
-    do classify 5 is "positive"
-    do classify 0 is "zero"
-    do classify -2 is "non-positive"
+    classify 5 is "positive"
+    classify 0 is "zero"
+    classify -2 is "non-positive"
 
     "42" as number is 42
     42 as text is "42"
     "vip" as ticket is "vip"
-    (do decode_json '{"id": 7, "name": "Gast", "role": "admin"}') as api_user is api_user
-    do decode_json '{"id": 7, "msg": "hi\n{raw}"}' is not text
+    (decode_json '{"id": 7, "name": "Gast", "role": "admin"}') as api_user is api_user
+    decode_json '{"id": 7, "msg": "hi\n{raw}"}' is not text
 
     scores = list 10, 25, 40
     scores.0 is 10
     5 % 0.5 is 0
     empty_nums = list as number
-    do len empty_nums is 0
-    do range 1 3 is list 1, 2, 3
+    count empty_nums is 0
+    range 1 3 is list 1, 2, 3
 end
 
 # ============================================================================
 # NEGATIVTESTS (Laufzeit-Fehlerabbrüche via `raises`)
 # ============================================================================
 test "Funktionen & Aufrufe: 10 Negativtests"
-    do add 1 raises "expects 2 argument"
-    do add 1 2 3 raises "expects 2 argument"
-    do unbekannt 1 raises "Unknown function"
-    do missing_fn raises "Unknown function"
-    do ask 123 "/x" raises "Cannot read field"
-    do add hero 1 raises "Cannot add"
-    ((1 > 0) + 1) raises "Conditions cannot be stored or printed"
-    ((1 > 0) + (1 < 0)) raises "Conditions cannot be stored or printed"
-    one_list = list 1
-    do add one_list 1 raises "Cannot add"
-    do add 1 one_list raises "Cannot add"
+    num "abc" is error
+    count 42 is error
+    fail "boom" is error
+    range 1 1000000000 is error
+    mock_fetch 123 "/x" is error
+    add hero 1 is error
+    ((1 > 0) + 1) is error
+    ((1 > 0) + (1 < 0)) is error
+    ((list 1, 2) + (list 3, 4, 5)) is error
+    ((list "a") + (list "b")) is error
 end
 
 test "Records, with & Unions: 10 Negativtests"
-    (42 with x = 1) raises "Cannot use 'with'"
-    ("hi" with x = 1) raises "Cannot use 'with'"
-    ((1 > 0) with x = 1) raises "Cannot use 'with'"
-    ((list 1) with x = 1) raises "Cannot use 'with'"
-    (hero with mana = 50) raises "has no field"
-    (hero with state = "flying") raises "Invalid value"
-    (hero with state = 123) raises "Invalid value"
-    (hero with hp = "high") raises "expected number"
-    (hero with id = 1) raises "has no field"
-    hero.mana raises "has no field"
+    (42 with x = 1) is error
+    ("hi" with x = 1) is error
+    ((1 > 0) with x = 1) is error
+    ((list 1) with x = 1) is error
+    (hero with mana = 50) is error
+    (hero with state = "flying") is error
+    (hero with state = 123) is error
+    (hero with hp = "high") is error
+    (hero with id = 1) is error
+    hero.mana is error
 end
 
 test "Guards, Verzweigungen, Logik & Vergleiche: 8 Negativtests"
-    do bad_check_cond 42 raises "must be a condition"
-    do bad_check_cond "yes" raises "must be a condition"
-    do bad_not 42 raises "requires a condition"
-    do bad_not "no" raises "requires a condition"
-    (1 and (1 > 0)) raises "requires condition"
-    ((1 < 0) or 1) raises "requires condition"
-    do bad_lt "a" 1 raises "requires numbers"
-    ((1 > 0) < (1 < 0)) raises "Conditions cannot be stored or printed"
+    bad_check_cond 42 is error
+    bad_check_cond "yes" is error
+    bad_not 42 is error
+    bad_not "no" is error
+    (1 and (1 > 0)) is error
+    ((1 < 0) or 1) is error
+    bad_lt "a" 1 is error
+    ((1 > 0) < (1 < 0)) is error
 end
 
 test "Striktes as Casting & decode_json (Ausgang B): 10 Negativtests"
-    "abc" as number raises "Cannot convert text"
-    "" as number raises "Cannot convert text"
-    (list "a", "b") as number raises "Cannot convert"
-    "pending" as ticket raises "not valid for union"
-    123 as ticket raises "not valid for union"
-    '{"id": 7, "name": "Gast", "role": "admin"}' as api_user raises "Cannot validate text"
-    do decode_json "" raises "empty text"
-    do decode_json '{broken' raises "Invalid JSON"
-    (do decode_json 'null') as api_user raises "Cannot validate none"
-    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
-    (do decode_json '{"id": "abc", "name": "Gast", "role": "admin"}') as api_user raises "api_user.id"
-    (do decode_json '{"id": 7, "name": "Gast", "role": "root"}') as api_user raises "api_user.role"
-    hero as text raises "Cannot convert player to text"
-    do bad_interp hero raises "Cannot interpolate player into text"
+    "abc" as number is error
+    "" as number is error
+    (list "a", "b") as number is error
+    "pending" as ticket is error
+    123 as ticket is error
+    '{"id": 7, "name": "Gast", "role": "admin"}' as api_user is error
+    decode_json "" is error
+    decode_json '{broken' is error
+    (decode_json 'null') as api_user is error
+    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
+    (decode_json '{"id": "abc", "name": "Gast", "role": "admin"}') as api_user is error
+    (decode_json '{"id": 7, "name": "Gast", "role": "root"}') as api_user is error
+    hero as text is error
+    bad_interp hero is error
 end
 
 test "Listen, Schleifen & Built-ins: 10 Negativtests"
     xs = list 10, 20
     typed = list as number
-    xs.99 raises "out of range"
-    (42).0 raises "Cannot index"
-    (list 10, "hi") raises "Mixed types"
-    do push typed "bad" raises "Cannot push"
-    do bad_loop 42 raises "requires a list or range"
-    do bad_loop "3" raises "requires a list or range"
-    do bad_loop_range 1 "x" raises "requires two numbers"
-    xs.(1.5) raises "Index must be an integer"
-    10 / 0 raises "Division by zero"
-    5 % 0 raises "Modulo by zero"
-    do num "abc" raises "Cannot convert"
+    xs.99 is error
+    (42).0 is error
+    (list 10, "hi") is error
+    append typed "bad" is error
+    bad_loop 42 is error
+    bad_loop "3" is error
+    bad_loop_range 1 "x" is error
+    xs.(1.5) is error
+    10 / 0 is error
+    5 % 0 is error
+    num "abc" is error
 end

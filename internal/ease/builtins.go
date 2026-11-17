@@ -1,4 +1,4 @@
-﻿package ease
+package ease
 
 import (
 	"context"
@@ -13,11 +13,54 @@ import (
 	"time"
 )
 
+// builtinArities defines the fixed parameter count for every built-in function.
+var builtinArities = map[string]int{
+	"ask":            1,
+	"count":          1,
+	"str":            1,
+	"num":            1,
+	"type":           1,
+	"abs":            1,
+	"fail":           1,
+	"fields":         1,
+	"decode_json":    1,
+	"encode_json":    1,
+	"http_call":      1,
+	"sum":            1,
+	"avg":            1,
+	"sort":           1,
+	"range":          2,
+	"append":         2,
+	"min":            2,
+	"max":            2,
+	"screen_present": 2,
+}
+
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
 	switch name {
-	case "len":
+	case "ask":
 		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "len() takes 1 argument", "")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "ask requires 1 argument (prompt)", "Example: ask \"Name?\" or ask \"\"")
+		}
+		promptText := FormatValue(args[0])
+		if promptText != "" {
+			if !strings.HasSuffix(promptText, " ") {
+				promptText += " "
+			}
+			fmt.Fprint(ev.out, promptText)
+		}
+		ev.logTrace("line %d: ask (waiting for stdin...)", line)
+		inputLine, err := ev.inReader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "Failed to read input: "+err.Error(), "")
+		}
+		res := strings.TrimRight(inputLine, "\r\n")
+		ev.logTrace("line %d: ask received %q", line, res)
+		return res, true, nil
+
+	case "count":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "count takes 1 argument", "")
 		}
 		switch v := args[0].(type) {
 		case *ListValue:
@@ -25,7 +68,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		case string:
 			return float64(len([]rune(v))), true, nil
 		default:
-			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("len() requires a list or string, got %s", TypeName(args[0])), "")
+			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("count requires a list or text, got %s", TypeName(args[0])), "")
 		}
 
 	case "str":
@@ -94,13 +137,65 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		}
 		return &ListValue{ElemType: "number", Elements: out}, true, nil
 
-	case "push":
+	case "append":
 		if len(args) != 2 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "push(list, item) takes 2 arguments", "")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "append takes 2 arguments", "")
 		}
 		listVal, ok := args[0].(*ListValue)
 		if !ok {
-			return nil, true, newError("TypeError", line, col, ev.source, "push() expects a list as first argument", "")
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("append expects a list as first argument, got %s", TypeName(args[0])), "")
+		}
+		if otherList, isList := args[1].(*ListValue); isList && listVal.ElemType != "list" {
+			if listVal.ElemType != "" && otherList.ElemType != "" && listVal.ElemType != otherList.ElemType {
+				return nil, true, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot append list of %s into list of %s", otherList.ElemType, listVal.ElemType),
+					"Both lists in 'append' must have compatible element types.",
+				)
+			}
+			elemType := listVal.ElemType
+			if elemType == "" {
+				elemType = otherList.ElemType
+			}
+			if elemType != "" && otherList.ElemType == "" {
+				for _, el := range otherList.Elements {
+					if !matchesListElemType(el, elemType, ev.global) {
+						return nil, true, newError(
+							"TypeError",
+							line,
+							col,
+							ev.source,
+							fmt.Sprintf("Cannot append %s into list of %s", structuredTypeName(el), elemType),
+							fmt.Sprintf("This list only accepts elements of type %q.", elemType),
+						)
+					}
+				}
+			}
+			if len(listVal.Elements)+len(otherList.Elements) > maxListSize {
+				return nil, true, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("list size exceeds limit (%d elements)", maxListSize),
+					fmt.Sprintf("Keep lists within %d elements.", maxListSize),
+				)
+			}
+			var next []Value
+			if !listVal.pushed {
+				listVal.pushed = true
+				next = append(listVal.Elements, otherList.Elements...)
+			} else {
+				newLen := len(listVal.Elements) + len(otherList.Elements)
+				newCap := max(4, newLen)
+				next = make([]Value, newLen, newCap)
+				copy(next, listVal.Elements)
+				copy(next[len(listVal.Elements):], otherList.Elements)
+			}
+			return &ListValue{ElemType: elemType, Elements: next}, true, nil
 		}
 		if len(listVal.Elements) >= maxListSize {
 			return nil, true, newError(
@@ -121,7 +216,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 					line,
 					col,
 					ev.source,
-					fmt.Sprintf("Cannot push %s into list of %s", gotType, elemType),
+					fmt.Sprintf("Cannot append %s into list of %s", gotType, elemType),
 					fmt.Sprintf("This list only accepts elements of type %q.", elemType),
 				)
 			}
@@ -140,6 +235,109 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			next[len(listVal.Elements)] = args[1]
 		}
 		return &ListValue{ElemType: elemType, Elements: next}, true, nil
+
+	case "sum":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "sum takes 1 argument", "")
+		}
+		lv, ok := args[0].(*ListValue)
+		if !ok || !isNumericList(lv) {
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("sum requires a list of numbers, got %s", describeListOrType(args[0])),
+				"Pass a numeric list, e.g. sum (list 1, 2, 3).",
+			)
+		}
+		total := 0.0
+		for _, el := range lv.Elements {
+			total += el.(float64)
+		}
+		return total, true, nil
+
+	case "avg":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "avg takes 1 argument", "")
+		}
+		lv, ok := args[0].(*ListValue)
+		if !ok || !isNumericList(lv) {
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("avg requires a list of numbers, got %s", describeListOrType(args[0])),
+				"Pass a non-empty numeric list, e.g. avg (list 10, 20).",
+			)
+		}
+		if len(lv.Elements) == 0 {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"Cannot compute average of an empty list",
+				"Check 'count xs > 0' before calling 'avg'.",
+			)
+		}
+		total := 0.0
+		for _, el := range lv.Elements {
+			total += el.(float64)
+		}
+		return total / float64(len(lv.Elements)), true, nil
+
+	case "sort":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "sort takes 1 argument", "")
+		}
+		lv, ok := args[0].(*ListValue)
+		if !ok {
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("sort requires a list of numbers or text, got %s", TypeName(args[0])),
+				"Pass a list of numbers or text, e.g. sort (list 3, 1, 2).",
+			)
+		}
+		if len(lv.Elements) == 0 {
+			return &ListValue{ElemType: lv.ElemType, Elements: []Value{}}, true, nil
+		}
+		if isNumericList(lv) {
+			nums := make([]float64, len(lv.Elements))
+			for i, el := range lv.Elements {
+				nums[i] = el.(float64)
+			}
+			slices.Sort(nums)
+			out := make([]Value, len(nums))
+			for i, n := range nums {
+				out[i] = n
+			}
+			return &ListValue{ElemType: "number", Elements: out}, true, nil
+		}
+		if isTextList(lv) {
+			strs := make([]string, len(lv.Elements))
+			for i, el := range lv.Elements {
+				strs[i] = el.(string)
+			}
+			slices.Sort(strs)
+			out := make([]Value, len(strs))
+			for i, s := range strs {
+				out[i] = s
+			}
+			return &ListValue{ElemType: "text", Elements: out}, true, nil
+		}
+		return nil, true, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("sort requires a homogeneous list of numbers or text, got %s", describeListOrType(args[0])),
+			"Only number and text lists can be sorted directly.",
+		)
 
 	case "abs":
 		if len(args) != 1 {
@@ -166,15 +364,14 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		return math.Max(a, b), true, nil
 
 	case "fail":
-		msg := "Explicit failure"
-		if len(args) > 0 {
-			msg = FormatValue(args[0])
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "fail requires 1 argument (message)", "Example: fail \"Invalid input\"")
 		}
-		return nil, true, newError("RuntimeError", line, col, ev.source, msg, "")
+		return nil, true, newError("RuntimeError", line, col, ev.source, FormatValue(args[0]), "")
 
 	case "fields":
 		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "fields takes 1 argument", "Example: do fields player")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "fields takes 1 argument", "Example: fields player")
 		}
 		if mv, ok := args[0].(*MapValue); ok {
 			out := make([]Value, len(mv.Order))
@@ -195,7 +392,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 
 	case "decode_json":
 		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "decode_json takes 1 argument (text)", "Example: do decode_json raw_text")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "decode_json takes 1 argument (text)", "Example: decode_json raw_text")
 		}
 		rawStr, ok := args[0].(string)
 		if !ok {
@@ -205,7 +402,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 				col,
 				ev.source,
 				fmt.Sprintf("decode_json requires text, got %s", TypeName(args[0])),
-				"Pass a JSON string to decode, e.g. do decode_json '{\"id\": 1}'.",
+				"Pass a JSON string to decode, e.g. decode_json '{\"id\": 1}'.",
 			)
 		}
 		if strings.TrimSpace(rawStr) == "" {
@@ -215,7 +412,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 				col,
 				ev.source,
 				"Cannot decode empty text as JSON",
-				"Check for empty responses before calling 'do decode_json'.",
+				"Check for empty responses before calling 'decode_json'.",
 			)
 		}
 		var parsed any
@@ -233,7 +430,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 
 	case "encode_json":
 		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "encode_json takes 1 argument", "Example: do encode_json user")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "encode_json takes 1 argument", "Example: encode_json user")
 		}
 		if err := validateJSONEncodable(args[0]); err != nil {
 			return nil, true, newError("TypeError", line, col, ev.source, err.Error(), "Conditions and union definitions cannot be encoded as JSON.")
@@ -518,3 +715,36 @@ func easeValueToJSON(v Value) any {
 	}
 }
 
+func isNumericList(lv *ListValue) bool {
+	if lv.ElemType != "" {
+		return lv.ElemType == "number"
+	}
+	for _, el := range lv.Elements {
+		if _, ok := el.(float64); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func isTextList(lv *ListValue) bool {
+	if lv.ElemType != "" {
+		return lv.ElemType == "text"
+	}
+	for _, el := range lv.Elements {
+		if _, ok := el.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func describeListOrType(v Value) string {
+	if lv, ok := v.(*ListValue); ok {
+		if lv.ElemType != "" {
+			return "list of " + lv.ElemType
+		}
+		return "list"
+	}
+	return TypeName(v)
+}

@@ -102,8 +102,8 @@ def ticket = "open" | "closed"
 a = 42 as text
 b = "12" as number
 d = "open" as ticket
-e = (do decode_json '{"name": "Ada"}') as custom_user
-f = (do decode_json '{"status": 200, "body": "ok", "error": ""}') as http_response
+e = (decode_json '{"name": "Ada"}') as custom_user
+f = (decode_json '{"status": 200, "body": "ok", "error": ""}') as http_response
 g = list as number
 `
 	if _, err := ParseProgram(validSrc); err != nil {
@@ -170,12 +170,12 @@ to server_error_only res
 end
 
 err_rec = ErrorMessage with code = 404, message = "Not Found"
-do handle "OK"
-do handle "FEHLER"
-do handle err_rec
-do log_only_success "OK"
-do log_only_success "FEHLER"
-do log_only_success err_rec
+handle "OK"
+handle "FEHLER"
+handle err_rec
+log_only_success "OK"
+log_only_success "FEHLER"
+log_only_success err_rec
 
 test "orthogonal union building blocks, flattening, JSON as, narrowing, and else ->"
     "OK" is outcome
@@ -186,39 +186,39 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     err_rec is tagged
 
     # Explicit JSON -> union conversion picks ErrorMessage
-    raw_err = (do decode_json '{"code": 503, "message": "Unavailable"}') as outcome
+    raw_err = (decode_json '{"code": 503, "message": "Unavailable"}') as outcome
     raw_err is ErrorMessage
-    do process_response raw_err is "Fehler 503: Unavailable"
-    do process_response "OK" is "Erfolgreich verarbeitet"
-    do process_response "FEHLER" is "Unbekannter Fehler"
+    process_response raw_err is "Fehler 503: Unavailable"
+    process_response "OK" is "Erfolgreich verarbeitet"
+    process_response "FEHLER" is "Unbekannter Fehler"
 
     # Record field typed by union accepts literal and ErrorMessage from JSON
-    env1 = (do decode_json '{"res": "OK"}') as envelope
+    env1 = (decode_json '{"res": "OK"}') as envelope
     env1.res is "OK"
-    env2 = (do decode_json '{"res": {"code": 400, "message": "Bad"}}') as envelope
+    env2 = (decode_json '{"res": {"code": 400, "message": "Bad"}}') as envelope
     env2.res is ErrorMessage
-    do inspect_check env2.res is "check:400:Bad"
-    do inspect_check "OK" is "other"
+    inspect_check env2.res is "check:400:Bad"
+    inspect_check "OK" is "other"
 
     # Heterogeneous union list + JSON array coercion
     items = list as outcome
-    items = do push items "OK"
-    items = do push items err_rec
-    do len items is 2
+    items = append items "OK"
+    items = append items err_rec
+    count items is 2
     items.1 is ErrorMessage
 
-    json_items = (do decode_json '["OK", {"code": 404, "message": "Missing"}]') as outcome
+    json_items = (decode_json '["OK", {"code": 404, "message": "Missing"}]') as outcome
     json_items.0 is "OK"
     json_items.1 is ErrorMessage
 
     # Early-exit guard narrowing & compound 'and' narrowing
-    do unwrap_err_guard err_rec is "guard:404"
-    do unwrap_err_guard "OK" is "not-error"
-    do server_error_only raw_err is "server:503:Unavailable"
-    do server_error_only err_rec is "handled"
+    unwrap_err_guard err_rec is "guard:404"
+    unwrap_err_guard "OK" is "not-error"
+    server_error_only raw_err is "server:503:Unavailable"
+    server_error_only err_rec is "handled"
 
     # Reject incomplete map when decoding into union
-    (do decode_json '{"code": 1}') as outcome raises "Missing field"
+    (decode_json '{"code": 1}') as outcome is error
 end
 `
 	report, err := RunChecks(src)
@@ -295,19 +295,19 @@ end
 def actor3 = RoleAdmin | RoleGuest
 
 test "distinguishable record unions decode cleanly"
-    a1 = (do decode_json '{"name": "Ada", "level": 9}') as actor1
+    a1 = (decode_json '{"name": "Ada", "level": 9}') as actor1
     a1 is AdminDiffField
-    g1 = (do decode_json '{"name": "Bob", "ticket": "day"}') as actor1
+    g1 = (decode_json '{"name": "Bob", "ticket": "day"}') as actor1
     g1 is GuestDiffField
 
-    p1 = (do decode_json '{"val": 42}') as actor2
+    p1 = (decode_json '{"val": 42}') as actor2
     p1 is NumPayload
-    p2 = (do decode_json '{"val": "hi"}') as actor2
+    p2 = (decode_json '{"val": "hi"}') as actor2
     p2 is TextPayload
 
-    r1 = (do decode_json '{"kind": "admin", "name": "Ada"}') as actor3
+    r1 = (decode_json '{"kind": "admin", "name": "Ada"}') as actor3
     r1 is RoleAdmin
-    r2 = (do decode_json '{"kind": "guest", "name": "Bob"}') as actor3
+    r2 = (decode_json '{"kind": "guest", "name": "Bob"}') as actor3
     r2 is RoleGuest
 end
 `
@@ -480,7 +480,7 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 items = list as outcome
-items = do push items "OK"
+items = append items "OK"
 loop items
     check
         it is "OK"         -> say "ok"
@@ -546,10 +546,10 @@ test "strict asymmetric is and instantiated nested record defaults"
     l_default.a is pt
     l_default is l_x0
     l_default is not l_x9
-    (user is a) raises "cannot use record type 'user' as a value on the left side of 'is'"
-    (user is user) raises "cannot use record type 'user' as a value on the left side of 'is'"
-    (user is not a) raises "cannot use record type 'user' as a value on the left side of 'is'"
-    (user is text) raises "cannot use record type 'user' as a value on the left side of 'is'"
+    (user is a) is error
+    (user is user) is error
+    (user is not a) is error
+    (user is text) is error
 end
 `
 	report, err := RunChecks(src)
@@ -657,8 +657,8 @@ to check_ready score
     check score >= 100 -> "👍" as ergebnis
     "👎" as ergebnis
 end
-say do check_ready 120
-say do check_ready 50
+say check_ready 120
+say check_ready 50
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(unionOutcomeSrc, &out); err != nil {
@@ -676,13 +676,13 @@ def reply
     label = "true"
 end
 
-m = do decode_json '{"ok": true, "label": "true"}'
+m = decode_json '{"ok": true, "label": "true"}'
 r = m as reply
 say r.ok
-say do encode_json r
+say encode_json r
 
-free = do decode_json '{"ok": true}'
-say do encode_json free
+free = decode_json '{"ok": true}'
+say encode_json free
 `
 	var jsonOut bytes.Buffer
 	if _, err := EvalProgram(jsonBoolSrc, &jsonOut); err != nil {
@@ -713,10 +713,9 @@ to inspect_decision dec
     "no"
 end
 d = decision with answer = "no"
-say do inspect_decision d
+say inspect_decision d
 `
 	if _, err := EvalProgram(dynamicTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
 		t.Fatalf("expected runtime union literal typo error, got: %v", err)
 	}
 }
-

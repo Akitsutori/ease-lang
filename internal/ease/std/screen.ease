@@ -36,6 +36,6 @@ end
 
 # Presents a scene to the window, renders 1 frame (60 FPS),
 # and returns the current frame_state serialized as JSON text.
-to send target current_scene
-    do screen_present target current_scene
+to present target current_scene
+    screen_present target current_scene
 end

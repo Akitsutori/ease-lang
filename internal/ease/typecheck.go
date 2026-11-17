@@ -1,4 +1,4 @@
-﻿package ease
+package ease
 
 import (
 	"fmt"
@@ -89,6 +89,41 @@ func validateProgramTypes(prog *Program, source string) error {
 		}
 	}
 
+	funcNames := make(map[string]int, len(prog.Functions))
+	for _, fn := range prog.Functions {
+		if _, isBuiltin := builtinArities[fn.Name]; isBuiltin {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				source,
+				fmt.Sprintf("Cannot define function %q: it conflicts with a built-in function", fn.Name),
+				"Choose a different function name.",
+			)
+		}
+		if _, isType := known[fn.Name]; isType {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				source,
+				fmt.Sprintf("Cannot define function %q: it conflicts with a 'def' type", fn.Name),
+				"Choose a different function name.",
+			)
+		}
+		if prevLine, dup := funcNames[fn.Name]; dup {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				source,
+				fmt.Sprintf("Duplicate function %q (already defined at line %d)", fn.Name, prevLine),
+				"Each function name must be unique across the program and imported modules.",
+			)
+		}
+		funcNames[fn.Name] = fn.Line
+	}
+
 	v := &typeValidator{
 		source:         source,
 		known:          known,
@@ -96,6 +131,7 @@ func validateProgramTypes(prog *Program, source string) error {
 		unions:         unions,
 		consts:         consts,
 		constExprs:     constExprs,
+		funcNames:      funcNames,
 		resolvedUnions: make(map[string][]resolvedUnionVariant, len(prog.Unions)),
 		scope:          newTypeScope(nil),
 	}
@@ -118,6 +154,11 @@ func validateProgramTypes(prog *Program, source string) error {
 	}
 
 	for _, fn := range prog.Functions {
+		for _, p := range fn.Params {
+			if err := v.checkNameNotCallable(p, fn.Line, fn.Col, "parameter"); err != nil {
+				return err
+			}
+		}
 		fnScope := v.pushScope()
 		v.inferFuncUnionParams(fn, fnScope)
 		err := v.checkStmts(fn.Body, true)
@@ -140,16 +181,42 @@ func validateProgramTypes(prog *Program, source string) error {
 }
 
 type typeValidator struct {
-	source         string
-	known          map[string]typeDefInfo
-	defs           map[string]*DefDecl
-	unions         map[string]*UnionDecl
-	consts         map[string]int
-	constExprs     map[string]Expr
-	resolvedUnions map[string][]resolvedUnionVariant
-	scope          *typeScope
-	inRaisesExpr   bool
-	loopDepth      int
+	source          string
+	known           map[string]typeDefInfo
+	defs            map[string]*DefDecl
+	unions          map[string]*UnionDecl
+	consts          map[string]int
+	constExprs      map[string]Expr
+	funcNames       map[string]int
+	resolvedUnions  map[string][]resolvedUnionVariant
+	scope           *typeScope
+	inErrorTestExpr bool
+	inErrorBlock    bool
+	loopDepth       int
+}
+
+func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind string) error {
+	if _, isBuiltin := builtinArities[name]; isBuiltin {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Cannot name %s %q the same as a built-in function", kind, name),
+			fmt.Sprintf("Choose a different %s name so calls to '%s' remain unambiguous.", kind, name),
+		)
+	}
+	if _, isFunc := v.funcNames[name]; isFunc {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Cannot name %s %q the same as a 'to' function", kind, name),
+			fmt.Sprintf("Choose a different %s name so calls to '%s' remain unambiguous.", kind, name),
+		)
+	}
+	return nil
 }
 
 func (v *typeValidator) pushScope() *typeScope {
@@ -311,6 +378,9 @@ func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 	switch st := s.(type) {
 	case *ConstDeclStmt:
+		if err := v.checkNameNotCallable(st.Name, st.Line, st.Col, "constant"); err != nil {
+			return err
+		}
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}
@@ -321,6 +391,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		return nil
 
 	case *AssignStmt:
+		if err := v.checkNameNotCallable(st.Name, st.Line, st.Col, "variable"); err != nil {
+			return err
+		}
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}
@@ -365,7 +438,7 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotCondition(st.Iterable); err != nil {
 			return err
 		}
-		if !v.inRaisesExpr {
+		if !v.inErrorTestExpr {
 			switch lit := st.Iterable.(type) {
 			case *NumberExpr:
 				return newError(
@@ -411,15 +484,31 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		}
 		return v.checkExpr(st.Unexpected)
 
-	case *CheckRaisesStmt:
-		prevRaises := v.inRaisesExpr
-		v.inRaisesExpr = true
+	case *CheckCondStmt:
+		return v.checkExpr(st.Condition)
+
+	case *CheckIsErrorStmt:
+		prevErrTest := v.inErrorTestExpr
+		v.inErrorTestExpr = true
 		err := v.checkExpr(st.Expression)
-		v.inRaisesExpr = prevRaises
+		v.inErrorTestExpr = prevErrTest
+		return err
+
+	case *CheckErrorBlockStmt:
+		prevErrTest := v.inErrorTestExpr
+		v.inErrorTestExpr = true
+		err := v.checkExpr(st.Expression)
+		v.inErrorTestExpr = prevErrTest
 		if err != nil {
 			return err
 		}
-		return v.checkExpr(st.Expected)
+		prevErrBlk := v.inErrorBlock
+		v.inErrorBlock = true
+		v.pushScope()
+		bodyErr := v.checkStmts(st.Body, inFunction)
+		v.popScope()
+		v.inErrorBlock = prevErrBlk
+		return bodyErr
 	}
 	return nil
 }
@@ -442,8 +531,8 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 							line,
 							col,
 							v.source,
-							"Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.",
-							"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'do fail \"...\"'.",
+							"Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.",
+							"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
 						)
 					}
 				}
@@ -639,6 +728,9 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 			return varTypeState{exactNonRecord: true}
 		}
+		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "error" && (ex.Field == "type" || ex.Field == "message") && v.inErrorBlock {
+			return varTypeState{exactNonRecord: true}
+		}
 		targetSt := v.inferExprTypeState(ex.Target)
 		if targetSt.exactRecord != "" {
 			if variants, label, ok := v.fieldUnionVariants(targetSt.exactRecord, ex.Field); ok {
@@ -655,19 +747,50 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *StringExpr, *InterpStringExpr, *NumberExpr, *UnaryExpr:
 		return varTypeState{exactNonRecord: true}
+	case *BinaryExpr:
+		switch ex.Op {
+		case "+", "-", "*", "/", "%":
+			leftSt := v.inferExprTypeState(ex.Left)
+			rightSt := v.inferExprTypeState(ex.Right)
+			if leftSt.listElemType == "number" || rightSt.listElemType == "number" {
+				return varTypeState{listElemType: "number"}
+			}
+			return varTypeState{exactNonRecord: true}
+		}
 	case *CallExpr:
-		if ex.Callee == "push" && len(ex.Args) >= 1 {
-			argSt := v.inferExprTypeState(ex.Args[0])
-			if argSt.listElemType != "" {
-				return varTypeState{listElemType: argSt.listElemType}
+		switch ex.Callee {
+		case "append":
+			if len(ex.Args) >= 1 {
+				argSt := v.inferExprTypeState(ex.Args[0])
+				if argSt.listElemType != "" {
+					return varTypeState{listElemType: argSt.listElemType}
+				}
+				if len(ex.Args) >= 2 {
+					arg2St := v.inferExprTypeState(ex.Args[1])
+					if arg2St.listElemType != "" {
+						return varTypeState{listElemType: arg2St.listElemType}
+					}
+					if arg2St.unionName != "" {
+						return varTypeState{listElemType: arg2St.unionName}
+					}
+					if arg2St.exactRecord != "" {
+						return varTypeState{listElemType: arg2St.exactRecord}
+					}
+					switch ex.Args[1].(type) {
+					case *NumberExpr:
+						return varTypeState{listElemType: "number"}
+					case *StringExpr, *InterpStringExpr:
+						return varTypeState{listElemType: "text"}
+					}
+				}
 			}
-			if argSt.unionName != "" {
-				return varTypeState{listElemType: argSt.unionName}
+		case "sum", "avg":
+			return varTypeState{exactNonRecord: true}
+		case "sort":
+			if len(ex.Args) >= 1 {
+				return v.inferExprTypeState(ex.Args[0])
 			}
-			if argSt.exactRecord != "" {
-				return varTypeState{listElemType: argSt.exactRecord}
-			}
-		} else if ex.Callee == "range" {
+		case "range":
 			return varTypeState{listElemType: "number"}
 		}
 	}
@@ -738,12 +861,6 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			}
 		}
 
-	case *AskExpr:
-		if err := v.checkExpr(ex.Prompt); err != nil {
-			return err
-		}
-		return v.checkNotCondition(ex.Prompt)
-
 	case *UnaryExpr:
 		if err := v.checkExpr(ex.Right); err != nil {
 			return err
@@ -773,8 +890,32 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkNotCondition(ex.Right); err != nil {
 			return err
 		}
-		if (ex.Op == "is" || ex.Op == "is not") && !v.inRaisesExpr {
+		if (ex.Op == "is" || ex.Op == "is not") && !v.inErrorTestExpr {
 			return v.checkUnionLiteralComparison(ex)
+		}
+		if !v.inErrorTestExpr && (ex.Op == "+" || ex.Op == "-" || ex.Op == "*" || ex.Op == "/" || ex.Op == "%") {
+			leftSt := v.inferExprTypeState(ex.Left)
+			rightSt := v.inferExprTypeState(ex.Right)
+			if (leftSt.listElemType != "" && leftSt.listElemType != "number") || (rightSt.listElemType != "" && rightSt.listElemType != "number") {
+				if ex.Op == "+" {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						"Cannot use '+' on non-numeric lists",
+						"Use 'append xs ys' to combine lists; '+' on lists performs element-wise numeric addition.",
+					)
+				}
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Operator %q only supports numbers or numeric lists", ex.Op),
+					"Vector arithmetic requires numeric lists.",
+				)
+			}
 		}
 		return nil
 
@@ -785,10 +926,33 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkExpr(ex.Target); err != nil {
 			return err
 		}
-		if v.inRaisesExpr {
+		if v.inErrorTestExpr {
 			return nil
 		}
 		if id, ok := ex.Target.(*IdentExpr); ok {
+			if id.Name == "error" {
+				if !v.inErrorBlock {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						"'error' can only be used inside an 'expr -> ... end' error block",
+						"Wrap error assertions in 'expr -> error.type is \"...\" end'.",
+					)
+				}
+				if ex.Field != "type" && ex.Field != "message" {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("error has no field %q", ex.Field),
+						"Available fields on error: type, message.",
+					)
+				}
+				return nil
+			}
 			if id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 				return nil
 			}
@@ -868,6 +1032,19 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		}
 
 	case *CallExpr:
+		if !v.inErrorTestExpr && (ex.Callee == "sum" || ex.Callee == "avg") && len(ex.Args) >= 1 {
+			argSt := v.inferExprTypeState(ex.Args[0])
+			if (argSt.listElemType != "" && argSt.listElemType != "number") || argSt.exactRecord != "" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("%s requires a list of numbers", ex.Callee),
+					fmt.Sprintf("Pass a numeric list to '%s'.", ex.Callee),
+				)
+			}
+		}
 		for _, arg := range ex.Args {
 			if err := v.checkExpr(arg); err != nil {
 				return err
@@ -896,7 +1073,7 @@ func isConditionExpr(e Expr) bool {
 }
 
 func (v *typeValidator) checkNotCondition(e Expr) error {
-	if v.inRaisesExpr || e == nil || !isConditionExpr(e) {
+	if v.inErrorTestExpr || e == nil || !isConditionExpr(e) {
 		return nil
 	}
 	line, col := e.Pos()

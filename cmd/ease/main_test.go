@@ -17,7 +17,7 @@ func TestReplMultilineAndDeclarations(t *testing.T) {
 		"end",
 		"p = player with x = 25, role = \"admin\"",
 		"say p.x",
-		"do add 2 3",
+		"add 2 3",
 		"total = 0",
 		"loop range 1 4",
 		"    total = total + it",

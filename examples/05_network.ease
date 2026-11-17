@@ -1,5 +1,5 @@
 # Finale Approval-Testdatei: 05_network.ease
-# Deckt import network, do ask (GET), do send (POST) sowie die strikte
+# Deckt import network, fetch (GET), send (POST) sowie die strikte
 # Trennung zwischen Typ-Konformität (as) und Inhaltsvalidität (to + check) ab.
 
 import network
@@ -52,43 +52,43 @@ test "import network, ask/send Schnittstelle & Form vs. Inhalt"
     api.token is "demo-token"
 
     # Offline / nicht erreichbare Gegenstelle liefert ehrlich ""
-    raw_get  = do ask api "/age"
-    raw_post = do send api "/age" 42
+    raw_get  = fetch api "/age"
+    raw_post = send api "/age" 42
     raw_get is ""
     raw_post is ""
 
     # Typ-Konformität (Form) vs. Inhaltsvalidität (Fachlogik)
-    do parse_age "25" is 25
-    do parse_age "-5" is -5
-    do parse_age "abc" raises "Cannot convert text"
+    parse_age "25" is 25
+    parse_age "-5" is -5
+    parse_age "abc" is error
 
-    do validate_age do parse_age "-5" is "Alter kann nicht negativ sein"
-    do validate_age do parse_age "200" is "Alter ist unrealistisch"
-    do validate_age do parse_age "25" is 25
+    validate_age parse_age "-5" is "Alter kann nicht negativ sein"
+    validate_age parse_age "200" is "Alter ist unrealistisch"
+    validate_age parse_age "25" is 25
 
     events = list as event with
         kind = "click", x = 120, y = 240
         kind = "key", key = "Enter"
         kind = "unknown"
     end
-    do len events is 3
-    do describe_event events.0 is "click@120,240"
-    do describe_event events.1 is "key:Enter"
+    count events is 3
+    describe_event events.0 is "click@120,240"
+    describe_event events.1 is "key:Enter"
 
     # Expliziter zweistufiger Weg: JSON-Parsing -> strikte Strukturprüfung (Pflichtfelder)
-    raw_map = do decode_json '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}'
+    raw_map = decode_json '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}'
     u = raw_map as api_user
     u is api_user
     u.id is 42
     u.name is "Gast"
     u.role is "admin"
 
-    raw_json = do encode_json u
-    roundtrip = (do decode_json raw_json) as api_user
+    raw_json = encode_json u
+    roundtrip = (decode_json raw_json) as api_user
     roundtrip is api_user
 
-    '{"id": 42, "name": "Gast", "role": "admin"}' as api_user raises "Cannot validate text"
-    (do decode_json '{"id": 42, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
-    (do decode_json '{"id": 42, "name": "Gast", "role": "hacker"}') as api_user raises "Invalid value"
-    do decode_json "" raises "empty text"
+    '{"id": 42, "name": "Gast", "role": "admin"}' as api_user is error
+    (decode_json '{"id": 42, "role": "admin"}') as api_user is error
+    (decode_json '{"id": 42, "name": "Gast", "role": "hacker"}') as api_user is error
+    decode_json "" is error
 end

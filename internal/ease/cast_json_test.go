@@ -82,24 +82,24 @@ test "std/network real HTTP GET/POST & Form/Inhalt"
         token   = "secret-123"
     end
 
-    # GET via do ask
-    raw_ok  = do ask api "/age/ok"
-    raw_neg = do ask api "/age/negative"
-    raw_bad = do ask api "/age/bad"
-    raw_err = do ask api "/fail"
+    # GET via ask
+    raw_ok  = fetch api "/age/ok"
+    raw_neg = fetch api "/age/negative"
+    raw_bad = fetch api "/age/bad"
+    raw_err = fetch api "/fail"
 
     raw_ok is "25"
     raw_err is ""
 
     # Typ-Konformität (as) vs. Inhaltsvalidität (to + check)
-    do parse_age raw_ok is 25
-    do parse_age raw_neg is -5
-    do parse_age raw_bad raises "Cannot convert text"
-    do validate_age do parse_age raw_ok is 25
-    do validate_age do parse_age raw_neg is "Alter kann nicht negativ sein"
+    parse_age raw_ok is 25
+    parse_age raw_neg is -5
+    parse_age raw_bad is error
+    validate_age parse_age raw_ok is 25
+    validate_age parse_age raw_neg is "Alter kann nicht negativ sein"
 
-    # POST via do send
-    posted = do send api "/submit" 42
+    # POST via send
+    posted = send api "/submit" 42
     posted is "echo:42"
 end
 `, srv.URL)
@@ -123,9 +123,9 @@ end
 
 test "Record <-> JSON via decode_json / encode_json and strict as"
     # Valid JSON with single-quoted raw string, unknown field tolerated, all def fields present
-    raw_map = do decode_json '{"id": 7, "name": "Aria", "role": "admin", "extra": true}'
+    raw_map = decode_json '{"id": 7, "name": "Aria", "role": "admin", "extra": true}'
     raw_map is not text
-    do type raw_map is "map"
+    type raw_map is "map"
     raw_map.id is 7
 
     u = raw_map as api_user
@@ -135,8 +135,8 @@ test "Record <-> JSON via decode_json / encode_json and strict as"
     u.role is "admin"
 
     # Explicit JSON encoding & roundtrip
-    encoded = do encode_json u
-    decoded = do decode_json encoded as api_user
+    encoded = encode_json u
+    decoded = decode_json encoded as api_user
     decoded is api_user
     decoded.id is 7
     decoded.name is "Aria"
@@ -148,24 +148,24 @@ test "Record <-> JSON via decode_json / encode_json and strict as"
     with_defaults.role is "member"
 
     # Raw text directly passed to 'as <def>' is rejected immediately
-    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user raises "Cannot validate text as api_user"
-    "" as api_user raises "Cannot validate text as api_user"
+    '{"id": 7, "name": "Aria", "role": "admin"}' as api_user is error
+    "" as api_user is error
 
     # Missing required fields in 'as <def>' (no silent default filling!)
-    (do decode_json '{"id": 7, "role": "admin"}') as api_user raises "Missing field 'api_user.name'"
+    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
 
     # Invalid JSON / non-map decoded values / wrong types / invalid union -> immediate error
-    do decode_json "" raises "empty text"
-    do decode_json '{broken' raises "Invalid JSON"
-    do decode_json 42 raises "requires text"
-    (do decode_json 'null') as api_user raises "Cannot validate none as api_user"
-    (do decode_json '[1, 2]') as api_user raises "Cannot validate list as api_user"
-    (do decode_json '{"id": "not-a-num", "name": "Aria", "role": "admin"}') as api_user raises "api_user.id"
-    (do decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user raises "api_user.role"
-    42 as api_user raises "expected structured map or api_user record"
+    decode_json "" is error
+    decode_json '{broken' is error
+    decode_json 42 is error
+    (decode_json 'null') as api_user is error
+    (decode_json '[1, 2]') as api_user is error
+    (decode_json '{"id": "not-a-num", "name": "Aria", "role": "admin"}') as api_user is error
+    (decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user is error
+    42 as api_user is error
 
     # Symmetry: no JSON magic in 'as text'
-    u as text raises "Cannot convert api_user to text"
+    u as text is error
 end
 `
 	report, err := RunChecks(src)
@@ -185,10 +185,10 @@ def my_record
 end
 
 to make_pair a b
-    do decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
+    decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
 end
 
-x = do make_pair "a" "b" as my_record
+x = make_pair "a" "b" as my_record
 `
 	prog, err := ParseProgram(src)
 	if err != nil {
@@ -246,17 +246,17 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 		},
 		{
 			name:    "json array rejected for record def",
-			src:     "def user\n    id = 0\nend\nx = (do decode_json '[1, 2]') as user\n",
+			src:     "def user\n    id = 0\nend\nx = (decode_json '[1, 2]') as user\n",
 			wantSub: `Cannot validate list as user: expected structured map or user record`,
 		},
 		{
 			name:    "missing required field rejected for record def",
-			src:     "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (do decode_json '{\"id\": 1}') as user\n",
+			src:     "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (decode_json '{\"id\": 1}') as user\n",
 			wantSub: `Missing field 'user.name'`,
 		},
 		{
 			name:    "wrong nested field type",
-			src:     "def user\n    id = 0\nend\nx = (do decode_json '{\"id\": true}') as user\n",
+			src:     "def user\n    id = 0\nend\nx = (decode_json '{\"id\": true}') as user\n",
 			wantSub: `Field 'user.id' expected number, got text (true)`,
 		},
 		{
@@ -287,7 +287,7 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 
 func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 	// Rule 1: Every runtime list is *ListValue with inferred or explicit ElemType.
-	val, err := EvalProgram("do range 1 3\n", &bytes.Buffer{})
+	val, err := EvalProgram("range 1 3\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("range eval failed: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: number, len: 2}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram("def p\n  x = 1\nend\ninst = p with x = 2\ndo fields inst\n", &bytes.Buffer{})
+	val, err = EvalProgram("def p\n  x = 1\nend\ninst = p with x = 2\nfields inst\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("fields eval failed: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: text, len: 1}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`do decode_json '[1, 2]'`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`decode_json '[1, 2]'`+"\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("decode_json array failed: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: number, len: 2} from decode_json, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`do decode_json '[]'`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`decode_json '[]'`+"\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("decode_json empty array failed: %v", err)
 	}
@@ -356,35 +356,37 @@ def ticket = "vip" | "standard"
 test "Rule 1 & 2: strict list types and 'as' validation"
     (list 1, 2) as number is list 1, 2
     (list "vip", "standard") as ticket is list "vip", "standard"
-    (do decode_json '[1, 2, 3]') as number is list 1, 2, 3
-    (do decode_json '["a", "b"]') as text is list "a", "b"
-    users = (do decode_json '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]') as user
-    do len users is 2
+    (decode_json '[1, 2, 3]') as number is list 1, 2, 3
+    (decode_json '["a", "b"]') as text is list "a", "b"
+    users = (decode_json '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]') as user
+    count users is 2
     users.0 is user
     users.0.name is "Ada"
     users.1.id is 2
 
-    t = (do decode_json '{"title": "Red", "scores": [10, 20]}') as team
+    t = (decode_json '{"title": "Red", "scores": [10, 20]}') as team
     t is team
     t.scores is list 10, 20
 
-    (list "a", "b") as number raises "Cannot convert list to number"
-    (list 1, 2) as text raises "Cannot convert list to text"
-    (list "vip", "gold") as ticket raises "not valid for union"
-    (do decode_json '[1, "bad"]') as number raises "element 1 expected number, got text"
-    (do decode_json '[{"id": 1, "name": "Ada"}, {"id": 2}]') as user raises "Missing field 'user.1.name'"
-    (do decode_json '{"title": "Red", "scores": [10, "bad"]}') as team raises "Element 'team.scores.1' expected number"
+    (list "a", "b") as number is error
+    (list 1, 2) as text is error
+    (list "vip", "gold") as ticket is error
+    (decode_json '[1, "bad"]') as number is error
+    (decode_json '[{"id": 1, "name": "Ada"}, {"id": 2}]') as user is error
+    (decode_json '{"title": "Red", "scores": [10, "bad"]}') as team is error
 end
 
-test "Rule 3: homogeneous list concatenation with +"
-    combined = (list 1, 2) + (list 3, 4)
+test "Rule 3: homogeneous list concatenation with append and vector +"
+    combined = append (list 1, 2) (list 3, 4)
     combined is list 1, 2, 3, 4
-    combined2 = (list as number) + (list 5, 6)
+    combined2 = append (list as number) (list 5, 6)
     combined2 is list 5, 6
-    combined3 = (list 7, 8) + (do decode_json '[]')
+    combined3 = append (list 7, 8) (decode_json '[]')
     combined3 is list 7, 8
-    ((list 1, 2) + (list "a", "b")) raises "Cannot concatenate list of number and list of text"
-    ((list as number) + (list as text)) raises "Cannot concatenate list of number and list of text"
+    ((list 1, 2) + (list 3, 4)) is list 4, 6
+    append (list 1, 2) (list "a", "b") is error
+    append (list as number) (list as text) is error
+    ((list 1, 2) + (list "a", "b")) is error
 end
 
 test "Rule 4: batch-with on record lists"
@@ -393,7 +395,7 @@ test "Rule 4: batch-with on record lists"
         x = 10, vx = 2, life = 5
     end
     moved = cloud with x = x + vx
-    do len moved is 2
+    count moved is 2
     moved.0 is particle
     moved.0.x is 5
     moved.1.x is 12
@@ -404,46 +406,47 @@ test "Rule 4: batch-with on record lists"
     moved2 = (list p1, p2) with x = x + vx
     moved2.0.x is 4
     moved2.1.x is 10
-    (moved2 + (list p1)).2.x is 1
+    (append moved2 (list p1)).2.x is 1
 
-    ((list 1, 2) with x = 1) raises "Cannot use 'with'"
+    ((list 1, 2) with x = 1) is error
 end
 
-test "Rule 5: push type lock and value semantics under aliasing"
-    r = do range 1 1
-    a = do push r 2
-    b = do push a 3
-    c = do push a 4
+test "Rule 5: append type lock and value semantics under aliasing"
+    r = range 1 1
+    a = append r 2
+    b = append a 3
+    c = append a 4
     a is list 1, 2
     b is list 1, 2, 3
     c is list 1, 2, 4
 
-    dyn = do decode_json '[]'
-    dyn_num = do push dyn 42
+    dyn = decode_json '[]'
+    dyn_num = append dyn 42
     dyn_num is list 42
-    do len dyn is 0
-    do push dyn_num "bad" raises "Cannot push text into list of number"
+    count dyn is 0
+    append dyn_num "bad" is error
     bad_empty = list as number
-    do push bad_empty "bad" raises "Cannot push text into list of number"
+    append bad_empty "bad" is error
 end
 `
 	report, err := RunChecks(src)
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Failed != 0 || report.Passed != 37 {
-		t.Fatalf("expected 37 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	if report.Failed != 0 || report.Passed != 39 {
+		t.Fatalf("expected 39 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
 	}
 
-	// Verify TypeError stage explicitly for cast, +, and push failures.
+	// Verify TypeError stage explicitly for cast, +, and append failures.
 	typeErrCases := []struct {
 		name string
 		src  string
 	}{
 		{"cast list mismatch", `x = (list "a", "b") as number`},
-		{"cast mixed json array", `x = (do decode_json '[1, "bad"]') as number`},
-		{"concat mismatch", `x = (list 1, 2) + (list "a", "b")`},
-		{"push mismatch", "xs = list 1, 2\nys = do push xs \"x\""},
+		{"cast mixed json array", `x = (decode_json '[1, "bad"]') as number`},
+		{"non-numeric list +", `x = (list 1, 2) + (list "a", "b")`},
+		{"append list mismatch", `x = append (list 1, 2) (list "a", "b")`},
+		{"append mismatch", "xs = list 1, 2\nys = append xs \"x\""},
 	}
 	for _, tc := range typeErrCases {
 		_, err := EvalProgram(tc.src+"\n", &bytes.Buffer{})
@@ -478,29 +481,28 @@ moved = cloud with x = x + vx
 		t.Fatalf("expected moved to be *ListValue{ElemType: particle}, got %#v", movedVal)
 	}
 
-	// Verify amortized O(1) push: linear chain reuses spare capacity; branching copies without aliasing corruption.
+	// Verify amortized O(1) append: linear chain reuses spare capacity; branching copies without aliasing corruption.
 	prealloc := make([]Value, 2, 8)
 	prealloc[0] = 1.0
 	prealloc[1] = 2.0
 	base := &ListValue{ElemType: "number", Elements: prealloc}
-	b1Val, handled, err := ev.callBuiltin("push", []Value{base, 3.0}, 1, 1)
+	b1Val, handled, err := ev.callBuiltin("append", []Value{base, 3.0}, 1, 1)
 	if !handled || err != nil {
-		t.Fatalf("first push failed: handled=%v err=%v", handled, err)
+		t.Fatalf("first append failed: handled=%v err=%v", handled, err)
 	}
 	b1 := b1Val.(*ListValue)
 	if &b1.Elements[0] != &base.Elements[0] {
-		t.Fatalf("expected linear first push to reuse spare slice capacity in O(1)")
+		t.Fatalf("expected linear first append to reuse spare slice capacity in O(1)")
 	}
-	b2Val, handled, err := ev.callBuiltin("push", []Value{base, 4.0}, 1, 1)
+	b2Val, handled, err := ev.callBuiltin("append", []Value{base, 4.0}, 1, 1)
 	if !handled || err != nil {
-		t.Fatalf("second branched push failed: handled=%v err=%v", handled, err)
+		t.Fatalf("second branched append failed: handled=%v err=%v", handled, err)
 	}
 	b2 := b2Val.(*ListValue)
 	if &b2.Elements[0] == &b1.Elements[0] {
-		t.Fatalf("expected branched push on already-pushed list to allocate a fresh backing array")
+		t.Fatalf("expected branched append on already-appended list to allocate a fresh backing array")
 	}
 	if b1.Elements[2] != 3.0 || b2.Elements[2] != 4.0 {
 		t.Fatalf("value semantics corrupted: b1=%v b2=%v", b1.Elements, b2.Elements)
 	}
 }
-

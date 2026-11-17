@@ -48,10 +48,10 @@ to divide a b
 end
 
 test "functions"
-  do double 4 is 8
-  do double 4 is not 9
-  do divide 10 2 is 5
-  do divide 1 0 raises "Division by zero"
+  double 4 is 8
+  double 4 is not 9
+  divide 10 2 is 5
+  divide 1 0 is error
 end
 
 test "loops and mutability"
@@ -63,7 +63,7 @@ test "loops and mutability"
   acc is 12
 end
 
-res = do double 7
+res = double 7
 say "result={res}"
 `
 	report, err := RunChecks(src)
@@ -90,7 +90,7 @@ to square n
 end
 
 test
-  do square 3 is 10
+  square 3 is 10
 end
 `
 	report, err := RunChecks(badCheck)
@@ -158,7 +158,7 @@ func TestStandaloneBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	programSrc := "to greet who\n  \"Hi \" + who\nend\ntest\n  do greet \"Ease\" is \"Hi Ease\"\nend\nsay do greet \"Go\"\n"
+	programSrc := "to greet who\n  \"Hi \" + who\nend\ntest\n  greet \"Ease\" is \"Hi Ease\"\nend\nsay greet \"Go\"\n"
 	if err := BuildStandaloneExe(hostPath, programSrc, outPath); err != nil {
 		t.Fatalf("BuildStandaloneExe failed: %v", err)
 	}
@@ -219,7 +219,7 @@ end
 func TestAskInput(t *testing.T) {
 	src := `
 name = ask "Wie heißt du?"
-city = do ask "Wo wohnst du?"
+city = ask "Wo wohnst du?"
 say "Hallo {name} aus {city}!"
 `
 	var out bytes.Buffer
@@ -261,17 +261,17 @@ to is_valid_vip code age
 end
 
 test
-    do allow_entry 123 25      is "Name muss Text sein"
-    do allow_entry "" 25       is "Name darf nicht leer sein"
-    do allow_entry "Max" "abc" is "Alter muss eine Zahl sein"
-    do allow_entry "Max" 16    is "Du bist 16. Das ist jung"
-    do allow_entry "Max" 150   is "Ungültiges Alter"
-    do allow_entry "Max" 25    is "Willkommen Max, du darfst rein!"
+    allow_entry 123 25      is "Name muss Text sein"
+    allow_entry "" 25       is "Name darf nicht leer sein"
+    allow_entry "Max" "abc" is "Alter muss eine Zahl sein"
+    allow_entry "Max" 16    is "Du bist 16. Das ist jung"
+    allow_entry "Max" 150   is "Ungültiges Alter"
+    allow_entry "Max" 25    is "Willkommen Max, du darfst rein!"
 
-    do is_valid_vip "VIP2026" 20 is "valid"
-    do is_valid_vip "VIP2026" 16 is "invalid"
-    do is_valid_vip "FALSCH" 25  is "invalid"
-    do is_valid_vip "VIP2026" "x" is "invalid"
+    is_valid_vip "VIP2026" 20 is "valid"
+    is_valid_vip "VIP2026" 16 is "invalid"
+    is_valid_vip "FALSCH" 25  is "invalid"
+    is_valid_vip "VIP2026" "x" is "invalid"
 end
 
 user_name = ask "Wie heißt du?"
@@ -358,8 +358,8 @@ def player
     speed = 400
 end
 greg = player with x = 10
-say do type greg
-say do fields greg
+say type greg
+say fields greg
 name = ask "Name?"
 say name
 `
@@ -476,7 +476,7 @@ say "Hello, {name}"
 		t.Fatalf("variant 1 mismatch:\ngot:  %q\nwant: %q", out1.String(), want1)
 	}
 
-	// Variant 2: structured with `to start`, `do say`, `do add`, `do ask ... as number`, `do start`
+	// Variant 2: structured with `to start`, `say`, `add`, `ask ... as number`, `start`
 	src2 := `
 def x = 1
 def y = 0.5
@@ -486,16 +486,16 @@ to add a b
 end
 
 to start
-    do say "Hello World"
-    sum = do add x y
-    do say "Sum of {x} and {y} is {sum}"
+    say "Hello World"
+    total = add x y
+    say "Sum of {x} and {y} is {total}"
 
-    age = do ask "Wie alt bist du?" as number
-    check age is not number -> do say "Keine gültige Zahl."
-    do say "Du bist {age} Jahre alt."
+    age = ask "Wie alt bist du?" as number
+    check age is not number -> say "Keine gültige Zahl."
+    say "Du bist {age} Jahre alt."
 end
 
-do start
+start
 `
 	var out2 bytes.Buffer
 	if _, err := EvalProgramWithInput(src2, strings.NewReader("28\n"), &out2); err != nil {
@@ -520,11 +520,11 @@ empty_scores = list as number
 empty_cloud  = list as particle
 
 to update_particles items dt
-    total = do len items
+    total = count items
     total + dt
 end
 
-stepped = do update_particles list as particle 1
+stepped = update_particles list as particle 1
 
 cloud = list as particle with
     x = 0, vx = 5, life = 20
@@ -541,10 +541,10 @@ end
 
 test
     empty_scores is list
-    do len empty_scores is 0
-    do len empty_cloud is 0
+    count empty_scores is 0
+    count empty_cloud is 0
     stepped is 1
-    do len cloud is 2
+    count cloud is 2
     cloud.0.vx is 5
     cloud.0.state is "active"
     cloud.1.x is 10
@@ -568,8 +568,8 @@ end
 	}
 
 	// Pushing wrong type into `list as number` must fail
-	if _, err := EvalProgram("xs = list as number\nxs = do push xs \"bad\"\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot push") {
-		t.Fatalf("expected push type error, got: %v", err)
+	if _, err := EvalProgram("xs = list as number\nxs = append xs \"bad\"\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot append") {
+		t.Fatalf("expected append type error, got: %v", err)
 	}
 
 	// Strict field type check in `with`
@@ -585,7 +585,7 @@ func TestLegacySyntaxRejected(t *testing.T) {
 	}{
 		{"param brackets", "to add [a b]\n  a + b\nend\n"},
 		{"param commas", "to add a, b\n  a + b\nend\n"},
-		{"call commas", "to add a b\n  a + b\nend\nx = do add 1, 2\n"},
+		{"call commas", "to add a b\n  a + b\nend\nx = add 1, 2\n"},
 		{"double equals", "if 1 == 1\n  say 1\nend\n"},
 		{"not equals", "if 1 != 2\n  say 1\nend\n"},
 		{"hyphenated is-not", "if 1 is-not 2\n  say 1\nend\n"},
@@ -594,13 +594,13 @@ func TestLegacySyntaxRejected(t *testing.T) {
 		{"check colon", "check \"math\":\n  1 is 1\nend\n"},
 		{"bracket list literal", "xs = [1, 2, 3]\n"},
 		{"bracket indexing", "xs = list 1, 2\ny = xs[0]\n"},
-		{"paren function call", "to inc x\n  x + 1\nend\ny = inc(1)\n"},
-		{"paren ask call", "x = ask(\"Name?\")\n"},
-		{"inline test inside function", "to greet name\n  \"Hi {name}\"\ntest\n  do greet \"World\" is \"Hi World\"\nend\n"},
+		{"paren function call", "to add a b\n  a + b\nend\ny = add(1, 2)\n"},
+		{"paren ask call", "x = ask()\n"},
+		{"inline test inside function", "to greet name\n  \"Hi {name}\"\ntest\n  greet \"World\" is \"Hi World\"\nend\n"},
 	}
 	for _, tc := range cases {
 		if tc.name == "report keyword" {
-			if _, err := EvalProgram(tc.src+"x = do add 1 2\n", &bytes.Buffer{}); err == nil {
+			if _, err := EvalProgram(tc.src+"x = add 1 2\n", &bytes.Buffer{}); err == nil {
 				t.Fatalf("%s: expected error, got nil", tc.name)
 			}
 			continue
@@ -633,10 +633,10 @@ to run_window
     pos_x = 400
     state = frame_state
 
-    loop do range 1 10
+    loop range 1 10
         check state.status is "closed" -> "Fenster geschlossen:{pos_x}"
 
-        pos_x = do move_x pos_x state.key
+        pos_x = move_x pos_x state.key
         current = scene with
             background = "slate"
             circles = list as circle with
@@ -647,8 +647,8 @@ to run_window
             end
         end
 
-        raw_state = do send win current
-        state = do decode_json raw_state as frame_state
+        raw_state = present win current
+        state = decode_json raw_state as frame_state
         check state is not frame_state -> "Fensterfehler"
     end
 
@@ -656,8 +656,8 @@ to run_window
 end
 
 test "inclusive range & headless screen"
-    do range 1 4 is list 1, 2, 3, 4
-    do run_window is "Fenster geschlossen:406"
+    range 1 4 is list 1, 2, 3, 4
+    run_window is "Fenster geschlossen:406"
 end
 `
 	report, err := RunChecks(src)
@@ -671,7 +671,7 @@ end
 
 func TestSingleLineLoopExpressions(t *testing.T) {
 	src := `
-loop range 1 10 do say it end
+loop range 1 10 say it end
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(src, &out); err != nil {
@@ -683,11 +683,11 @@ loop range 1 10 do say it end
 	}
 
 	srcNamed := `
-sum = 0
-loop range 1 4 do sum = sum + it end
+total = 0
+loop range 1 4 total = total + it end
 
 test "single-line loop"
-    sum is 10
+    total is 10
 end
 `
 	report, err := RunChecks(srcNamed)
@@ -709,14 +709,14 @@ to add_three a b c
     a + b + c
 end
 
-sum = 0
-loop range 1 3 do sum = sum + it end
+total = 0
+loop range 1 3 total = total + it end
 
 test "comma-free parameters and calls"
-    do greet "Welt" "!" is "Hallo Welt!"
-    do greet "Welt" "" is "Hallo Welt"
-    do add_three 2 3 4 is 9
-    sum is 6
+    greet "Welt" "!" is "Hallo Welt!"
+    greet "Welt" "" is "Hallo Welt"
+    add_three 2 3 4 is 9
+    total is 6
 end
 `
 	report, err := RunChecks(src)
@@ -762,11 +762,11 @@ end
 a = 10
 
 test "atomic negative literal vs binary subtraction"
-    do classify -2 is "non-positive"
-    do classify -0.5 is "non-positive"
-    do get_count - 2 is 8
+    classify -2 is "non-positive"
+    classify -0.5 is "non-positive"
+    get_count - 2 is 8
     a - 2 is 8
-    do negate 5 is -5
+    negate 5 is -5
 end
 `
 	report, err := RunChecks(src)
@@ -799,10 +799,12 @@ end
 	}
 }
 
-func TestCheckRaisesMatchesMessageOnlyNotSourceLine(t *testing.T) {
+func TestErrorBlockMatchesMessageOnlyNotSourceLine(t *testing.T) {
 	src := `
-test "raises must match error message only"
-    10 / 0 raises " bogus_substring_on_same_line "
+test "error block must match error message only"
+    10 / 0 ->
+        error.message is "bogus_substring_on_same_line"
+    end
 end
 `
 	report, err := RunChecks(src)
@@ -820,8 +822,8 @@ test "float modulo and modulo by zero"
     5 % 0.5 is 0
     5.5 % 2 is 1.5
     10 % 3 is 1
-    5 % 0 raises "Modulo by zero"
-    5 % 0.0 raises "Modulo by zero"
+    5 % 0 is error
+    5 % 0.0 is error
 end
 `
 	report, err := RunChecks(src)
@@ -932,7 +934,7 @@ say "val={missing_var}"
 }
 
 func TestForLoopNoImplicitFieldInjectionAndTailoredHint(t *testing.T) {
-	// 1. Outer `vx = 100` and function parameter `vx` must NOT be shadowed by record field `vx = 5` inside `for ps do ... end`.
+	// 1. Outer `vx = 100` and function parameter `vx` must NOT be shadowed by record field `vx = 5` inside `for ps ... end`.
 	src := `
 def particle
     vx = 0
@@ -942,8 +944,8 @@ to check_param_and_field vx items
     outer_seen = 0
     field_seen = 0
     loop items
-        check vx is not 100 -> do fail "parameter vx was shadowed"
-        check it.vx is not 5 -> do fail "unexpected it.vx"
+        check vx is not 100 -> fail "parameter vx was shadowed"
+        check it.vx is not 5 -> fail "unexpected it.vx"
         outer_seen = vx
         field_seen = it.vx
     end
@@ -953,28 +955,28 @@ end
 vx = 100
 p = particle with vx = 5
 ps = list as particle
-ps = do push ps p
+ps = append ps p
 
 test "no implicit field injection in loop"
     outer_seen = 0
     field_seen = 0
     loop ps
-        check vx is not 100 -> do fail "outer vx was shadowed"
-        check it.vx is not 5 -> do fail "unexpected it.vx"
+        vx is 100
+        it.vx is 5
         outer_seen = vx
         field_seen = it.vx
     end
     outer_seen is 100
     field_seen is 5
-    do check_param_and_field 100 ps is 1005
+    check_param_and_field 100 ps is 1005
 end
 `
 	report, err := RunChecks(src)
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Failed != 0 || report.Passed != 3 {
-		t.Fatalf("expected 3 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	if report.Failed != 0 || report.Passed != 5 {
+		t.Fatalf("expected 5 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
 	}
 
 	// 2. Accessing an undefined bare field `vx` inside `loop ps` produces a tailored error pointing to `it.vx`.
@@ -985,7 +987,7 @@ end
 
 p = particle with vx = 5
 ps = list as particle
-ps = do push ps p
+ps = append ps p
 
 loop ps
     say "{vx}"
@@ -1004,15 +1006,15 @@ end
 }
 
 func TestLargeInputsAndResourceLimitsIssue13(t *testing.T) {
-	// 1. Huge `do range 1 1000000000` must fail with RuntimeError instead of Go OOM.
-	_, err := EvalProgram("xs = do range 1 1000000000\nsay do len xs\n", &bytes.Buffer{})
+	// 1. Huge `range 1 1000000000` must fail with RuntimeError instead of Go OOM.
+	_, err := EvalProgram("xs = range 1 1000000000\nsay count xs\n", &bytes.Buffer{})
 	var easeErr *EaseError
 	if !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "range too large") {
 		t.Fatalf("expected RuntimeError 'range too large', got: %v", err)
 	}
 
 	// Huge bounds beyond int64 range must also fail cleanly.
-	_, err = EvalProgram("xs = do range 1 100000000000000000000\n", &bytes.Buffer{})
+	_, err = EvalProgram("xs = range 1 100000000000000000000\n", &bytes.Buffer{})
 	if !errors.As(err, &easeErr) || !strings.Contains(easeErr.Message, "range too large") {
 		t.Fatalf("expected RuntimeError 'range too large' for huge float bound, got: %v", err)
 	}
@@ -1037,11 +1039,11 @@ func TestLargeInputsAndResourceLimitsIssue13(t *testing.T) {
 	httpSrc := fmt.Sprintf(`
 import network
 n = network with url = %q, timeout = 5
-body = do ask n "/big"
+body = fetch n "/big"
 body is ""
 
 req = http_request with method = "GET", url = "%s/big", timeout = 5
-resp = do http_call req
+resp = http_call req
 `, srv.URL, srv.URL)
 	prog, err := ParseProgram(httpSrc)
 	if err != nil {
@@ -1062,7 +1064,7 @@ resp = do http_call req
 	}
 	bodyVal, _ := ev.global.Lookup("body")
 	if bodyVal != "" {
-		t.Fatalf("expected do ask to return \"\" on oversized HTTP response, got %q", bodyVal)
+		t.Fatalf("expected ask to return \"\" on oversized HTTP response, got %q", bodyVal)
 	}
 
 	// 4. Unopted-in ./std/<name>.ease in working directory must NOT silently override embedded stdlib.
@@ -1126,9 +1128,9 @@ to with_tax price
     price + (price * tax_rate)
 end
 
-say do sum_to 3
+say sum_to 3
 say total
-say do with_tax 10
+say with_tax 10
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(src, &out); err != nil {
@@ -1140,13 +1142,13 @@ say do with_tax 10
 
 	// 2. Attempting to mutate a global (read before local assignment) raises clear RuntimeError.
 	mutateGlobalSrc := `
-count = 0
+counter = 0
 to bump
-    count = count + 1
+    counter = counter + 1
 end
-do bump
+bump
 `
-	if _, err := EvalProgram(mutateGlobalSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot modify global 'count' inside a function; pass it in and return the new value instead.") {
+	if _, err := EvalProgram(mutateGlobalSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot modify global 'counter' inside a function; pass it in and return the new value instead.") {
 		t.Fatalf("expected global mutation error, got: %v", err)
 	}
 
@@ -1159,7 +1161,7 @@ to mixed n
     end
     total
 end
-say do mixed 2
+say mixed 2
 `
 	if _, err := EvalProgram(mixedScopeSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot modify global 'total' inside a function") {
 		t.Fatalf("expected mixed global/local error, got: %v", err)
@@ -1171,7 +1173,7 @@ to describe x
     check x > 0 -> r = "pos"
     "got {r}"
 end
-say do describe 1
+say describe 1
 `
 	if _, err := EvalProgram(checkArrowLeakSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Unknown variable "r"`) {
 		t.Fatalf("expected block-scoped r inside check -> to be unknown outside, got: %v", err)
@@ -1186,7 +1188,7 @@ to describe x
     end
     "got {r}"
 end
-say do describe 0
+say describe 0
 `
 	if _, err := EvalProgram(checkElseLeakSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Unknown variable "r"`) {
 		t.Fatalf("expected block-scoped r inside check else to be unknown outside, got: %v", err)
@@ -1199,7 +1201,7 @@ to describe x
     check x > 0 -> r = "pos"
     "got {r}"
 end
-say do describe 1
+say describe 1
 `
 	var out2 bytes.Buffer
 	if _, err := EvalProgram(checkUpdateLocalSrc, &out2); err != nil {
@@ -1215,7 +1217,7 @@ to inc n
     n = n + 1
     n
 end
-say do inc 1
+say inc 1
 `
 	if _, err := EvalProgram(paramReassignSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Cannot reassign parameter "n"; assign to a new local variable instead.`) {
 		t.Fatalf("expected parameter reassignment error, got: %v", err)
@@ -1267,8 +1269,8 @@ end
 
 words = list "a", "b", "a"
 nums = list 1, 2, 3
-say do count_a words
-say do first_big nums
+say count_a words
+say first_big nums
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(arrowLoopSrc, &out); err != nil {
@@ -1281,7 +1283,7 @@ say do first_big nums
 	// 3. Top-level value after `->` is rejected with clear diagnostic (both when true and when false).
 	for _, xVal := range []string{"1", "0"} {
 		topValSrc := "x = " + xVal + "\ncheck x > 0 -> \"A\"\n"
-		if _, err := EvalProgram(topValSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.") {
+		if _, err := EvalProgram(topValSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.") {
 			t.Fatalf("expected top-level check value error (x=%s), got: %v", xVal, err)
 		}
 	}
@@ -1323,9 +1325,9 @@ func TestHardeningEvalRepeatHTTPPoolingScreenCloseAndListDefaults(t *testing.T) 
 	httpSrc := fmt.Sprintf(`
 import network
 n = network with url = %q, timeout = 2
-a = do ask n "/fast"
-b = do ask n "/fast"
-c = do ask n "/fast"
+a = fetch n "/fast"
+b = fetch n "/fast"
+c = fetch n "/fast"
 say "{a}-{b}-{c}"
 `, srv.URL)
 	var httpOut bytes.Buffer
@@ -1342,7 +1344,7 @@ say "{a}-{b}-{c}"
 	timeoutSrc := fmt.Sprintf(`
 import network
 req = http_request with url = %q, timeout = 0.03
-r = do http_call req
+r = http_call req
 say r.error
 `, srv.URL+"/slow")
 	var timeoutOut bytes.Buffer
@@ -1384,8 +1386,8 @@ def bag
 end
 b1 = bag with items = bag.items
 b2 = bag with items = bag.items
-items1 = do push b1.items 3
-say "{do len items1}-{do len b2.items}-{do len bag.items}"
+items1 = append b1.items 3
+say "{count items1}-{count b2.items}-{count bag.items}"
 `
 	var listOut bytes.Buffer
 	if _, err := EvalProgram(listDefaultSrc, &listOut); err != nil {
@@ -1440,11 +1442,11 @@ loop range 1 100
         else
             next = seq.(it.index - 1) + seq.(it.index - 2)
             check next > 25 -> end
-            seq = do push seq next
+            seq = append seq next
     end
 end
-say do len seq
-say seq.((do len seq) - 1)
+say count seq
+say seq.((count seq) - 1)
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(happySrc, &out); err != nil {
@@ -1471,7 +1473,7 @@ to find_first_over limit xs
 end
 
 xs_in = list 1, 8, 12
-say do find_first_over 5 xs_in
+say find_first_over 5 xs_in
 
 pairs = list as text
 loop range 1 2
@@ -1480,10 +1482,10 @@ loop range 1 2
         check
             it is 11 -> end
         end
-        pairs = do push pairs "{outer}:{it}:{it.index}"
+        pairs = append pairs "{outer}:{it}:{it.index}"
     end
 end
-say do len pairs
+say count pairs
 say pairs.0
 say pairs.1
 `
@@ -1553,5 +1555,381 @@ say pairs.1
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
 		}
+	}
+}
+
+func TestArityPrefixCallsAndNoDo(t *testing.T) {
+	happySrc := `
+def user
+    id   = 0
+    name = "Guest"
+end
+
+say greet "Ada"
+
+to greet name
+    "Hi {name}"
+end
+
+to ping
+    "pong"
+end
+
+to add a b
+    a + b
+end
+
+to sum_squares xs
+    total = 0
+    loop xs
+        total = total + (it * it)
+    end
+    total
+end
+
+to fib n
+    check n <= 1 -> n
+    fib (n - 1) + fib (n - 2)
+end
+
+say ping
+say add (1 + 2) 3
+say sum_squares range 1 5
+say fib 7
+raw = '{"id": 1, "name": "Ada"}'
+u = decode_json raw as user
+say u.name
+loop range 1 3 say it end
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(happySrc, &out); err != nil {
+		t.Fatalf("expected arity prefix program to succeed, got: %v", err)
+	}
+	want := "Hi Ada\npong\n6\n55\n13\nAda\n1\n2\n3\n"
+	if out.String() != want {
+		t.Fatalf("output mismatch:\ngot:\n%s\nwant:\n%s", out.String(), want)
+	}
+
+	// Fixed arity 1 for ask ""
+	var askOut bytes.Buffer
+	val, err := EvalProgramWithInput("ans = ask \"\"\nsay ans\n", strings.NewReader("hello\n"), &askOut)
+	if err != nil {
+		t.Fatalf("ask \"\" failed: %v", err)
+	}
+	_ = val
+	if askOut.String() != "hello\n" {
+		t.Fatalf("expected 'hello\\n', got %q", askOut.String())
+	}
+
+	negCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "legacy do",
+			src:  "to add a b\n  a + b\nend\nx = do add 2 3\n",
+			want: "'do' was removed",
+		},
+		{
+			name: "too few arguments",
+			src:  "to add a b\n  a + b\nend\nx = add 2\n",
+			want: "Function 'add' expects 2 argument(s), got 1",
+		},
+		{
+			name: "ask without argument",
+			src:  "x = ask\n",
+			want: "Function 'ask' expects 1 argument(s), got 0",
+		},
+		{
+			name: "var collides with function",
+			src:  "to add a b\n  a + b\nend\nadd = 5\n",
+			want: "Cannot name variable \"add\" the same as a 'to' function",
+		},
+		{
+			name: "var collides with builtin",
+			src:  "count = 0\n",
+			want: "Cannot name variable \"count\" the same as a built-in function",
+		},
+		{
+			name: "func collides with builtin",
+			src:  "to count x\n  x\nend\n",
+			want: "Cannot define function \"count\": it conflicts with a built-in function",
+		},
+		{
+			name: "param collides with function",
+			src:  "to add a b\n  a + b\nend\nto f add\n  1\nend\n",
+			want: "Cannot name parameter \"add\" the same as a 'to' function",
+		},
+	}
+	for _, tc := range negCases {
+		if _, err := ParseProgram(tc.src); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+func TestVectorArithmeticAppendAndAggregations(t *testing.T) {
+	happySrc := `
+prices = list 10, 20, 30
+shipping = list 5, 5, 10
+totals = prices * 2 + shipping
+say totals
+say 100 - (list 10, 25)
+say (list 10, 20) / (list 2, 5)
+say (list 10, 7) % (list 3, 4)
+
+seq = list 1, 1
+loop range 1 3
+    next = seq.((count seq) - 1) + seq.((count seq) - 2)
+    seq = append seq next
+end
+say seq
+say append (list 1, 2) (list 3, 4)
+
+say sum prices
+say sum (list as number)
+say avg prices
+
+unsorted_nums = list 3, 1, 2
+sorted_nums = sort unsorted_nums
+say sorted_nums
+say unsorted_nums
+
+unsorted_words = list "c", "a", "b"
+say sort unsorted_words
+
+# Typecheck inference for vectorized arithmetic and loop over result
+scaled = (list 1, 2) * 3
+loop scaled
+    say it
+end
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(happySrc, &out); err != nil {
+		t.Fatalf("expected vector arithmetic program to succeed, got: %v", err)
+	}
+	want := "[25, 45, 70]\n[90, 75]\n[5, 4]\n[1, 3]\n[1, 1, 2, 3, 5]\n[1, 2, 3, 4]\n60\n0\n20\n[1, 2, 3]\n[3, 1, 2]\n[\"a\", \"b\", \"c\"]\n3\n6\n"
+	if out.String() != want {
+		t.Fatalf("output mismatch:\ngot:\n%s\nwant:\n%s", out.String(), want)
+	}
+
+	negCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "length mismatch",
+			src:  "say (list 1, 2) + (list 3, 4, 5)\n",
+			want: "List length mismatch",
+		},
+		{
+			name: "division by zero in vector",
+			src:  "say (list 10, 20) / (list 2, 0)\n",
+			want: "Division by zero",
+		},
+		{
+			name: "modulo by zero in broadcast",
+			src:  "say (list 10, 20) % 0\n",
+			want: "Modulo by zero",
+		},
+		{
+			name: "plus on text lists",
+			src:  "say (list \"a\") + (list \"b\")\n",
+			want: "Use 'append xs ys'",
+		},
+		{
+			name: "plus on list and text",
+			src:  "say (list \"a\") + \"b\"\n",
+			want: "Cannot use '+'",
+		},
+		{
+			name: "append element type mismatch",
+			src:  "say append (list 1, 2) \"bad\"\n",
+			want: "Cannot append text into list of number",
+		},
+		{
+			name: "append list type mismatch",
+			src:  "say append (list 1, 2) (list \"a\", \"b\")\n",
+			want: "Cannot append list of text into list of number",
+		},
+		{
+			name: "avg on empty list",
+			src:  "say avg (list as number)\n",
+			want: "Cannot compute average of an empty list",
+		},
+		{
+			name: "sum on text list",
+			src:  "say sum (list \"a\", \"b\")\n",
+			want: "sum requires a list of numbers",
+		},
+		{
+			name: "sort on record list",
+			src:  "def p\n  x = 0\nend\nxs = list as p with\n  x = 1\nend\nsay sort xs\n",
+			want: "sort requires a homogeneous list of numbers or text",
+		},
+		{
+			name: "legacy push",
+			src:  "say push (list 1, 2) 3\n",
+			want: "'push' was replaced by 'append'",
+		},
+	}
+	for _, tc := range negCases {
+		if _, err := EvalProgram(tc.src, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+func TestDataDrivenTestsErrorBlocksAndFailureFormat(t *testing.T) {
+	happySrc := `
+def div_case
+    a = 0
+    b = 0
+end
+
+to safe_div a b
+    check b is 0 -> fail "Division by zero"
+    a / b
+end
+
+test "data-driven rules and error blocks"
+    a = 10
+    b = 3
+    a - b >= 0
+    a + b <= 20
+    safe_div 10 2 is not error
+    safe_div 1 0 is error
+
+    cases = list as div_case with
+        a = 10, b = 2
+        a = 1, b = 0
+    end
+
+    loop cases
+        it.a >= 1
+        it.b >= 0
+    end
+
+    safe_div 1 0 ->
+        error.type is "RuntimeError"
+        error.message is "Division by zero"
+    end
+end
+`
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.TestBlocks != 1 || report.Failed != 0 || report.Passed != 10 {
+		t.Fatalf("expected 1 test block, 10 passed / 0 failed, got blocks=%d passed=%d failed=%d:\n%+v",
+			report.TestBlocks, report.Passed, report.Failed, report.Results)
+	}
+
+	// Verify exact FAIL formatting with block context chain, variables, `it`, and soft assertions.
+	failSrc := `def div_case
+    a = 0
+    b = 0
+end
+
+to safe_div a b
+    check b is 0 -> fail "Division by zero"
+    a / b
+end
+
+test "Calculator rules"
+    a = 150
+    b = 170
+    a + b <= 299
+    a + b is 320
+end
+
+test "Error handling"
+    cases = list as div_case with
+        a = 1, b = 0
+    end
+
+    loop cases
+        safe_div it.a it.b ->
+            error.type is "RuntimeError"
+            error.message is "Zero division"
+        end
+    end
+end
+`
+	failReport, err := RunChecks(failSrc)
+	if err != nil {
+		t.Fatalf("RunChecks(failSrc) failed: %v", err)
+	}
+	if failReport.TestBlocks != 2 || failReport.Passed != 2 || failReport.Failed != 2 {
+		t.Fatalf("expected 2 blocks, 2 passed / 2 failed (soft asserts), got blocks=%d passed=%d failed=%d",
+			failReport.TestBlocks, failReport.Passed, failReport.Failed)
+	}
+
+	var failedOutputs []string
+	for _, r := range failReport.Results {
+		if !r.Passed {
+			failedOutputs = append(failedOutputs, FormatFailure(r, "tests/discount.ease", failSrc))
+		}
+	}
+	if len(failedOutputs) != 2 {
+		t.Fatalf("expected 2 formatted failures, got %d", len(failedOutputs))
+	}
+
+	wantFirst := "FAIL  test \"Calculator rules\" (tests/discount.ease:14)\n" +
+		"  11 | test \"Calculator rules\"\n" +
+		"   . |     ...\n" +
+		"  14 |     a + b <= 299\n" +
+		"     |     -> a = 150, b = 170 (320 <= 299)\n"
+	if failedOutputs[0] != wantFirst {
+		t.Fatalf("first failure format mismatch:\ngot:\n%s\nwant:\n%s", failedOutputs[0], wantFirst)
+	}
+
+	wantSecond := "FAIL  test \"Error handling\" (tests/discount.ease:26)\n" +
+		"  18 | test \"Error handling\"\n" +
+		"   . |     ...\n" +
+		"  23 |     loop cases\n" +
+		"  24 |         safe_div it.a it.b ->\n" +
+		"   . |             ...\n" +
+		"  26 |             error.message is \"Zero division\"\n" +
+		"     |             -> error.message = \"Division by zero\", it = div_case(a: 1, b: 0)\n"
+	if failedOutputs[1] != wantSecond {
+		t.Fatalf("second failure format mismatch:\ngot:\n%s\nwant:\n%s", failedOutputs[1], wantSecond)
+	}
+
+	// Negative syntax & typecheck cases
+	negCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "legacy raises",
+			src:  "test \"x\"\n    1 / 0 raises \"Division by zero\"\nend\n",
+			want: "'raises' was replaced by 'is error'",
+		},
+		{
+			name: "legacy top-level check label",
+			src:  "check \"math\"\n    1 is 1\nend\n",
+			want: "Top-level 'check \"...\"' test blocks were removed",
+		},
+		{
+			name: "error outside error block",
+			src:  "test \"x\"\n    say error.type\nend\n",
+			want: "'error' can only be used inside an 'expr -> ... end' error block",
+		},
+	}
+	for _, tc := range negCases {
+		if _, err := ParseProgram(tc.src); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
+		}
+	}
+
+	// Error block when expression succeeds must fail.
+	noErrSrc := "test \"no err\"\n    10 / 2 ->\n        error.type is \"RuntimeError\"\n    end\nend\n"
+	noErrRep, err := RunChecks(noErrSrc)
+	if err != nil || noErrRep.Failed != 1 {
+		t.Fatalf("expected 1 failed check when error block succeeds, got rep=%+v err=%v", noErrRep, err)
 	}
 }

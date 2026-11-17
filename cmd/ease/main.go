@@ -161,10 +161,13 @@ func cmdRun(args []string) int {
 func cmdTest(args []string) int {
 	file := ""
 	traceMode := false
+	verbose := false
 	for _, a := range args {
 		switch a {
-		case "--trace", "-v":
+		case "--trace":
 			traceMode = true
+		case "--verbose", "-v":
+			verbose = true
 		default:
 			if file == "" && !strings.HasPrefix(a, "-") {
 				file = a
@@ -172,7 +175,7 @@ func cmdTest(args []string) int {
 		}
 	}
 	if file == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ease test <file.ease> [--trace]")
+		fmt.Fprintln(os.Stderr, "Usage: ease test <file.ease> [--verbose] [--trace]")
 		return 2
 	}
 	src, err := os.ReadFile(file)
@@ -180,10 +183,14 @@ func cmdTest(args []string) int {
 		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", file, err)
 		return 1
 	}
-	return executeChecks(string(src), file, traceMode)
+	return executeChecksWithOptions(string(src), file, traceMode, verbose)
 }
 
 func executeChecks(source, label string, traceMode bool) int {
+	return executeChecksWithOptions(source, label, traceMode, false)
+}
+
+func executeChecksWithOptions(source, label string, traceMode, verbose bool) int {
 	var report *ease.CheckReport
 	var err error
 	if traceMode {
@@ -196,13 +203,13 @@ func executeChecks(source, label string, traceMode bool) int {
 		return 1
 	}
 	for _, r := range report.Results {
-		tag := "PASS"
 		if !r.Passed {
-			tag = "FAIL"
+			fmt.Print(ease.FormatFailure(r, label, source))
+		} else if verbose {
+			fmt.Printf("[PASS] (%s) %s\n", r.Scope, r.Message)
 		}
-		fmt.Printf("[%s] (%s) %s\n", tag, r.Scope, r.Message)
 	}
-	fmt.Printf("Ease Check Summary (%s): %d/%d passed, %d failed\n", label, report.Passed, report.Total, report.Failed)
+	fmt.Printf("Summary: %d passed, %d failed (%d assertions in %d test blocks)\n", report.Passed, report.Failed, report.Total, report.TestBlocks)
 	if report.Failed > 0 {
 		return 1
 	}
@@ -370,7 +377,11 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 				fmt.Fprintln(errOut, err)
 				return
 			}
-			chunkOnly, chunkErr := ease.ParseProgram(chunk)
+			knownArities := make(map[string]int, len(parsed.Functions))
+			for _, fn := range parsed.Functions {
+				knownArities[fn.Name] = len(fn.Params)
+			}
+			chunkOnly, chunkErr := ease.ParseProgramWithArities(chunk, knownArities)
 			if chunkErr == nil && len(chunkOnly.Body) == 0 &&
 				(len(chunkOnly.Defs) > 0 || len(chunkOnly.Unions) > 0 || len(chunkOnly.Functions) > 0 || len(chunkOnly.Imports) > 0) {
 				if declsSrc.Len() > 0 {

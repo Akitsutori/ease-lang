@@ -7,7 +7,7 @@ The extension under [editors/vscode/](editors/vscode/) integrates VS Code with E
 - **Run & Test** directly in the editor (`Ctrl+F5`, ▶ Run button, or `Ease: Run Tests`)
 - **Outline & Breadcrumbs** for `def` records, unions, `to` functions, and `check`/`test` blocks
 - **Autocomplete** for Ease keywords plus functions and types in the current file
-- **Editor helpers**: `#` comment toggling (`Ctrl+/`), auto-closing quotes/parens, and `to`/`def`/`if`/`repeat`/`for` → `end` indentation
+- **Editor helpers**: `#` comment toggling (`Ctrl+/`), auto-closing quotes/parens, and `to`/`def`/`loop`/`check`/`test` → `end` indentation
 
 ## Setup
 

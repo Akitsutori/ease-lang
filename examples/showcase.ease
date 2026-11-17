@@ -30,16 +30,16 @@ test "Showcase Kernfeatures"
     ada = account with name = "Ada", role = "admin"
     bob = account with name = "Bob", role = "member", status = "inactive"
 
-    do greet ada is "Admin-Zugang für Ada"
-    do greet bob is "Konto deaktiviert"
+    greet ada is "Admin-Zugang für Ada"
+    greet bob is "Konto deaktiviert"
     guest = account with status = "active"
-    do greet guest is "Willkommen, Gast!"
+    greet guest is "Willkommen, Gast!"
 
-    xs = do range 1 5
-    do len xs is 5
-    do sum_squares xs is 55
+    xs = range 1 5
+    count xs is 5
+    sum_squares xs is 55
 end
 
 ada = account with name = "Ada", role = "admin"
-say do greet ada
-say "Summe der Quadrate 1..5: {do sum_squares do range 1 5}"
+say greet ada
+say "Summe der Quadrate 1..5: {sum_squares range 1 5}"

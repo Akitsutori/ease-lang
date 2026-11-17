@@ -15,8 +15,8 @@ end
 to update_particles items dt
     out = list as particle
     loop items
-        check it.state is "dead" -> out = do push out it
-        check it.state is "active" -> out = do push out do step_particle it dt
+        check it.state is "dead" -> out = append out it
+        check it.state is "active" -> out = append out step_particle it dt
     end
     out
 end
@@ -27,9 +27,9 @@ test
         x = 10, vx = 2, life = 5
     end
 
-    stepped = do update_particles cloud 1
+    stepped = update_particles cloud 1
 
-    do len stepped is 2
+    count stepped is 2
     stepped.0.x is 5
     stepped.0.state is "active"
     stepped.1.x is 12

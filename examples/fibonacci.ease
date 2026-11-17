@@ -5,16 +5,16 @@ to fib n
         n <= 0 -> 0
         n is 1 -> 1
     end
-    left = do fib n - 1
-    right = do fib n - 2
+    left = fib (n - 1)
+    right = fib (n - 2)
     left + right
 end
 
 test
-    do fib 0 is 0
-    do fib 1 is 1
-    do fib 5 is 5
-    do fib 10 is 55
+    fib 0 is 0
+    fib 1 is 1
+    fib 5 is 5
+    fib 10 is 55
 end
 
-say "fib(10) = {do fib 10}"
+say "fib(10) = {fib 10}"

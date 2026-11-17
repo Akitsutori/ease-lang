@@ -15,18 +15,24 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── token.go                 # Token types and reserved keywords
 │   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, # comments, operators)
 │   ├── ast.go                   # AST node definitions for declarations, statements, and expressions
-│   ├── parser.go                # Recursive-descent parser and stdlib import resolution
-│   ├── typecheck.go             # Strict `as` / `list as` target-type validation (built-ins & `def` blueprints)
-│   ├── checker.go               # Runner for `test` and `check "..."` assertion blocks
-│   ├── eval.go                  # Tree-walking evaluator, runtime values, JSON casts, and built-ins
+│   ├── parser.go                # Two-pass arity-based recursive-descent parser and stdlib import resolution
+│   ├── typecheck.go             # Strict `as` / `list as` validation, name collision checks, and control-flow checking
+│   ├── typecheck_unions.go      # Union type resolution, 3 compile-time guardrails, narrowing, and exhaustiveness
+│   ├── checker.go               # Data-driven soft-assert test runner (`test` blocks, `is error`, context reports)
+│   ├── eval.go                  # Tree-walking evaluator, runtime environments, and statement/expression execution
+│   ├── values.go                # Runtime value representations, formatting, and structural equality
+│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, HTTP/screen bridges)
+│   ├── cast.go                  # Strict `as` casting, list coercion, and JSON-to-Ease validation
 │   ├── screen.go                # Ebitengine main-thread bridge and headless `--check` frame simulation
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`)
 │   ├── bundle.go                # Standalone executable packer (`EASE_BUNDLE_V1`)
 │   ├── errors.go                # Structured `EaseError` diagnostics with source snippets and hints
-│   ├── ease_test.go             # Go test suite covering lexer, parser, evaluator, modules, and CLI behavior
+│   ├── ease_test.go             # Core Go test suite (lexer, parser, arity calls, evaluator, CLI, screen)
+│   ├── typecheck_test.go        # Static typecheck, union narrowing, and exhaustiveness Go tests
+│   ├── cast_json_test.go        # JSON decode/encode, strict `as`, and list coercion Go tests
 │   └── std/
-│       ├── network.ease         # `network` standard module (`def` schemas + `ask`/`send` via `http_call`)
-│       └── screen.ease          # `screen` standard module (`def` schemas + `send` via `screen_present`)
+│       ├── network.ease         # `network` standard module (`def` schemas + `fetch`/`send` via `http_call`)
+│       └── screen.ease          # `screen` standard module (`def` schemas + `present` via `screen_present`)
 ├── examples/                    # Runnable examples and end-to-end reference specifications
 ├── tests/                       # Language feature test files (01–07) executed via `ease test`
 └── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux & Windows)
@@ -86,14 +92,14 @@ Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 
 Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. Please uphold these invariants across all contributions:
 
-1. **Uniform Bracket-Free, Comma-Free Calls**: Call verbs with `do <verb> arg1 arg2` and declare parameters with `to <verb> param1 param2` — never introduce `fn(...)` call syntax, commas between arguments/parameters, or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping (e.g., `total = total + (n * n)`). Commas are reserved for `list` literals (`list 1, 2, 3`) and single-line `with` updates.
+1. **Uniform Bracket-Free, Comma-Free Arity-Based Calls**: Call verbs directly by name (`add 2 3`, `sum_squares range 1 5`) and declare parameters with `to <verb> param1 param2` — never introduce `fn(...)` call syntax, commas between arguments/parameters, or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping and compound arguments (e.g., `add (1 + 2) 3`, `fib (n - 1)`). Commas are reserved for `list` literals (`list 1, 2, 3`) and single-line `with` updates.
 2. **Dot Notation Only for Lists and Records**: Index lists and access fields consistently with `.` (`cloud.0.vx`, `player.hp`). Build lists with `list 1, 2, 3` or `list as <type>`.
 3. **Logic-Free Data Blueprints (`def`)**: Keep `def` declarations pure data structures with defaults and union constraints (`"a" | "b"`). Behavior belongs exclusively in verbs (`to ... end`).
 4. **Strict Boundary Between Parsing, Shape & Meaning (Zero Implicit Magic)**:
-   - Explicit JSON parsing/serialization (`do decode_json` / `do encode_json`) is strictly separated from `as <type>` validation.
+   - Explicit JSON parsing/serialization (`decode_json` / `encode_json`) is strictly separated from `as <type>` validation.
    - `as <type>` enforces **shape / type conformity** only on structured `map`/`record` values (raw `text` -> `TypeError`), requires **every field declared in `def`** without default-filling (`Missing field '<type>.<field>'`), and restricts `as text` + `{...}` interpolation to atomic (`text`, `number`) values. Default filling belongs exclusively to `<def> with ...`.
    - `to ...` + `check` handles **domain validity** (business rules, ranges, invariants).
-5. **No Legacy Syntax Regressions**: Do not reintroduce `let`, `var`, `set`, `report`, `test:`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing.
+5. **No Legacy Syntax Regressions**: Do not reintroduce `do`, `push`, `raises`, `let`, `var`, `set`, `report`, `test:`, `check "..."`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing.
 6. **Tests & Docs Ship Together**: Every change to lexing, parsing, evaluation, or standard modules must include Go unit tests in `internal/ease/ease_test.go`, corresponding `.ease` coverage in `tests/` or `examples/`, and an exact update to the BNF grammar and docs in `README.md` if syntax changed.
 
 ---

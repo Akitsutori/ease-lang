@@ -55,23 +55,23 @@ test "Union Types & Werteraum-Prüfung"
 
     err = ErrorMessage with code = 503, message = "Service unavailable"
     err is outcome
-    do process_response "OK" is "Erfolgreich verarbeitet"
-    do process_response "FEHLER" is "Unbekannter Fehler"
-    do process_response err is "Fehler 503: Service unavailable"
-    do log_only_success "OK" is "Hat geklappt"
-    do log_only_success "FEHLER" is "Irgendetwas anderes ist passiert"
-    do log_only_success err is "Irgendetwas anderes ist passiert"
+    process_response "OK" is "Erfolgreich verarbeitet"
+    process_response "FEHLER" is "Unbekannter Fehler"
+    process_response err is "Fehler 503: Service unavailable"
+    log_only_success "OK" is "Hat geklappt"
+    log_only_success "FEHLER" is "Irgendetwas anderes ist passiert"
+    log_only_success err is "Irgendetwas anderes ist passiert"
 
-    parsed = (do decode_json '{"code": 404, "message": "Not Found"}') as outcome
+    parsed = (decode_json '{"code": 404, "message": "Not Found"}') as outcome
     parsed is ErrorMessage
-    do process_response parsed is "Fehler 404: Not Found"
+    process_response parsed is "Fehler 404: Not Found"
 
-    do evaluate_entry "vip" "open" is "VIP-Lounge geöffnet"
-    do evaluate_entry "standard" "open" is "Standard-Einlass gewährt"
-    do evaluate_entry "none" "open" is "Kein Einlass ohne Ticket"
-    do evaluate_entry "vip" "locked" is "Tür ist verschlossen"
-    do evaluate_entry "gold" "open" is "Ungültiger Ticket-Typ"
-    do evaluate_entry "vip" "broken" is "Unbekannter Türzustand"
-    (entry_gate with door = "true") raises "Invalid value"
-    (entry_gate with door = "ajar") raises "Invalid value"
+    evaluate_entry "vip" "open" is "VIP-Lounge geöffnet"
+    evaluate_entry "standard" "open" is "Standard-Einlass gewährt"
+    evaluate_entry "none" "open" is "Kein Einlass ohne Ticket"
+    evaluate_entry "vip" "locked" is "Tür ist verschlossen"
+    evaluate_entry "gold" "open" is "Ungültiger Ticket-Typ"
+    evaluate_entry "vip" "broken" is "Unbekannter Türzustand"
+    (entry_gate with door = "true") is error
+    (entry_gate with door = "ajar") is error
 end

@@ -29,8 +29,8 @@ to run_window
     loop range 1 3600
         check state.status is "closed" -> "Fenster geschlossen"
 
-        moved = do move_x pos_x state.key
-        pos_x = do clamp_x moved 30 770
+        moved = move_x pos_x state.key
+        pos_x = clamp_x moved 30 770
 
         current = scene with
             background = "slate"
@@ -42,8 +42,8 @@ to run_window
             end
         end
 
-        raw_state = do send win current
-        state = do decode_json raw_state as frame_state
+        raw_state = present win current
+        state = decode_json raw_state as frame_state
         check state is not frame_state -> "Fensterfehler"
     end
 
@@ -51,14 +51,14 @@ to run_window
 end
 
 test
-    do move_x 100 "right" is 106
-    do move_x 100 "left"  is 94
-    do move_x 100 ""      is 100
+    move_x 100 "right" is 106
+    move_x 100 "left"  is 94
+    move_x 100 ""      is 100
 
-    do clamp_x 10 30 770  is 30
-    do clamp_x 900 30 770 is 770
-    do clamp_x 400 30 770 is 400
+    clamp_x 10 30 770  is 30
+    clamp_x 900 30 770 is 770
+    clamp_x 400 30 770 is 400
 end
 
-result = do run_window
+result = run_window
 say "Status: {result}"

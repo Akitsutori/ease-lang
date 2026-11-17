@@ -20,7 +20,7 @@ def http_response
     error  = ""
 end
 
-to ask target path
+to fetch target path
     req = http_request with
         method  = "GET"
         url     = "{target.url}{path}"
@@ -28,7 +28,7 @@ to ask target path
         timeout = target.timeout
     end
 
-    res = do http_call req
+    res = http_call req
     check res.error is not "" -> ""
     check res.status >= 400   -> ""
     res.body
@@ -38,12 +38,12 @@ to send target path payload
     req = http_request with
         method  = "POST"
         url     = "{target.url}{path}"
-        body    = do encode_json payload
+        body    = encode_json payload
         token   = target.token
         timeout = target.timeout
     end
 
-    res = do http_call req
+    res = http_call req
     check res.error is not "" -> ""
     check res.status >= 400   -> ""
     res.body

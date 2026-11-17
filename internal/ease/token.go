@@ -21,10 +21,7 @@ const (
 	TOK_TEST   TokenType = "test"
 	TOK_CHECK  TokenType = "check"
 	TOK_IS     TokenType = "is"
-	TOK_RAISES TokenType = "raises"
-	TOK_DO     TokenType = "do"
 	TOK_SAY    TokenType = "say"
-	TOK_ASK    TokenType = "ask"
 	TOK_AS     TokenType = "as"
 	TOK_ELSE   TokenType = "else"
 	TOK_LOOP   TokenType = "loop"
@@ -41,9 +38,9 @@ const (
 	TOK_LPAREN TokenType = "("
 	TOK_RPAREN TokenType = ")"
 	TOK_COMMA  TokenType = ","
-	TOK_DOT      TokenType = "."
-	TOK_PIPE     TokenType = "|"
-	TOK_ASSIGN   TokenType = "="
+	TOK_DOT    TokenType = "."
+	TOK_PIPE   TokenType = "|"
+	TOK_ASSIGN TokenType = "="
 
 	TOK_LT  TokenType = "<"
 	TOK_LTE TokenType = "<="
@@ -66,10 +63,7 @@ var keywords = map[string]TokenType{
 	"test":   TOK_TEST,
 	"check":  TOK_CHECK,
 	"is":     TOK_IS,
-	"raises": TOK_RAISES,
-	"do":     TOK_DO,
 	"say":    TOK_SAY,
-	"ask":    TOK_ASK,
 	"as":     TOK_AS,
 	"else":   TOK_ELSE,
 	"loop":   TOK_LOOP,

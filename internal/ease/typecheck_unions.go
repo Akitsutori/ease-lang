@@ -1,4 +1,4 @@
-﻿package ease
+package ease
 
 import (
 	"fmt"
@@ -620,7 +620,6 @@ func (v *typeValidator) schemasOverlap(s1, s2 fieldSchema, visiting map[string]b
 	return false
 }
 
-
 func (v *typeValidator) variantCoveredByUnion(tv resolvedUnionVariant, uVariants []resolvedUnionVariant) bool {
 	for _, uv := range uVariants {
 		if uv.key() == tv.key() {
@@ -690,7 +689,6 @@ func (v *typeValidator) findMatchingUnionForVariants(tested []resolvedUnionVaria
 	}
 	return "", false
 }
-
 
 func (v *typeValidator) checkCheckExhaustiveness(st *CheckGuardStmt, hasFallback bool) error {
 	if !st.IsBlock || len(st.ElseBody) > 0 || hasFallback || len(st.Rules) == 0 {
@@ -841,7 +839,6 @@ func (v *typeValidator) collectRuleIsCases(cond Expr) (string, []resolvedUnionVa
 	return "", nil, false
 }
 
-
 func (v *typeValidator) fieldUnionVariants(recName, fieldName string) ([]resolvedUnionVariant, string, bool) {
 	d, ok := v.defs[recName]
 	if !ok {
@@ -943,4 +940,3 @@ func defFieldNames(d *DefDecl) string {
 	}
 	return strings.Join(names, ", ")
 }
-

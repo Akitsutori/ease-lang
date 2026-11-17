@@ -24,6 +24,6 @@ test "Records, with-Kopien & fields"
     boss.role is "boss"
     greg is player
     greg is not moved
-    do type greg is "player"
-    do fields greg is list "x", "speed", "role"
+    type greg is "player"
+    fields greg is list "x", "speed", "role"
 end

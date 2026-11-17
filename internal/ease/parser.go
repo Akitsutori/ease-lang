@@ -10,14 +10,14 @@ const maxParseDepth = 256
 
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
-	tokens           []Token
-	source           string
-	pos              int
-	depth            int
-	disallowTopIs    bool
-	disallowAs       bool
-	disallowDoAsArg  bool
-	disallowBareCall bool
+	tokens        []Token
+	source        string
+	pos           int
+	depth         int
+	disallowTopIs bool
+	disallowAs    bool
+	inTestBlock   bool
+	funcArities   map[string]int
 }
 
 func (p *Parser) enterDepth() error {
@@ -42,15 +42,29 @@ func (p *Parser) exitDepth() {
 
 // ParseProgram lexes and parses `source` into a complete Program AST.
 func ParseProgram(source string) (*Program, error) {
-	return parseProgramWithSeen(source, map[string]bool{})
+	return parseProgramWithSeenAndArities(source, map[string]bool{}, nil)
+}
+
+// ParseProgramWithArities lexes and parses `source` with pre-populated function arities (e.g. for REPL chunks).
+func ParseProgramWithArities(source string, extraArities map[string]int) (*Program, error) {
+	return parseProgramWithSeenAndArities(source, map[string]bool{}, extraArities)
 }
 
 func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error) {
+	return parseProgramWithSeenAndArities(source, seen, nil)
+}
+
+func parseProgramWithSeenAndArities(source string, seen map[string]bool, extraArities map[string]int) (*Program, error) {
 	tokens, err := NewLexer(source).Tokenize()
 	if err != nil {
 		return nil, err
 	}
 	p := &Parser{tokens: tokens, source: source}
+	arities, err := p.collectSignatures(seen, extraArities)
+	if err != nil {
+		return nil, err
+	}
+	p.funcArities = arities
 	prog, err := p.parseProgram()
 	if err != nil {
 		return nil, err
@@ -62,6 +76,80 @@ func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error)
 		return nil, err
 	}
 	return prog, nil
+}
+
+func (p *Parser) collectSignatures(seen map[string]bool, extraArities map[string]int) (map[string]int, error) {
+	arities := make(map[string]int, len(builtinArities)+len(extraArities))
+	for name, arity := range builtinArities {
+		arities[name] = arity
+	}
+	for name, arity := range extraArities {
+		arities[name] = arity
+	}
+
+	importSeen := make(map[string]bool, len(seen))
+	for k, v := range seen {
+		importSeen[k] = v
+	}
+
+	blockDepth := 0
+	for i := 0; i < len(p.tokens); i++ {
+		tok := p.tokens[i]
+		switch tok.Type {
+		case TOK_IMPORT:
+			if blockDepth == 0 && i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT {
+				modName := p.tokens[i+1].Lexeme
+				if !importSeen[modName] {
+					importSeen[modName] = true
+					if modSrc, err := loadStdModuleSource(modName); err == nil {
+						modProg, err := parseProgramWithSeen(modSrc, importSeen)
+						if err != nil {
+							return nil, err
+						}
+						for _, fn := range modProg.Functions {
+							arities[fn.Name] = len(fn.Params)
+						}
+					}
+				}
+			}
+		case TOK_TO:
+			if blockDepth == 0 && i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT {
+				fnName := p.tokens[i+1].Lexeme
+				paramCount := 0
+				j := i + 2
+				for j < len(p.tokens) && p.tokens[j].Type == TOK_IDENT {
+					paramCount++
+					j++
+				}
+				if _, isBuiltin := builtinArities[fnName]; !isBuiltin {
+					arities[fnName] = paramCount
+				}
+			}
+			blockDepth++
+		case TOK_LOOP, TOK_TEST:
+			blockDepth++
+		case TOK_DEF:
+			if i+2 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT && p.tokens[i+2].Type == TOK_NEWLINE {
+				blockDepth++
+			}
+		case TOK_CHECK:
+			if i+1 < len(p.tokens) && (p.tokens[i+1].Type == TOK_NEWLINE ||
+				(p.tokens[i+1].Type == TOK_STRING && i+2 < len(p.tokens) && p.tokens[i+2].Type == TOK_NEWLINE)) {
+				blockDepth++
+			}
+		case TOK_WITH:
+			if i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_NEWLINE {
+				blockDepth++
+			}
+		case TOK_END:
+			if i == 0 || p.tokens[i-1].Type != TOK_ARROW {
+				if blockDepth > 0 {
+					blockDepth--
+				}
+			}
+		}
+	}
+	return arities, nil
 }
 
 func (p *Parser) current() Token {
@@ -173,18 +261,21 @@ func (p *Parser) parseProgram() (*Program, error) {
 			}
 		case TOK_CHECK:
 			if p.peekNext().Type == TOK_STRING {
-				blk, err := p.parseCheckBlock()
-				if err != nil {
-					return nil, err
-				}
-				prog.Checks = append(prog.Checks, blk)
-			} else {
-				stmt, err := p.parseStmt()
-				if err != nil {
-					return nil, err
-				}
-				prog.Body = append(prog.Body, stmt)
+				tok := p.current()
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"Top-level 'check \"...\"' test blocks were removed; use 'test \"...\"' instead",
+					"'check' is reserved for runtime guards (check cond -> action); write tests in 'test \"label\" ... end'.",
+				)
 			}
+			stmt, err := p.parseStmt()
+			if err != nil {
+				return nil, err
+			}
+			prog.Body = append(prog.Body, stmt)
 		case TOK_TEST:
 			blk, err := p.parseTopTestBlock()
 			if err != nil {
@@ -206,7 +297,7 @@ func (p *Parser) parseProgram() (*Program, error) {
 
 func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	toTok := p.advance() // consume `to`
-	if !p.check(TOK_IDENT) && !p.check(TOK_ASK) {
+	if !p.check(TOK_IDENT) {
 		tok := p.current()
 		return nil, newError(
 			"SyntaxError",
@@ -465,42 +556,6 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 	}, nil, nil, nil
 }
 
-func (p *Parser) parseCheckBlock() (*CheckBlock, error) {
-	chkTok := p.advance() // consume `check`
-	title := fmt.Sprintf("check@line-%d", chkTok.Line)
-	if p.check(TOK_STRING) {
-		title = p.advance().Lexeme
-	}
-	p.skipNewlines()
-
-	var body []Stmt
-	for !p.check(TOK_END) {
-		if p.check(TOK_EOF) {
-			return nil, newError(
-				"SyntaxError",
-				chkTok.Line,
-				chkTok.Col,
-				p.source,
-				fmt.Sprintf("Check block %q is missing 'end'", title),
-				"Close every 'check' block with 'end'.",
-			)
-		}
-		item, err := p.parseCheckItem()
-		if err != nil {
-			return nil, err
-		}
-		body = append(body, item)
-		p.skipNewlines()
-	}
-	p.advance() // consume `end`
-
-	return &CheckBlock{
-		posInfo: posInfo{Line: chkTok.Line, Col: chkTok.Col},
-		Title:   title,
-		Body:    body,
-	}, nil
-}
-
 func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 	tTok := p.advance() // consume `test`
 	title := "test"
@@ -508,6 +563,10 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 		title = p.advance().Lexeme
 	}
 	p.skipNewlines()
+
+	prevInTest := p.inTestBlock
+	p.inTestBlock = true
+	defer func() { p.inTestBlock = prevInTest }()
 
 	var body []Stmt
 	for !p.check(TOK_END) {
@@ -521,7 +580,7 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 				"Close every 'test' block with 'end'.",
 			)
 		}
-		item, err := p.parseCheckItem()
+		item, err := p.parseTestItem()
 		if err != nil {
 			return nil, err
 		}
@@ -537,17 +596,33 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 	}, nil
 }
 
-func (p *Parser) parseCheckItem() (Stmt, error) {
+func (p *Parser) parseTestItem() (Stmt, error) {
 	switch p.current().Type {
-	case TOK_LOOP:
+	case TOK_LOOP, TOK_SAY:
 		return p.parseStmt()
-	case TOK_DO:
-		if p.peekNext().Type == TOK_SAY {
+	case TOK_CHECK:
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'check' guards are not needed inside 'test'",
+			"Write conditions directly as assertions inside 'test ... end'.",
+		)
+	}
+	if p.current().Type == TOK_IDENT {
+		switch p.current().Lexeme {
+		case "do":
+			return nil, p.removedDoError(p.current())
+		case "push":
+			return nil, p.removedPushError(p.current())
+		case "raises":
+			return nil, p.removedRaisesError(p.current())
+		}
+		if p.peekNext().Type == TOK_ASSIGN {
 			return p.parseStmt()
 		}
-	}
-	if p.current().Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
-		return p.parseStmt()
 	}
 
 	p.disallowTopIs = true
@@ -558,8 +633,51 @@ func (p *Parser) parseCheckItem() (Stmt, error) {
 	}
 	line, col := expr.Pos()
 
+	if p.match(TOK_ARROW) {
+		p.skipNewlines()
+		var body []Stmt
+		for !p.check(TOK_END) {
+			if p.check(TOK_EOF) {
+				return nil, newError(
+					"SyntaxError",
+					line,
+					col,
+					p.source,
+					"Error assertion block '->' is missing 'end'",
+					"Close every 'expr -> ... end' block with 'end'.",
+				)
+			}
+			item, err := p.parseTestItem()
+			if err != nil {
+				return nil, err
+			}
+			body = append(body, item)
+			p.skipNewlines()
+		}
+		p.advance() // consume `end`
+		if err := p.expectStmtEnd("error assertion block"); err != nil {
+			return nil, err
+		}
+		return &CheckErrorBlockStmt{
+			posInfo:    posInfo{Line: line, Col: col},
+			Expression: expr,
+			Body:       body,
+		}, nil
+	}
+
 	if p.match(TOK_IS) {
 		negated := p.match(TOK_NOT)
+		if p.check(TOK_IDENT) && p.current().Lexeme == "error" {
+			p.advance()
+			if err := p.expectStmtEnd("'is error' assertion"); err != nil {
+				return nil, err
+			}
+			return &CheckIsErrorStmt{
+				posInfo:    posInfo{Line: line, Col: col},
+				Expression: expr,
+				Negated:    negated,
+			}, nil
+		}
 		isBareListType := p.check(TOK_LIST_KW) && p.isTypeAssertionEnd(p.peekNext().Type)
 		if p.check(TOK_TEXT) || p.check(TOK_NUMBER_KW) || isBareListType {
 			typeTok := p.advance()
@@ -578,45 +696,90 @@ func (p *Parser) parseCheckItem() (Stmt, error) {
 				Expected: &BoolExpr{posInfo: posInfo{Line: line, Col: col}, Value: true},
 			}, nil
 		}
-		if negated {
-			unexpected, err := p.parseExpr()
+		rhs, err := p.parseTerm()
+		if err != nil {
+			return nil, err
+		}
+		if p.check(TOK_AND) || p.check(TOK_OR) {
+			op := "is"
+			if negated {
+				op = "is-not"
+			}
+			cond := Expr(&BinaryExpr{posInfo: posInfo{Line: line, Col: col}, Left: expr, Op: op, Right: rhs})
+			cond, err = p.parseLogicTail(cond)
 			if err != nil {
 				return nil, err
 			}
+			if err := p.expectStmtEnd("test condition"); err != nil {
+				return nil, err
+			}
+			return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: cond}, nil
+		}
+		if negated {
 			if err := p.expectStmtEnd("'is not' assertion"); err != nil {
 				return nil, err
 			}
-			return &CheckIsNotStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Unexpected: unexpected}, nil
-		}
-		expected, err := p.parseExpr()
-		if err != nil {
-			return nil, err
+			return &CheckIsNotStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Unexpected: rhs}, nil
 		}
 		if err := p.expectStmtEnd("'is' assertion"); err != nil {
 			return nil, err
 		}
-		return &CheckIsStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Expected: expected}, nil
+		return &CheckIsStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Expected: rhs}, nil
 	}
 
-	if p.match(TOK_RAISES) {
-		expected, err := p.parseExpr()
+	if p.check(TOK_IDENT) && p.current().Lexeme == "raises" {
+		return nil, p.removedRaisesError(p.current())
+	}
+
+	if err := p.expectStmtEnd("test assertion"); err != nil {
+		return nil, err
+	}
+	return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: expr}, nil
+}
+
+func (p *Parser) parseLogicTail(left Expr) (Expr, error) {
+	for p.check(TOK_AND) || p.check(TOK_OR) {
+		opTok := p.advance()
+		right, err := p.parseNot()
 		if err != nil {
 			return nil, err
 		}
-		if err := p.expectStmtEnd("'raises' assertion"); err != nil {
-			return nil, err
-		}
-		return &CheckRaisesStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr, Expected: expected}, nil
+		line, col := left.Pos()
+		left = &BinaryExpr{posInfo: posInfo{Line: line, Col: col}, Left: left, Op: opTok.Lexeme, Right: right}
 	}
+	return left, nil
+}
 
-	tok := p.current()
-	return nil, newError(
+func (p *Parser) removedRaisesError(tok Token) error {
+	return newError(
 		"SyntaxError",
 		tok.Line,
 		tok.Col,
 		p.source,
-		fmt.Sprintf("Expected 'is', 'is-not', or 'raises' in test assertion, got %q", tok.Lexeme),
-		"Example: do add 2, 3 is 5",
+		"'raises' was replaced by 'is error'",
+		"Use 'expr is error' or 'expr -> error.type is \"...\" end' inside a 'test' block.",
+	)
+}
+
+func (p *Parser) removedDoError(tok Token) error {
+	return newError(
+		"SyntaxError",
+		tok.Line,
+		tok.Col,
+		p.source,
+		"'do' was removed; call functions directly by name, e.g. 'add 2 3'",
+		"Remove 'do' and call functions directly, e.g. 'say add 2 3' or 'sum_squares range 1 5'.",
+	)
+}
+
+func (p *Parser) removedPushError(tok Token) error {
+	return newError(
+		"SyntaxError",
+		tok.Line,
+		tok.Col,
+		p.source,
+		"'push' was replaced by 'append'",
+		"Use 'append xs item' to add an element or 'append xs other_list' to combine lists.",
 	)
 }
 
@@ -628,23 +791,6 @@ func (p *Parser) parseStmt() (Stmt, error) {
 
 	tok := p.current()
 	switch tok.Type {
-	case TOK_DO:
-		doTok := p.advance()
-		if p.check(TOK_SAY) {
-			return p.parseStmt()
-		}
-		expr, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		if id, ok := expr.(*IdentExpr); ok {
-			line, col := id.Pos()
-			expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name}
-		}
-		if err := p.expectStmtEnd("'do' statement"); err != nil {
-			return nil, err
-		}
-		return &ExprStmt{posInfo: posInfo{Line: doTok.Line, Col: doTok.Col}, Expression: expr}, nil
 	case TOK_SAY:
 		p.advance()
 		val, err := p.parseExpr()
@@ -687,6 +833,12 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			"Close the enclosing block with 'end' before starting a 'test ... end' block.",
 		)
 	default:
+		if tok.Type == TOK_IDENT && tok.Lexeme == "do" {
+			return nil, p.removedDoError(tok)
+		}
+		if tok.Type == TOK_IDENT && tok.Lexeme == "push" {
+			return nil, p.removedPushError(tok)
+		}
 		if tok.Type == TOK_IDENT && p.peekNext().Type != TOK_ASSIGN {
 			if tok.Lexeme == "for" {
 				return nil, newError(
@@ -753,17 +905,11 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 	var err error
 	if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
 		rangeTok := p.advance()
-		prevDisallowDo := p.disallowDoAsArg
-		prevDisallowBare := p.disallowBareCall
-		p.disallowDoAsArg = true
-		p.disallowBareCall = true
 		var startExpr, endExpr Expr
-		startExpr, err = p.parseTerm()
+		startExpr, err = p.parseUnary()
 		if err == nil {
-			endExpr, err = p.parseTerm()
+			endExpr, err = p.parseUnary()
 		}
-		p.disallowDoAsArg = prevDisallowDo
-		p.disallowBareCall = prevDisallowBare
 		if err != nil {
 			return nil, err
 		}
@@ -773,16 +919,12 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 			Args:    []Expr{startExpr, endExpr},
 		}
 	} else {
-		prevDisallowDo := p.disallowDoAsArg
-		p.disallowDoAsArg = true
 		iterExpr, err = p.parseExpr()
-		p.disallowDoAsArg = prevDisallowDo
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	p.match(TOK_DO) // optional `do` for single-line `loop xs do say it end`
 	p.skipNewlines()
 
 	var body []Stmt
@@ -797,7 +939,13 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 				"Close every 'loop' block with 'end'.",
 			)
 		}
-		s, err := p.parseStmt()
+		var s Stmt
+		var err error
+		if p.inTestBlock {
+			s, err = p.parseTestItem()
+		} else {
+			s, err = p.parseStmt()
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -936,7 +1084,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 			chkTok.Col,
 			p.source,
 			"'check' block requires '->' actions or an 'else' branch",
-			"Add '-> <action>' to each rule, or add an 'else' branch (e.g. 'check x <= 0 -> do fail \"...\"').",
+			"Add '-> <action>' to each rule, or add an 'else' branch (e.g. 'check x <= 0 -> fail \"...\"').",
 		)
 	}
 
@@ -1252,14 +1400,42 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			continue
 		}
 
-		if id, ok := expr.(*IdentExpr); ok && !p.disallowBareCall && p.startsBareCallArg() {
-			args, err := p.parseBareCallArgs(nil)
-			if err != nil {
-				return nil, err
+		if id, ok := expr.(*IdentExpr); ok {
+			if arity, isFunc := p.funcArities[id.Name]; isFunc {
+				args := make([]Expr, 0, arity)
+				if arity > 0 {
+					prevDisallowAs := p.disallowAs
+					p.disallowAs = true
+					for i := 0; i < arity; i++ {
+						if p.isCallArgBoundary() {
+							p.disallowAs = prevDisallowAs
+							cur := p.current()
+							hint := fmt.Sprintf("Provide %d argument(s) for '%s', or wrap compound arguments in (...).", arity, id.Name)
+							if id.Name == "ask" {
+								hint = "Write: ask \"Prompt?\" or ask \"\""
+							}
+							return nil, newError(
+								"SyntaxError",
+								cur.Line,
+								cur.Col,
+								p.source,
+								fmt.Sprintf("Function '%s' expects %d argument(s), got %d", id.Name, arity, i),
+								hint,
+							)
+						}
+						arg, err := p.parseUnary()
+						if err != nil {
+							p.disallowAs = prevDisallowAs
+							return nil, err
+						}
+						args = append(args, arg)
+					}
+					p.disallowAs = prevDisallowAs
+				}
+				line, col := id.Pos()
+				expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name, Args: args}
+				continue
 			}
-			line, col := id.Pos()
-			expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name, Args: args}
-			continue
 		}
 
 		break
@@ -1268,40 +1444,12 @@ func (p *Parser) parsePostfix() (Expr, error) {
 	return expr, nil
 }
 
-func (p *Parser) parseBareCallArgs(initial []Expr) ([]Expr, error) {
-	prevDisallowAs := p.disallowAs
-	prevDisallowBareCall := p.disallowBareCall
-	p.disallowAs = true
-	p.disallowBareCall = true
-	defer func() {
-		p.disallowAs = prevDisallowAs
-		p.disallowBareCall = prevDisallowBareCall
-	}()
-
-	args := initial
-	for {
-		arg, err := p.parseTerm()
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, arg)
-		if p.startsBareCallArg() {
-			continue
-		}
-		break
-	}
-	return args, nil
-}
-
-func (p *Parser) startsBareCallArg() bool {
+func (p *Parser) isCallArgBoundary() bool {
 	switch p.current().Type {
-	case TOK_NUMBER, TOK_STRING, TOK_INTERP_STRING, TOK_IDENT, TOK_LIST_KW, TOK_ASK:
+	case TOK_NEWLINE, TOK_EOF, TOK_END, TOK_ELSE, TOK_ARROW, TOK_RPAREN, TOK_COMMA,
+		TOK_IS, TOK_AND, TOK_OR, TOK_LT, TOK_LTE, TOK_GT, TOK_GTE,
+		TOK_PLUS, TOK_STAR, TOK_SLASH, TOK_MOD, TOK_ASSIGN, TOK_AS, TOK_WITH:
 		return true
-	case TOK_DO:
-		if p.disallowDoAsArg {
-			return false
-		}
-		return p.peekNext().Type != TOK_NEWLINE && p.peekNext().Type != TOK_EOF
 	default:
 		return false
 	}
@@ -1355,69 +1503,14 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		p.advance()
 		return p.parseInterpString(tok)
 	case TOK_IDENT:
+		if tok.Lexeme == "do" {
+			return nil, p.removedDoError(tok)
+		}
+		if tok.Lexeme == "push" {
+			return nil, p.removedPushError(tok)
+		}
 		p.advance()
 		return &IdentExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Name: tok.Lexeme}, nil
-	case TOK_DO:
-		doTok := p.advance()
-		if p.check(TOK_ASK) {
-			askTok := p.advance()
-			if p.check(TOK_LPAREN) {
-				cur := p.current()
-				return nil, newError("SyntaxError", cur.Line, cur.Col, p.source, "Parenthesized 'ask(...)' is not allowed", "Write: ask \"Prompt?\" or do ask net \"/path\"")
-			}
-			if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_RPAREN) && !p.check(TOK_COMMA) && !p.check(TOK_AS) {
-				firstArg, err := p.parsePrimary()
-				if err != nil {
-					return nil, err
-				}
-				if p.startsBareCallArg() {
-					args, err := p.parseBareCallArgs([]Expr{firstArg})
-					if err != nil {
-						return nil, err
-					}
-					return &CallExpr{posInfo: posInfo{Line: askTok.Line, Col: askTok.Col}, Callee: "ask", Args: args}, nil
-				}
-				return &AskExpr{posInfo: posInfo{Line: askTok.Line, Col: askTok.Col}, Prompt: firstArg}, nil
-			}
-			return &AskExpr{posInfo: posInfo{Line: askTok.Line, Col: askTok.Col}}, nil
-		}
-		if p.check(TOK_IDENT) {
-			prevDisallowBareCall := p.disallowBareCall
-			p.disallowBareCall = false
-			expr, err := p.parsePostfix()
-			p.disallowBareCall = prevDisallowBareCall
-			if err != nil {
-				return nil, err
-			}
-			if id, ok := expr.(*IdentExpr); ok {
-				line, col := id.Pos()
-				return &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name}, nil
-			}
-			return expr, nil
-		}
-		return nil, newError(
-			"SyntaxError",
-			doTok.Line,
-			doTok.Col,
-			p.source,
-			"Expected action or function call after 'do'",
-			"Example: do say \"Hello\", sum = do add x, y, or age = do ask \"Age?\" as number",
-		)
-	case TOK_ASK:
-		p.advance()
-		if p.check(TOK_LPAREN) {
-			cur := p.current()
-			return nil, newError("SyntaxError", cur.Line, cur.Col, p.source, "Parenthesized 'ask(...)' is not allowed", "Write: ask \"Prompt?\"")
-		}
-		var prompt Expr
-		if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_RPAREN) && !p.check(TOK_COMMA) && !p.check(TOK_AS) {
-			var err error
-			prompt, err = p.parsePrimary()
-			if err != nil {
-				return nil, err
-			}
-		}
-		return &AskExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Prompt: prompt}, nil
 	case TOK_LPAREN:
 		p.advance()
 		prevDisallowAs := p.disallowAs
@@ -1493,7 +1586,7 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 			return nil, err
 		}
 		offsetTokenPositions(subTokens, seg.Line, seg.Col)
-		subParser := &Parser{tokens: subTokens, source: p.source, depth: p.depth}
+		subParser := &Parser{tokens: subTokens, source: p.source, depth: p.depth, funcArities: p.funcArities}
 		expr, err := subParser.parseExpr()
 		if err != nil {
 			return nil, err

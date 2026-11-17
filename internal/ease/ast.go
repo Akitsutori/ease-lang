@@ -67,7 +67,7 @@ type UnionDecl struct {
 	Imported bool
 }
 
-// CheckBlock defines a top-level Pyret-style `check "label": ... end` block.
+// CheckBlock defines a top-level `test "label" ... end` block.
 type CheckBlock struct {
 	posInfo
 	Title string
@@ -158,13 +158,31 @@ type CheckIsNotStmt struct {
 
 func (*CheckIsNotStmt) stmtNode() {}
 
-type CheckRaisesStmt struct {
+// CheckCondStmt represents a direct boolean condition assertion inside a `test` block.
+type CheckCondStmt struct {
 	posInfo
-	Expression Expr
-	Expected   Expr
+	Condition Expr
 }
 
-func (*CheckRaisesStmt) stmtNode() {}
+func (*CheckCondStmt) stmtNode() {}
+
+// CheckIsErrorStmt represents `expr is error` or `expr is not error` inside a `test` block.
+type CheckIsErrorStmt struct {
+	posInfo
+	Expression Expr
+	Negated    bool
+}
+
+func (*CheckIsErrorStmt) stmtNode() {}
+
+// CheckErrorBlockStmt represents `expr -> ... end` for inspecting `error.type` and `error.message`.
+type CheckErrorBlockStmt struct {
+	posInfo
+	Expression Expr
+	Body       []Stmt
+}
+
+func (*CheckErrorBlockStmt) stmtNode() {}
 
 // Expressions
 
@@ -204,14 +222,6 @@ type BoolExpr struct {
 }
 
 func (*BoolExpr) exprNode() {}
-
-// AskExpr reads a line of user input from stdin, optionally printing a prompt first.
-type AskExpr struct {
-	posInfo
-	Prompt Expr
-}
-
-func (*AskExpr) exprNode() {}
 
 type IdentExpr struct {
 	posInfo
