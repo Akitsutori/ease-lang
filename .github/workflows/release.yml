@@ -17,9 +17,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            asset_name: ease-linux-amd64
+            asset_suffix: linux-amd64
+            race_flag: -race
           - os: windows-latest
-            asset_name: ease-windows-amd64.exe
+            asset_suffix: windows-amd64.exe
+            race_flag: ""
 
     steps:
       - name: Checkout repository
@@ -45,17 +47,52 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Determine release version
+      - name: Determine release version & artifact name
         id: ver
         shell: bash
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=ease-${VERSION}-${{ matrix.asset_suffix }}" >> "$GITHUB_OUTPUT"
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      - name: Run Go unit tests
+        run: go test ${{ matrix.race_flag }} ./...
 
       - name: Build binary
-        run: go build -ldflags "-s -w -X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ matrix.asset_name }} ./cmd/ease
+        run: go build -ldflags "-s -w -X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ steps.ver.outputs.asset_name }} ./cmd/ease
 
       - name: Verify embedded version
         shell: bash
-        run: ./${{ matrix.asset_name }} version
+        run: ./${{ steps.ver.outputs.asset_name }} version
+
+      - name: Run Ease language feature tests
+        shell: bash
+        run: |
+          for f in tests/*.ease; do
+            echo "==> ease test $f"
+            ./${{ steps.ver.outputs.asset_name }} test "$f"
+          done
+
+      - name: Verify offline Ease examples
+        shell: bash
+        run: |
+          for f in \
+            examples/00_hello_world.ease \
+            examples/01_entry_check.ease \
+            examples/02_guard.ease \
+            examples/03_player.ease \
+            examples/04_particles.ease \
+            examples/05_network.ease \
+            examples/06_window.ease \
+            examples/fibonacci.ease \
+            examples/showcase.ease \
+            examples/syntax_spec.ease; do
+            echo "==> ease test $f"
+            ./${{ steps.ver.outputs.asset_name }} test "$f"
+          done
 
       - name: Package VS Code extension (.vsix)
         if: runner.os == 'Linux'
@@ -66,8 +103,8 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
+          name: ${{ steps.ver.outputs.asset_name }}
+          path: ${{ steps.ver.outputs.asset_name }}
 
       - name: Upload VS Code extension artifact
         if: runner.os == 'Linux'

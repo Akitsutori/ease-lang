@@ -26,10 +26,9 @@ to count_down start
 end
 
 to classify n
-    if n > 0
-        "positiv"
-    else
-        "nicht-positiv"
+    check
+        n > 0 -> "positiv"
+        else  -> "nicht-positiv"
     end
 end
 
