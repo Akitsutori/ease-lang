@@ -270,8 +270,8 @@ func recordToScreenScene(rec *RecordValue) screenScene {
 		sc.Background = bg
 	}
 	if circlesVal, ok := rec.Fields["circles"]; ok {
-		if items, _, isList := asListElements(circlesVal); isList {
-			for _, item := range items {
+		if lv, isList := circlesVal.(*ListValue); isList {
+			for _, item := range lv.Elements {
 				if cr, ok := item.(*RecordValue); ok {
 					c := screenCircle{Size: 20, Color: "red"}
 					if v, ok := cr.Fields["x"].(float64); ok {
@@ -292,8 +292,8 @@ func recordToScreenScene(rec *RecordValue) screenScene {
 		}
 	}
 	if boxesVal, ok := rec.Fields["boxes"]; ok {
-		if items, _, isList := asListElements(boxesVal); isList {
-			for _, item := range items {
+		if lv, isList := boxesVal.(*ListValue); isList {
+			for _, item := range lv.Elements {
 				if br, ok := item.(*RecordValue); ok {
 					b := screenBox{Width: 40, Height: 40, Color: "blue"}
 					if v, ok := br.Fields["x"].(float64); ok {

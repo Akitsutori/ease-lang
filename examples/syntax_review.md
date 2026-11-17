@@ -28,7 +28,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   2. Legacy `var x = 1`
   3. Legacy `set x = 1`
   4. Reassigning a constant: `def pi = 3.14` + `pi = 4`
-  5. Keyword as variable name: `if = 5`
+  5. Keyword as variable name: `loop = 5`
   6. Type keyword as variable name: `text = "hi"`
   7. Type keyword as variable name: `number = 5`
   8. `def` constant missing value: `def pi =`
@@ -44,7 +44,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   4. Legacy parenthesized call: `add(1, 2)`
   5. Commas in parameters/calls: `to f a, b` / `do f 1, 2`
   6. Nested `to` inside `to`
-  7. Keyword as parameter name: `to f if\n 1\nend`
+  7. Keyword as parameter name: `to f loop\n 1\nend`
   8. Too few arguments (`do add 1` -> `raises` in `.ease`)
   9. Too many arguments (`do add 1 2 3` -> `raises` in `.ease`)
   10. Unknown function (`do unbekannt 1` -> `raises` in `.ease`)
@@ -63,18 +63,18 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   9. `with` with invalid union value (`hero with state = "flying"` -> `raises` in `.ease`)
   10. Missing field access (`hero.mana` -> `raises` in `.ease`)
 
-## 5. Guards (`check`) & Branching (`if`) (`README.md`)
-- **Happy Path**: `check ... -> ... end`, `check ... else [-> ...] end`, `check cond -> stmt`, `if ... else ... end`
+## 5. Guards (`check`) (`README.md`)
+- **Happy Path**: `check ... -> ... end`, `check ... else [-> ...] end`, `check cond -> stmt`, `check cond -> end` (inside `loop`)
 - **10 Negative Cases**:
-  1. `if` missing `end`
-  2. `if` missing condition: `if\n say 1\nend`
-  3. Orphan `else` without `if`/`check`
+  1. `check` block without `->` or `else`: `check\n x > 0\nend`
+  2. `check` missing condition before `->`: `check -> 1`
+  3. Orphan `else` without `check`
   4. `check` block missing `end`
   5. Single-line `check cond ->` missing action
   6. Legacy `check:` with colon
-  7. `check` missing condition before `->`: `check -> 1`
-  8. Duplicate `else` in same `if`
-  9. Non-condition value in `if` (`if 42` -> `raises` in `.ease`)
+  7. Top-level value return in `check`: `check x > 0 -> "A"`
+  8. `-> end` outside `loop`: `check x > 0 -> end`
+  9. Legacy `if` / `else` (`if x > 0 ... end`)
   10. Non-condition value in `check` (`check "yes" -> "ok"` -> `raises` in `.ease`)
 
 ## 6. Type Checks (`is`, `is not`) & Logic (`README.md`)
@@ -105,8 +105,8 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   9. Invalid number / union / JSON in `decode_json` (`"abc" as number`, `"pending" as ticket`, `do decode_json '{broken'` -> `raises` in `.ease`)
   10. Wrong JSON shape / field type (`do decode_json '[1, 2]' as api_user`, `do decode_json '{"id": "abc", ...}' as api_user` -> `raises` in `.ease`)
 
-## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `repeat`, `for`) (`README.md`)
-- **Happy Path**: `list 10, 25, 40`, `scores.0`, `list as number`, `list as player with ... end`, `repeat 3`, `for i in do range 1 10`, `for xs do say it end`
+## 8. Lists, Dot Indexing & Loops (`list`, `.0`, `.(expr)`, `loop`) (`README.md`)
+- **Happy Path**: `list 10, 25, 40`, `scores.0`, `scores.(it.index)`, `list as number`, `list as player with ... end`, `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
 - **10 Negative Cases**:
   1. Legacy list literal `[1, 2, 3]`
   2. Legacy indexing `scores[0]`
@@ -114,17 +114,17 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   4. `list as unknown_type`
   5. `list as number with x = 1 end`
   6. `list as ticket with x = 1 end`
-  7. `repeat` missing `end`
-  8. `for` missing `end`
-  9. `for if in list 1 end` (keyword as loop variable)
-  10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `do push typed, "bad"`, `repeat -1`, `repeat 1.5`, `for item in 42` -> `raises` in `.ease`)
+  7. `loop` missing `end`
+  8. Legacy `for` / `repeat` (`for xs do ... end`, `repeat 3 ... end`)
+  9. Named loop variable (`loop x in xs ... end`) or `def` field named `index`
+  10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `do push typed "bad"`, `loop 42`, `loop "3"`, `xs.(1.5)` -> `raises` in `.ease`)
 
 ## 9. Built-in Tests (`test`, `check "label"`) & Imports (`import`) (`README.md`)
 - **Happy Path**: `test ... end`, `test "label" ... end`, `check "label" ... end`, `import network`, `import screen`
 - **10 Negative Cases**:
   1. `test` missing `end`
   2. Nested `test` inside `to`
-  3. Nested `test` inside `if`
+  3. Nested `test` inside `loop`
   4. Legacy `test:` with colon
   5. `check "label"` missing `end`
   6. Non-string `raises` pattern (`1 / 0 raises 42`)
