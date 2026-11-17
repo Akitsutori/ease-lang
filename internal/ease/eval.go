@@ -709,12 +709,18 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := ev.checkNotConditionValue(val, s.Line, s.Col); err != nil {
+			return nil, nil, err
+		}
 		env.Define(s.Name, val, false)
 		return val, nil, nil
 
 	case *AssignStmt:
 		val, err := ev.EvalExpr(s.Value, env)
 		if err != nil {
+			return nil, nil, err
+		}
+		if err := ev.checkNotConditionValue(val, s.Line, s.Col); err != nil {
 			return nil, nil, err
 		}
 		if err := env.DefineOrAssign(s.Name, val, s.Line, s.Col, ev.source); err != nil {
@@ -725,6 +731,9 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 	case *SayStmt:
 		val, err := ev.EvalExpr(s.Value, env)
 		if err != nil {
+			return nil, nil, err
+		}
+		if err := ev.checkNotConditionValue(val, s.Line, s.Col); err != nil {
 			return nil, nil, err
 		}
 		fmt.Fprintln(ev.out, FormatValue(val))
@@ -1087,6 +1096,27 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ev.checkNotConditionValue(left, e.Line, e.Col); err != nil {
+			return nil, err
+		}
+		if err := ev.checkNotConditionValue(right, e.Line, e.Col); err != nil {
+			return nil, err
+		}
+		if e.Op == "is" || e.Op == "is not" {
+			if fe, isField := e.Left.(*FieldExpr); isField {
+				if rightStr, isStr := e.Right.(*StringExpr); isStr {
+					if targetVal, tErr := ev.EvalExpr(fe.Target, env); tErr == nil {
+						if rec, isRec := targetVal.(*RecordValue); isRec && !rec.IsPrototype {
+							if opts := rec.Allowed[fe.Field]; len(opts) > 0 {
+								if err := ev.checkRuntimeUnionLiteral(rightStr.Value, opts, fmt.Sprintf("%s.%s", rec.TypeName, fe.Field), e.Line, e.Col); err != nil {
+									return nil, err
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 		return ev.evalBinaryOp(e.Op, left, right, e.Line, e.Col)
 
 	case *IndexExpr:
@@ -1209,6 +1239,9 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		for i, a := range e.Args {
 			v, err := ev.EvalExpr(a, env)
 			if err != nil {
+				return nil, err
+			}
+			if err := ev.checkNotConditionValue(v, e.Line, e.Col); err != nil {
 				return nil, err
 			}
 			args[i] = v
@@ -1538,7 +1571,13 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 		return nil, err
 	}
 	if sig != nil {
+		if err := ev.checkNotConditionValue(sig.val, line, col); err != nil {
+			return nil, err
+		}
 		return sig.val, nil
+	}
+	if err := ev.checkNotConditionValue(last, line, col); err != nil {
+		return nil, err
 	}
 	return last, nil
 }
@@ -1918,9 +1957,61 @@ func jsonAnyToEase(v any) Value {
 			}
 		}
 		return &ListValue{ElemType: elemType, Elements: out}
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
 	default:
 		return x
 	}
+}
+
+func isTrueFalseUnion(opts []Value) bool {
+	if len(opts) != 2 {
+		return false
+	}
+	s0, ok0 := opts[0].(string)
+	s1, ok1 := opts[1].(string)
+	if !ok0 || !ok1 {
+		return false
+	}
+	return (s0 == "true" && s1 == "false") || (s0 == "false" && s1 == "true")
+}
+
+func (ev *Evaluator) checkNotConditionValue(v Value, line, col int) error {
+	if _, isCond := v.(bool); isCond {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
+			"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
+		)
+	}
+	return nil
+}
+
+func (ev *Evaluator) checkRuntimeUnionLiteral(lit string, opts []Value, label string, line, col int) error {
+	var allowedDisplay []string
+	for _, opt := range opts {
+		if bt, ok := opt.(BaseTypeValue); ok && string(bt) == "text" {
+			return nil
+		}
+		if s, ok := opt.(string); ok && s == lit {
+			return nil
+		}
+		allowedDisplay = append(allowedDisplay, formatUnionOption(opt))
+	}
+	return newError(
+		"TypeError",
+		line,
+		col,
+		ev.source,
+		fmt.Sprintf("%q is not a value of %s (%s)", lit, label, strings.Join(allowedDisplay, " | ")),
+		fmt.Sprintf("Valid values for %s: %s.", label, strings.Join(allowedDisplay, " | ")),
+	)
 }
 
 func validateJSONEncodable(v Value) error {
@@ -1958,6 +2049,18 @@ func easeValueToJSON(v Value) any {
 	case *RecordValue:
 		out := make(map[string]any, len(x.Fields))
 		for k, val := range x.Fields {
+			if isTrueFalseUnion(x.Allowed[k]) {
+				if s, ok := val.(string); ok {
+					if s == "true" {
+						out[k] = true
+						continue
+					}
+					if s == "false" {
+						out[k] = false
+						continue
+					}
+				}
+			}
 			out[k] = easeValueToJSON(val)
 		}
 		return out

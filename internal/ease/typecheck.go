@@ -96,11 +96,13 @@ type fieldSchema struct {
 }
 
 type varTypeState struct {
-	unionName       string
-	exactRecord     string
-	exactNonRecord  bool
-	listElemType    string
-	excludedRecords map[string]bool
+	unionName           string
+	exactRecord         string
+	exactNonRecord      bool
+	listElemType        string
+	excludedRecords     map[string]bool
+	inlineUnionLabel    string
+	inlineUnionVariants []resolvedUnionVariant
 }
 
 func (s varTypeState) clone() varTypeState {
@@ -1001,6 +1003,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}
+		if err := v.checkNotCondition(st.Value); err != nil {
+			return err
+		}
 		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
 		return nil
 
@@ -1008,17 +1013,32 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}
+		if err := v.checkNotCondition(st.Value); err != nil {
+			return err
+		}
 		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
 		return nil
 
 	case *SayStmt:
-		return v.checkExpr(st.Value)
+		if err := v.checkExpr(st.Value); err != nil {
+			return err
+		}
+		return v.checkNotCondition(st.Value)
 
 	case *ExprStmt:
-		return v.checkExpr(st.Expression)
+		if err := v.checkExpr(st.Expression); err != nil {
+			return err
+		}
+		if inFunction {
+			return v.checkNotCondition(st.Expression)
+		}
+		return nil
 
 	case *RepeatStmt:
 		if err := v.checkExpr(st.Count); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(st.Count); err != nil {
 			return err
 		}
 		v.pushScope()
@@ -1028,6 +1048,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 
 	case *ForStmt:
 		if err := v.checkExpr(st.Iterable); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(st.Iterable); err != nil {
 			return err
 		}
 		loopScope := v.pushScope()
@@ -1409,6 +1432,16 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if baseSt.exactRecord != "" {
 			return varTypeState{exactRecord: baseSt.exactRecord}
 		}
+	case *FieldExpr:
+		targetSt := v.inferExprTypeState(ex.Target)
+		if targetSt.exactRecord != "" {
+			if variants, label, ok := v.fieldUnionVariants(targetSt.exactRecord, ex.Field); ok {
+				return varTypeState{
+					inlineUnionLabel:    label,
+					inlineUnionVariants: variants,
+				}
+			}
+		}
 	case *StringExpr, *InterpStringExpr, *NumberExpr, *UnaryExpr:
 		return varTypeState{exactNonRecord: true}
 	case *CallExpr:
@@ -1468,12 +1501,18 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkExpr(ex.Target); err != nil {
 			return err
 		}
+		if err := v.checkNotCondition(ex.Target); err != nil {
+			return err
+		}
 		return v.validateTypeTarget(ex.TypeName, ex.TypeLine, ex.TypeCol, "as", false)
 
 	case *TypedListExpr:
 		for _, row := range ex.Rows {
 			for _, upd := range row {
 				if err := v.checkExpr(upd.Value); err != nil {
+					return err
+				}
+				if err := v.checkNotCondition(upd.Value); err != nil {
 					return err
 				}
 			}
@@ -1486,6 +1525,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if err := v.checkExpr(el); err != nil {
 				return err
 			}
+			if err := v.checkNotCondition(el); err != nil {
+				return err
+			}
 		}
 
 	case *InterpStringExpr:
@@ -1494,14 +1536,26 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				if err := v.checkExpr(p.Expr); err != nil {
 					return err
 				}
+				if err := v.checkNotCondition(p.Expr); err != nil {
+					return err
+				}
 			}
 		}
 
 	case *AskExpr:
-		return v.checkExpr(ex.Prompt)
+		if err := v.checkExpr(ex.Prompt); err != nil {
+			return err
+		}
+		return v.checkNotCondition(ex.Prompt)
 
 	case *UnaryExpr:
-		return v.checkExpr(ex.Right)
+		if err := v.checkExpr(ex.Right); err != nil {
+			return err
+		}
+		if ex.Op != "not" {
+			return v.checkNotCondition(ex.Right)
+		}
+		return nil
 
 	case *BinaryExpr:
 		if err := v.checkExpr(ex.Left); err != nil {
@@ -1514,7 +1568,19 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			v.popScope()
 			return err
 		}
-		return v.checkExpr(ex.Right)
+		if err := v.checkNotCondition(ex.Left); err != nil {
+			return err
+		}
+		if err := v.checkExpr(ex.Right); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(ex.Right); err != nil {
+			return err
+		}
+		if (ex.Op == "is" || ex.Op == "is not") && !v.inRaisesExpr {
+			return v.checkUnionLiteralComparison(ex)
+		}
+		return nil
 
 	case *TypeCheckExpr:
 		return v.checkExpr(ex.Target)
@@ -1555,7 +1621,7 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					recOpts := v.unionRecordNames(st.unionName)
 					hint := fmt.Sprintf("Union %q has no record variants.", st.unionName)
 					if len(recOpts) > 0 {
-						hint = fmt.Sprintf("Narrow %q first (e.g. 'check %s is %s -> ...' or 'if %s is %s ... end').", id.Name, id.Name, recOpts[0], id.Name, recOpts[0])
+						hint = fmt.Sprintf("Narrow %q first (e.g. 'check %s is %s -> ...').", id.Name, id.Name, recOpts[0])
 					}
 					return newError(
 						"TypeError",
@@ -1594,6 +1660,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if err := v.checkExpr(upd.Value); err != nil {
 				return err
 			}
+			if err := v.checkNotCondition(upd.Value); err != nil {
+				return err
+			}
 		}
 
 	case *CallExpr:
@@ -1601,9 +1670,117 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if err := v.checkExpr(arg); err != nil {
 				return err
 			}
+			if err := v.checkNotCondition(arg); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func isConditionExpr(e Expr) bool {
+	switch ex := e.(type) {
+	case *TypeCheckExpr:
+		return true
+	case *UnaryExpr:
+		return ex.Op == "not"
+	case *BinaryExpr:
+		switch ex.Op {
+		case ">", "<", ">=", "<=", "is", "is not", "and", "or":
+			return true
+		}
+	}
+	return false
+}
+
+func (v *typeValidator) checkNotCondition(e Expr) error {
+	if v.inRaisesExpr || e == nil || !isConditionExpr(e) {
+		return nil
+	}
+	line, col := e.Pos()
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
+		"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
+	)
+}
+
+func (v *typeValidator) fieldUnionVariants(recName, fieldName string) ([]resolvedUnionVariant, string, bool) {
+	d, ok := v.defs[recName]
+	if !ok {
+		return nil, "", false
+	}
+	for _, f := range d.Fields {
+		if f.Name != fieldName {
+			continue
+		}
+		if len(f.Allowed) > 0 {
+			tmpUnion := &UnionDecl{
+				posInfo:  posInfo{Line: f.Line, Col: f.Col},
+				Name:     fmt.Sprintf("%s.%s", recName, fieldName),
+				Variants: f.Allowed,
+			}
+			resolving := make(map[string]bool)
+			var flat []resolvedUnionVariant
+			for _, opt := range f.Allowed {
+				expanded, err := v.expandUnionVariantExpr(opt, tmpUnion, resolving)
+				if err != nil {
+					return nil, "", false
+				}
+				flat = append(flat, expanded...)
+			}
+			return flat, tmpUnion.Name, true
+		}
+		if id, ok := f.Default.(*IdentExpr); ok {
+			if variants, isUnion := v.resolvedUnions[id.Name]; isUnion {
+				return variants, fmt.Sprintf("%s.%s", recName, fieldName), true
+			}
+		}
+	}
+	return nil, "", false
+}
+
+func (v *typeValidator) checkUnionLiteralComparison(ex *BinaryExpr) error {
+	rightStr, ok := ex.Right.(*StringExpr)
+	if !ok {
+		return nil
+	}
+	st := v.inferExprTypeState(ex.Left)
+	var variants []resolvedUnionVariant
+	var label string
+	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
+		variants = st.inlineUnionVariants
+		label = st.inlineUnionLabel
+	} else if st.unionName != "" {
+		variants = v.resolvedUnions[st.unionName]
+		label = st.unionName
+	} else {
+		return nil
+	}
+	if len(variants) == 0 {
+		return nil
+	}
+	var allowedDisplay []string
+	for _, vr := range variants {
+		if vr.kind == variantBaseType && vr.baseType == "text" {
+			return nil
+		}
+		if vr.kind == variantStringLit && vr.strVal == rightStr.Value {
+			return nil
+		}
+		allowedDisplay = append(allowedDisplay, vr.display())
+	}
+	return newError(
+		"TypeError",
+		ex.Line,
+		ex.Col,
+		v.source,
+		fmt.Sprintf("%q is not a value of %s (%s)", rightStr.Value, label, strings.Join(allowedDisplay, " | ")),
+		fmt.Sprintf("Valid values for %s: %s.", label, strings.Join(allowedDisplay, " | ")),
+	)
 }
 
 func (v *typeValidator) unionRecordNames(unionName string) []string {

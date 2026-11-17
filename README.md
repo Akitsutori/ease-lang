@@ -85,7 +85,7 @@ Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <fi
 Ease has four built-in runtime types — `number`, `text`, `list`, `nothing` — plus user-defined records and union types declared with `def`.
 
 By design, **Boolean (`bool`) and `true`/`false` literals do not exist in Ease** — omitting `bool` eliminates *boolean blindness* and makes code simpler to reason about:
-1. **Conditions stay inside control flow**: Comparisons (`amount >= 50`, `status is "open"`) and combinators (`and`, `or`, `not`) evaluate directly in `check` and `test` instead of being passed around as raw flags.
+1. **Conditions stay inside control flow (not storable/printable values)**: Comparisons (`amount >= 50`, `status is "open"`) and combinators (`and`, `or`, `not`) evaluate directly in `check` and `test`. Attempting to store, print, pass, or return a condition (`ok = 3 > 2`, `say 3 > 2`) raises `TypeError` (`Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = "yes" | "no"`).
 2. **Stored or returned outcomes use explicit `def` states**: Instead of returning anonymous `true`/`false`, you name what was decided (`def decision` with `answer = "yes" | "no"`, or domain variants like `def door_state = "open" | "locked"`). Every state documents itself at the call site and rejects invalid values automatically.
 
 ```ease
@@ -226,6 +226,7 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 
 `check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals (Ease has no `if` statement — all conditional branching uses `check` with optional `else`).
 
+- **Arrow Semantics (`->`)**: `->` indicates execution direction. Inside a `to` function, if the right side is a **value expression** (e.g. `res is "OK" -> "Processed"`), the function returns that value immediately (**early return**); if the right side is an **action** (`say ...`, assignment `x = ...`), the action executes and execution continues on the next line.
 - **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
 - **Exhaustiveness Check**: A `check ... end` block matching a closed union without a fallback (`else -> ...` or a post-`end` expression) must handle every flattened variant — otherwise compilation stops with `Non-exhaustive check on '<union>' (Missing case: ...)`.
 - **Explicit fallback (`else -> ...`)**: When only specific variants matter, add `else -> ...` to handle everything else explicitly.
@@ -295,8 +296,9 @@ Ease strictly separates **format parsing**, **boundary contract validation**, an
   - `<value> is <type>` checks type or union membership (e.g., `a is user`, `"OK" is status`, `x is text`).
   - `<value> is <value>` checks structural value equality between concrete values (e.g., `a is b`, `x is 5`).
   - **Types are never allowed on the left side of `is`** (`user is a` or `user is user` immediately raises `TypeError`). Nested record defaults inside a `def` (e.g., `a = pt`) are automatically instantiated so value equality remains strictly transitive.
+  - **Strict union-literal checking (typo protection)**: Comparing a union-typed value against a string literal that is not a valid variant of that union (e.g. `d.answer is "yse"` when `answer = "yes" | "no"`) immediately raises `TypeError` (`"yse" is not a value of decision.answer ("yes" | "no")`).
   - Ordering and logic operators: `<`, `<=`, `>`, `>=`, `and`, `or`, `not`.
-- **Explicit JSON parsing & encoding**: `do decode_json <text>` parses JSON text into structured data (`map`, `list`, primitives) and fails immediately on empty or invalid JSON; `do encode_json <val>` serializes structured values (`def` records, `map`, `list`, atomic values) into JSON text.
+- **Explicit JSON parsing & encoding**: `do decode_json <text>` parses JSON text into structured data (`map`, `list`, primitives) and fails immediately on empty or invalid JSON (JSON `true`/`false` become `"true"` / `"false"` text). `do encode_json <val>` serializes structured values (`def` records, `map`, `list`, atomic values) into JSON text; any `def` record field whose schema is `"true" | "false"` serializes back to an unquoted JSON boolean (`true`/`false`), while regular `text` fields and free maps stay JSON strings.
 - **Strict structural contract with `as` (zero implicit JSON magic)**:
   - **Allowed targets**: After `as` (and `list as`), Ease **only** accepts the built-in base types (`text`, `number`) or a previously declared (`def`) or imported blueprint. Any unknown identifier (`as ö`, `as bool`, `as api_usre`), forward-referenced `def`, or `def` constant fails **immediately** at parse time.
   - **Atomic-only `as text` & interpolation**: `val as text` and `"{expr}"` interpolation work **exclusively on atomic base values (`text`, `number`)** — passing a structured `def` record, `map`, or `list` aborts immediately with `TypeError`. Use `do encode_json` for JSON serialization or interpolate atomic fields like `"{user.name}"`.

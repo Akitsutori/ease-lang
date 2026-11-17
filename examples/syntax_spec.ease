@@ -52,19 +52,23 @@ end
 
 # 5. Typ- & Logik-Hilfsfunktionen für Negativtests
 to bad_not x
-    not x
+    check not x -> "ok"
+    "done"
 end
 
 to bad_and a b
-    a and b
+    check a and b -> "ok"
+    "done"
 end
 
 to bad_or a b
-    a or b
+    check a or b -> "ok"
+    "done"
 end
 
 to bad_lt a b
-    a < b
+    check a < b -> "ok"
+    "done"
 end
 
 to bad_interp val
@@ -127,11 +131,9 @@ test "Funktionen & Aufrufe: 10 Negativtests"
     do unbekannt 1 raises "Unknown function"
     do missing_fn raises "Unknown function"
     do ask 123 "/x" raises "Cannot read field"
-    cond_yes = 1 > 0
-    cond_no = 1 < 0
     do add hero 1 raises "Cannot add"
-    do add cond_yes 1 raises "Cannot add"
-    do add cond_yes cond_no raises "Cannot add"
+    ((1 > 0) + 1) raises "Conditions cannot be stored or printed"
+    ((1 > 0) + (1 < 0)) raises "Conditions cannot be stored or printed"
     one_list = list 1
     do add one_list 1 raises "Cannot add"
     do add 1 one_list raises "Cannot add"
@@ -155,12 +157,10 @@ test "Guards, Verzweigungen, Logik & Vergleiche: 8 Negativtests"
     do bad_check_cond "yes" raises "must be a condition"
     do bad_not 42 raises "requires a condition"
     do bad_not "no" raises "requires a condition"
-    cond_yes = 1 > 0
-    cond_no = 1 < 0
-    do bad_and 1 cond_yes raises "requires condition"
-    do bad_or cond_no 1 raises "requires condition"
+    (1 and (1 > 0)) raises "requires condition"
+    ((1 < 0) or 1) raises "requires condition"
     do bad_lt "a" 1 raises "requires numbers"
-    do bad_lt cond_yes cond_no raises "requires numbers"
+    ((1 > 0) < (1 < 0)) raises "Conditions cannot be stored or printed"
 end
 
 test "Striktes as Casting & decode_json (Ausgang B): 10 Negativtests"

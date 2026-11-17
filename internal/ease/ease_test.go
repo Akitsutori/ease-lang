@@ -1186,7 +1186,7 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 		{
 			name:    "wrong nested field type",
 			src:     "def user\n    id = 0\nend\nx = (do decode_json '{\"id\": true}') as user\n",
-			wantSub: `Field 'user.id' expected number, got condition`,
+			wantSub: `Field 'user.id' expected number, got text (true)`,
 		},
 		{
 			name:    "record as text rejected",
@@ -2077,17 +2077,17 @@ end
 	}{
 		{
 			name: "user is a",
-			src:  "def user\n    id = 0\nend\na = user with id = 1\nsay user is a\n",
+			src:  "def user\n    id = 0\nend\na = user with id = 1\ncheck user is a -> say \"ok\"\n",
 			want: "cannot use record type 'user' as a value on the left side of 'is'",
 		},
 		{
 			name: "user is user",
-			src:  "def user\n    id = 0\nend\nsay user is user\n",
+			src:  "def user\n    id = 0\nend\ncheck user is user -> say \"ok\"\n",
 			want: "cannot use record type 'user' as a value on the left side of 'is'",
 		},
 		{
 			name: "union on left of is",
-			src:  "def role = \"guest\" | \"admin\"\nsay role is \"guest\"\n",
+			src:  "def role = \"guest\" | \"admin\"\ncheck role is \"guest\" -> say \"ok\"\n",
 			want: "cannot use union type 'role' as a value on the left side of 'is'",
 		},
 	}
@@ -2433,5 +2433,101 @@ end
 `
 	if _, err := ParseProgram(ifStmtSrc); err == nil {
 		t.Fatalf("expected 'if ... end' to fail parsing after removal")
+	}
+}
+
+func TestIssue7NoBoolConditionJsonBoolAndStrictUnionLiteral(t *testing.T) {
+	// 1. Option A: conditions cannot be stored, printed, passed, or returned.
+	condCases := []struct {
+		name string
+		src  string
+	}{
+		{"store comparison", "ok = 3 > 2\n"},
+		{"print comparison", "say 3 > 2\n"},
+		{"list element", "xs = list 3 > 2\n"},
+		{"record field", "def box\n    v = 0\nend\nb = box with v = 3 > 2\n"},
+		{"function return", "to f\n    3 > 2\nend\n"},
+	}
+	for _, tc := range condCases {
+		_, err := EvalProgram(tc.src, &bytes.Buffer{})
+		if err == nil {
+			t.Fatalf("%s: expected TypeError for condition value, got nil", tc.name)
+		}
+		var easeErr *EaseError
+		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
+			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), `Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = "yes" | "no"`) {
+			t.Fatalf("%s: unexpected error message: %v", tc.name, err)
+		}
+	}
+
+	// Union-based domain outcome works cleanly.
+	unionOutcomeSrc := `
+def ergebnis = "👍" | "👎"
+to check_ready score
+    check score >= 100 -> "👍" as ergebnis
+    "👎" as ergebnis
+end
+say do check_ready 120
+say do check_ready 50
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(unionOutcomeSrc, &out); err != nil {
+		t.Fatalf("expected union outcome program to succeed, got: %v", err)
+	}
+	if got, want := strings.TrimSpace(out.String()), "👍\n👎"; got != want {
+		t.Fatalf("unexpected output: got %q, want %q", got, want)
+	}
+
+	// 2. JSON booleans map to "true" | "false" unions and roundtrip for schema fields,
+	// while normal text fields and free maps stay JSON strings.
+	jsonBoolSrc := `
+def reply
+    ok = "true" | "false"
+    label = "true"
+end
+
+m = do decode_json '{"ok": true, "label": "true"}'
+r = m as reply
+say r.ok
+say do encode_json r
+
+free = do decode_json '{"ok": true}'
+say do encode_json free
+`
+	var jsonOut bytes.Buffer
+	if _, err := EvalProgram(jsonBoolSrc, &jsonOut); err != nil {
+		t.Fatalf("expected JSON bool roundtrip to succeed, got: %v", err)
+	}
+	if got, want := strings.TrimSpace(jsonOut.String()), "true\n{\"label\":\"true\",\"ok\":true}\n{\"ok\":\"true\"}"; got != want {
+		t.Fatalf("unexpected JSON bool output: got %q, want %q", got, want)
+	}
+
+	// 3. Strict union-literal checking at `is` (typo protection) — static & dynamic.
+	staticTypoSrc := `
+def decision
+    answer = "yes" | "no"
+end
+d = decision with answer = "no"
+check d.answer is "yse" -> say "ok"
+`
+	if _, err := EvalProgram(staticTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
+		t.Fatalf("expected static union literal typo error, got: %v", err)
+	}
+
+	dynamicTypoSrc := `
+def decision
+    answer = "yes" | "no"
+end
+to inspect_decision dec
+    check dec.answer is "yse" -> "ok"
+    "no"
+end
+d = decision with answer = "no"
+say do inspect_decision d
+`
+	if _, err := EvalProgram(dynamicTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
+		t.Fatalf("expected runtime union literal typo error, got: %v", err)
 	}
 }
