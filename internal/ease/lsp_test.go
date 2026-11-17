@@ -199,3 +199,38 @@ func TestLSPRejectsOversizedContentLength(t *testing.T) {
 		t.Fatalf("expected error mentioning Content-Length limit, got: %v", err)
 	}
 }
+
+func TestLSPUnicodeUTF16DiagnosticsAndSymbols(t *testing.T) {
+	// Surrogate-pair emoji "👍" = 2 UTF-16 code units, 4 UTF-8 bytes, 1 rune.
+	// Umlaut "ä" / "ö" = 1 UTF-16 code unit, 2 UTF-8 bytes, 1 rune.
+	diagSrc := "msg = \"👍\" as unknown_type\n"
+	diags := DiagnoseSource(diagSrc)
+	if len(diags) == 0 {
+		t.Fatalf("expected diagnostic for unknown_type")
+	}
+	// Line: `msg = "👍" as unknown_type`
+	// Runes before `unknown_type`: m(0) s(1) g(2) ' '(3) =(4) ' '(5) "(6) 👍(7) "(8) ' '(9) a(10) s(11) ' '(12) u(13)
+	// UTF-16 before `unknown_type`: 13 + 1 extra unit for 👍 = 14; `unknown_type` is 12 ASCII chars -> End = 26.
+	if diags[0].Range.Start.Character != 14 || diags[0].Range.End.Character != 26 {
+		t.Fatalf("expected UTF-16 diagnostic span [14, 26), got [%d, %d)",
+			diags[0].Range.Start.Character, diags[0].Range.End.Character)
+	}
+
+	symSrc := "def größe\n    länge = 1\nend\nto prüfe ö\n    ö\nend\n"
+	syms := DocumentSymbolsForSource(symSrc)
+	if len(syms) != 2 {
+		t.Fatalf("expected 2 symbols, got %d", len(syms))
+	}
+	// `def größe`: "def " (4) + "größe" (5 UTF-16 units) = 9
+	if syms[0].Name != "größe" || syms[0].Range.Start.Character != 0 || syms[0].Range.End.Character != 9 {
+		t.Fatalf("unexpected UTF-16 range for def größe: %+v", syms[0].Range)
+	}
+	// `    länge = 1`: 4 spaces + "länge" (5 UTF-16 units) -> [4, 9)
+	if len(syms[0].Children) != 1 || syms[0].Children[0].Range.Start.Character != 4 || syms[0].Children[0].Range.End.Character != 9 {
+		t.Fatalf("unexpected UTF-16 range for field länge: %+v", syms[0].Children)
+	}
+	// `to prüfe ö`: "to " (3) + "prüfe" (5 UTF-16 units) = 8
+	if syms[1].Name != "prüfe" || syms[1].Range.Start.Character != 0 || syms[1].Range.End.Character != 8 {
+		t.Fatalf("unexpected UTF-16 range for to prüfe: %+v", syms[1].Range)
+	}
+}

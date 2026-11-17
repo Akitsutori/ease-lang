@@ -155,7 +155,7 @@ func validateProgramTypes(prog *Program, source string) error {
 	consts := make(map[string]int)
 	constExprs := make(map[string]Expr)
 	for _, stmt := range prog.Body {
-		if ls, ok := stmt.(*LetStmt); ok {
+		if ls, ok := stmt.(*ConstDeclStmt); ok {
 			consts[ls.Name] = ls.Line
 			constExprs[ls.Name] = ls.Value
 		}
@@ -999,7 +999,7 @@ func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 
 func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 	switch st := s.(type) {
-	case *LetStmt:
+	case *ConstDeclStmt:
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}

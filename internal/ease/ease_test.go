@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestLexerAndIsNotTokens(t *testing.T) {
@@ -2591,5 +2594,125 @@ say do first_big nums
 	}
 	if got := strings.TrimSpace(topOut.String()); got != "ok" {
 		t.Fatalf("unexpected top-level output: got %q, want %q", got, "ok")
+	}
+}
+
+func TestHardeningEvalRepeatHTTPPoolingScreenCloseAndListDefaults(t *testing.T) {
+	// 1. RepeatStmt limit (Finding 2)
+	_, err := EvalProgram("repeat 1000001\n    1\nend\n", &bytes.Buffer{})
+	var easeErr *EaseError
+	if err == nil || !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "too large") {
+		t.Fatalf("expected RuntimeError for oversized repeat, got: %v", err)
+	}
+
+	// 2. Shared http.Client connection pooling & per-request timeout (Finding 3)
+	var newConns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			time.Sleep(150 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	httpSrc := fmt.Sprintf(`
+import network
+n = network with url = %q, timeout = 2
+a = do ask n "/fast"
+b = do ask n "/fast"
+c = do ask n "/fast"
+say "{a}-{b}-{c}"
+`, srv.URL)
+	var httpOut bytes.Buffer
+	if _, err := EvalProgram(httpSrc, &httpOut); err != nil {
+		t.Fatalf("expected pooled HTTP calls to succeed, got: %v", err)
+	}
+	if got := strings.TrimSpace(httpOut.String()); got != "ok-ok-ok" {
+		t.Fatalf("unexpected HTTP output: got %q, want %q", got, "ok-ok-ok")
+	}
+	if conns := newConns.Load(); conns != 1 {
+		t.Fatalf("expected HTTP keep-alive connection reuse (1 connection), got %d", conns)
+	}
+
+	timeoutSrc := fmt.Sprintf(`
+import network
+req = http_request with url = %q, timeout = 0.03
+r = do http_call req
+say r.error
+`, srv.URL+"/slow")
+	var timeoutOut bytes.Buffer
+	if _, err := EvalProgram(timeoutSrc, &timeoutOut); err != nil {
+		t.Fatalf("expected timeout HTTP call to return error record cleanly, got: %v", err)
+	}
+	if !strings.Contains(timeoutOut.String(), "deadline exceeded") && !strings.Contains(timeoutOut.String(), "context") {
+		t.Fatalf("expected context deadline error in response.error, got: %q", timeoutOut.String())
+	}
+
+	// 3. screenSession.close() waits cleanly without deadlocking if exited or non-ticking (Finding 4)
+	sessExited := &screenSession{
+		game:   &screenGame{doneCh: make(chan struct{})},
+		exited: make(chan struct{}),
+	}
+	go func() {
+		<-sessExited.game.doneCh
+		close(sessExited.exited)
+	}()
+	done := make(chan struct{})
+	go func() {
+		sessExited.close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("screenSession.close() blocked unexpectedly when exited closed")
+	}
+
+	// 4. Default lists (and nested records inside lists) are cloned per record instance (Finding 7)
+	listDefaultSrc := `
+def pt
+    x = 0
+end
+def bag
+    items = list 1, 2
+    pts = list pt
+end
+b1 = bag with items = bag.items
+b2 = bag with items = bag.items
+items1 = do push b1.items 3
+say "{do len items1}-{do len b2.items}-{do len bag.items}"
+`
+	var listOut bytes.Buffer
+	if _, err := EvalProgram(listDefaultSrc, &listOut); err != nil {
+		t.Fatalf("expected default list isolation program to succeed, got: %v", err)
+	}
+	if got := strings.TrimSpace(listOut.String()); got != "3-2-2" {
+		t.Fatalf("expected isolated list lengths 3-2-2, got %q", got)
+	}
+
+	// Also verify nested record inside default list is instantiated (IsPrototype == false).
+	prog, err := ParseProgram("def pt\n    x = 0\nend\ndef bag\n    pts = list pt\nend\nb = bag with pts = bag.pts\n")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	ev := NewEvaluator("", prog, &bytes.Buffer{})
+	defer ev.Close()
+	if _, err := ev.ExecStatements(prog.Body, ev.global); err != nil {
+		t.Fatalf("exec failed: %v", err)
+	}
+	bVal, ok := ev.global.Lookup("b")
+	if !ok {
+		t.Fatalf("missing variable b")
+	}
+	bRec := bVal.(*RecordValue)
+	ptsList := bRec.Fields["pts"].(*ListValue)
+	if len(ptsList.Elements) != 1 || ptsList.Elements[0].(*RecordValue).IsPrototype {
+		t.Fatalf("expected nested record inside default list to be instantiated (IsPrototype=false)")
 	}
 }

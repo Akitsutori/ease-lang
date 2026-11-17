@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -299,51 +300,110 @@ func cmdTokens(args []string) int {
 }
 
 func cmdRepl() int {
-	fmt.Printf("Ease %s REPL (type 'exit' to quit)\n", ease.Version)
-	scanner := bufio.NewScanner(os.Stdin)
+	return runRepl(os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runRepl(in io.Reader, out, errOut io.Writer) int {
+	fmt.Fprintf(out, "Ease %s REPL (type 'exit' to quit, ':reset' to cancel block)\n", ease.Version)
+	scanner := bufio.NewScanner(in)
 	prog := &ease.Program{}
-	ev := ease.NewEvaluator("", prog, os.Stdout)
+	ev := ease.NewEvaluator("", prog, out)
 	defer ev.Close()
-	env := ease.NewEnv(nil)
+
+	var declsSrc strings.Builder
+	var pending strings.Builder
 
 	for {
-		fmt.Print("ease> ")
+		if pending.Len() == 0 {
+			fmt.Fprint(out, "ease> ")
+		} else {
+			fmt.Fprint(out, "...   ")
+		}
 		if !scanner.Scan() {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		rawLine := scanner.Text()
+		trimmed := strings.TrimSpace(rawLine)
+		if pending.Len() == 0 {
+			if trimmed == "" {
+				continue
+			}
+			if trimmed == "exit" || trimmed == "quit" {
+				break
+			}
+		} else if trimmed == ":reset" {
+			pending.Reset()
 			continue
 		}
-		if line == "exit" || line == "quit" {
-			break
+
+		if pending.Len() > 0 {
+			pending.WriteByte('\n')
 		}
+		pending.WriteString(rawLine)
+		chunk := pending.String()
+
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "InternalError: unexpected panic: %v\n", r)
+					fmt.Fprintf(errOut, "InternalError: unexpected panic: %v\n", r)
+					pending.Reset()
 				}
 			}()
-			parsed, err := ease.ParseProgram(line)
+			fullSrc := declsSrc.String()
+			if fullSrc != "" {
+				fullSrc += "\n" + chunk
+			} else {
+				fullSrc = chunk
+			}
+			parsed, err := ease.ParseProgram(fullSrc)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				if isIncompleteBlockError(err) {
+					return
+				}
+				fmt.Fprintln(errOut, err)
+				pending.Reset()
 				return
 			}
+			pending.Reset()
+
+			if err := ev.RegisterDeclarations(parsed); err != nil {
+				fmt.Fprintln(errOut, err)
+				return
+			}
+			chunkOnly, chunkErr := ease.ParseProgram(chunk)
+			if chunkErr == nil && len(chunkOnly.Body) == 0 &&
+				(len(chunkOnly.Defs) > 0 || len(chunkOnly.Unions) > 0 || len(chunkOnly.Functions) > 0 || len(chunkOnly.Imports) > 0) {
+				if declsSrc.Len() > 0 {
+					declsSrc.WriteByte('\n')
+				}
+				declsSrc.WriteString(chunk)
+			}
+
 			if len(parsed.Body) > 0 {
-				val, err := ev.ExecStatements(parsed.Body, env)
+				val, err := ev.ExecTopLevel(parsed.Body)
 				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
+					fmt.Fprintln(errOut, err)
 					return
 				}
 				if val != nil {
 					if _, isSay := parsed.Body[len(parsed.Body)-1].(*ease.SayStmt); !isSay {
-						fmt.Println(ease.FormatValue(val))
+						fmt.Fprintln(out, ease.FormatValue(val))
 					}
 				}
 			}
 		}()
 	}
 	return 0
+}
+
+func isIncompleteBlockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "missing 'end'") ||
+		strings.Contains(msg, "missing a closing 'end'") ||
+		strings.Contains(msg, "Expected 'end'")
 }
 
 func cmdLsp() int {

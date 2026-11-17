@@ -2,6 +2,7 @@ package ease
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -354,7 +355,7 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 			switch s := stmt.(type) {
 			case *AssignStmt:
 				assigned[s.Name] = true
-			case *LetStmt:
+			case *ConstDeclStmt:
 				assigned[s.Name] = true
 			case *RepeatStmt:
 				walk(s.Body)
@@ -381,6 +382,7 @@ type reportSignal struct {
 const (
 	maxCallDepth     = 256
 	maxListSize      = 1_000_000
+	maxRepeatCount   = maxListSize
 	maxHTTPBodyBytes = 10 * 1024 * 1024
 )
 
@@ -397,6 +399,7 @@ type Evaluator struct {
 	headlessScreen   bool
 	screenFrameCount int
 	activeScreen     *screenSession
+	httpClient       *http.Client
 }
 
 // SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
@@ -404,11 +407,14 @@ func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	ev.headlessScreen = headless
 }
 
-// Close releases any active OS resources (such as an open screen window).
+// Close releases any active OS resources (such as an open screen window and idle HTTP connections).
 func (ev *Evaluator) Close() {
 	if ev.activeScreen != nil {
 		ev.activeScreen.close()
 		ev.activeScreen = nil
+	}
+	if ev.httpClient != nil {
+		ev.httpClient.CloseIdleConnections()
 	}
 }
 
@@ -436,16 +442,28 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 	if in == nil {
 		in = os.Stdin
 	}
-	funcs := make(map[string]*FuncDecl, len(prog.Functions))
-	for _, fn := range prog.Functions {
-		funcs[fn.Name] = fn
-	}
 	ev := &Evaluator{
-		source:   source,
-		out:      out,
-		inReader: bufio.NewReader(in),
-		funcs:    funcs,
-		global:   NewEnv(nil),
+		source:     source,
+		out:        out,
+		inReader:   bufio.NewReader(in),
+		funcs:      make(map[string]*FuncDecl),
+		global:     NewEnv(nil),
+		httpClient: &http.Client{},
+	}
+	if err := ev.RegisterDeclarations(prog); err != nil {
+		ev.initErr = err
+	}
+	return ev
+}
+
+// RegisterDeclarations registers functions, record blueprints, and union types from `prog`
+// into the evaluator's existing global scope without resetting existing bindings.
+func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
+	if prog == nil {
+		return nil
+	}
+	for _, fn := range prog.Functions {
+		ev.funcs[fn.Name] = fn
 	}
 	type declItem struct {
 		imported bool
@@ -493,8 +511,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 					for _, optExpr := range f.Allowed {
 						optVals, err := ev.evalUnionVariantExpr(optExpr, ev.global)
 						if err != nil {
-							ev.initErr = err
-							return ev
+							return err
 						}
 						opts = append(opts, optVals...)
 					}
@@ -504,8 +521,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 				}
 				val, err := ev.EvalExpr(f.Default, ev.global)
 				if err != nil {
-					ev.initErr = err
-					return ev
+					return err
 				}
 				if uVal, isUnion := val.(*UnionValue); isUnion {
 					opts := make([]Value, len(uVal.Values))
@@ -533,8 +549,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 			for _, ve := range u.Variants {
 				vItems, err := ev.evalUnionVariantExpr(ve, ev.global)
 				if err != nil {
-					ev.initErr = err
-					return ev
+					return err
 				}
 				vals = append(vals, vItems...)
 			}
@@ -544,10 +559,21 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 			}, false)
 		}
 	}
-	return ev
+	return nil
 }
 
 func instantiateRecordValue(v Value) Value {
+	if lv, ok := v.(*ListValue); ok && lv != nil {
+		elems := make([]Value, len(lv.Elements))
+		for i, el := range lv.Elements {
+			elems[i] = instantiateRecordValue(el)
+		}
+		return &ListValue{
+			ElemType: lv.ElemType,
+			Elements: elems,
+			pushed:   false,
+		}
+	}
 	rec, ok := v.(*RecordValue)
 	if !ok || rec == nil || !rec.IsPrototype {
 		return v
@@ -642,12 +668,12 @@ func evalProgramWithOptions(source string, in io.Reader, out io.Writer, trace io
 
 // EvalProgram parses and executes `source`, writing `say` output to `out`.
 func EvalProgram(source string, out io.Writer) (Value, error) {
-	prog, err := ParseProgram(source)
-	if err != nil {
-		return nil, err
-	}
-	ev := NewEvaluator(source, prog, out)
-	return ev.ExecStatements(prog.Body, ev.global)
+	return evalProgramWithOptions(source, os.Stdin, out, nil, false)
+}
+
+// ExecTopLevel runs a sequence of top-level statements in the evaluator's global environment.
+func (ev *Evaluator) ExecTopLevel(stmts []Stmt) (Value, error) {
+	return ev.ExecStatements(stmts, ev.global)
 }
 
 // ExecStatements runs a sequence of statements in `env`.
@@ -704,7 +730,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: repeat ...", line)
 	}
 	switch s := stmt.(type) {
-	case *LetStmt:
+	case *ConstDeclStmt:
 		val, err := ev.EvalExpr(s.Value, env)
 		if err != nil {
 			return nil, nil, err
@@ -754,6 +780,17 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				ev.source,
 				fmt.Sprintf("'repeat' count must be a non-negative integer, got %s", FormatValue(countVal)),
 				"Example: repeat 5 ... end",
+			)
+		}
+		if nFloat > float64(maxRepeatCount) {
+			line, col := s.Count.Pos()
+			return nil, nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'repeat' count too large (limit %d)", maxRepeatCount),
+				fmt.Sprintf("Keep 'repeat' iterations within %d.", maxRepeatCount),
 			)
 		}
 		var last Value
@@ -1905,7 +1942,10 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 	if bodyText != "" {
 		bodyReader = strings.NewReader(bodyText)
 	}
-	httpReq, err := http.NewRequest(method, targetURL, bodyReader)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec*float64(time.Second)))
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
 	if err != nil {
 		return ev.newHTTPResponseRecord(0, "", err.Error())
 	}
@@ -1921,7 +1961,10 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 		}
 	}
 
-	client := &http.Client{Timeout: time.Duration(timeoutSec * float64(time.Second))}
+	client := ev.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return ev.newHTTPResponseRecord(0, "", err.Error())

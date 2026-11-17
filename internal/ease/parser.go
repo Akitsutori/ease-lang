@@ -360,7 +360,7 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 		if err := p.expectStmtEnd("constant definition"); err != nil {
 			return nil, nil, nil, err
 		}
-		return nil, nil, &LetStmt{
+		return nil, nil, &ConstDeclStmt{
 			posInfo: posInfo{Line: defTok.Line, Col: defTok.Col},
 			Name:    nameTok.Lexeme,
 			Value:   first,

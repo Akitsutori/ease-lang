@@ -74,13 +74,14 @@ type CheckBlock struct {
 	Body  []Stmt
 }
 
-type LetStmt struct {
+// ConstDeclStmt represents an immutable `def name = expr` constant declaration.
+type ConstDeclStmt struct {
 	posInfo
 	Name  string
 	Value Expr
 }
 
-func (*LetStmt) stmtNode() {}
+func (*ConstDeclStmt) stmtNode() {}
 
 // AssignStmt represents a direct `name = expr` assignment (defines if new, updates if mutable).
 type AssignStmt struct {

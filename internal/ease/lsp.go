@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
 )
 
 // LSPPosition represents a zero-based line and character offset in a text document.
@@ -299,8 +300,8 @@ func DiagnoseSource(source string) (diags []LSPDiagnostic) {
 	var easeErr *EaseError
 	if errors.As(err, &easeErr) {
 		line := max(0, easeErr.Line-1)
-		col := max(0, easeErr.Col-1)
-		endCol := diagnosticEndCol(source, line, col)
+		runeCol := max(0, easeErr.Col-1)
+		startChar, endChar := diagnosticUTF16Span(source, line, runeCol)
 		msg := easeErr.Message
 		if easeErr.Hint != "" {
 			msg += "\nHint: " + easeErr.Hint
@@ -312,8 +313,8 @@ func DiagnoseSource(source string) (diags []LSPDiagnostic) {
 		return []LSPDiagnostic{
 			{
 				Range: LSPRange{
-					Start: LSPPosition{Line: line, Character: col},
-					End:   LSPPosition{Line: line, Character: endCol},
+					Start: LSPPosition{Line: line, Character: startChar},
+					End:   LSPPosition{Line: line, Character: endChar},
 				},
 				Severity: 1,
 				Source:   src,
@@ -335,23 +336,51 @@ func DiagnoseSource(source string) (diags []LSPDiagnostic) {
 	}
 }
 
-func diagnosticEndCol(source string, lineIdx, colIdx int) int {
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+func runeColToUTF16(lineText string, runeCol int) int {
+	if runeCol <= 0 {
+		return 0
+	}
+	n := 0
+	idx := 0
+	for _, r := range lineText {
+		if idx >= runeCol {
+			break
+		}
+		n += utf16.RuneLen(r)
+		idx++
+	}
+	return n
+}
+
+func diagnosticUTF16Span(source string, lineIdx, runeCol int) (int, int) {
 	lines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
 	if lineIdx < 0 || lineIdx >= len(lines) {
-		return colIdx + 1
+		return runeCol, runeCol + 1
 	}
-	lineText := lines[lineIdx]
-	if colIdx >= len(lineText) {
-		return colIdx + 1
+	runes := []rune(lines[lineIdx])
+	if runeCol >= len(runes) {
+		u := utf16Len(lines[lineIdx])
+		return u, u + 1
 	}
-	end := colIdx
-	for end < len(lineText) && lineText[end] != ' ' && lineText[end] != '\t' {
+	startUTF16 := runeColToUTF16(lines[lineIdx], runeCol)
+	end := runeCol
+	endUTF16 := startUTF16
+	for end < len(runes) && runes[end] != ' ' && runes[end] != '\t' {
+		endUTF16 += utf16.RuneLen(runes[end])
 		end++
 	}
-	if end == colIdx {
-		return colIdx + 1
+	if end == runeCol {
+		return startUTF16, startUTF16 + 1
 	}
-	return end
+	return startUTF16, endUTF16
 }
 
 // DocumentSymbolsForSource extracts outline symbols (defs, unions, functions, checks) from Ease source.
@@ -366,13 +395,14 @@ func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
 		return []LSPDocumentSymbol{}
 	}
 
+	lines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
 	symbols = make([]LSPDocumentSymbol, 0, len(prog.Defs)+len(prog.Unions)+len(prog.Functions)+len(prog.Checks))
 
 	for _, d := range prog.Defs {
-		r := symbolRange(d.Line, d.Col, len(d.Name)+4)
+		r := symbolRange(lines, d.Line, d.Col, utf16Len(d.Name)+4)
 		children := make([]LSPDocumentSymbol, 0, len(d.Fields))
 		for _, f := range d.Fields {
-			fr := symbolRange(f.Line, f.Col, len(f.Name))
+			fr := symbolRange(lines, f.Line, f.Col, utf16Len(f.Name))
 			children = append(children, LSPDocumentSymbol{
 				Name:           f.Name,
 				Kind:           8, // Field
@@ -391,7 +421,7 @@ func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
 	}
 
 	for _, u := range prog.Unions {
-		r := symbolRange(u.Line, u.Col, len(u.Name)+4)
+		r := symbolRange(lines, u.Line, u.Col, utf16Len(u.Name)+4)
 		symbols = append(symbols, LSPDocumentSymbol{
 			Name:           u.Name,
 			Detail:         "union",
@@ -402,7 +432,7 @@ func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
 	}
 
 	for _, fn := range prog.Functions {
-		r := symbolRange(fn.Line, fn.Col, len(fn.Name)+3)
+		r := symbolRange(lines, fn.Line, fn.Col, utf16Len(fn.Name)+3)
 		symbols = append(symbols, LSPDocumentSymbol{
 			Name:           fn.Name,
 			Detail:         strings.Join(fn.Params, " "),
@@ -413,7 +443,7 @@ func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
 	}
 
 	for _, chk := range prog.Checks {
-		r := symbolRange(chk.Line, chk.Col, len(chk.Title)+6)
+		r := symbolRange(lines, chk.Line, chk.Col, utf16Len(chk.Title)+6)
 		symbols = append(symbols, LSPDocumentSymbol{
 			Name:           "check: " + chk.Title,
 			Kind:           3, // Namespace
@@ -425,15 +455,19 @@ func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
 	return symbols
 }
 
-func symbolRange(line, col, length int) LSPRange {
+func symbolRange(lines []string, line, col, utf16Length int) LSPRange {
 	l := max(0, line-1)
-	c := max(0, col-1)
-	if length < 1 {
-		length = 1
+	runeCol := max(0, col-1)
+	startChar := runeCol
+	if l >= 0 && l < len(lines) {
+		startChar = runeColToUTF16(lines[l], runeCol)
+	}
+	if utf16Length < 1 {
+		utf16Length = 1
 	}
 	return LSPRange{
-		Start: LSPPosition{Line: l, Character: c},
-		End:   LSPPosition{Line: l, Character: c + length},
+		Start: LSPPosition{Line: l, Character: startChar},
+		End:   LSPPosition{Line: l, Character: startChar + utf16Length},
 	}
 }
 

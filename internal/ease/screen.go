@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
@@ -83,6 +84,9 @@ func (g *screenGame) Update() error {
 
 	select {
 	case <-g.doneCh:
+		g.mu.Lock()
+		g.closed = true
+		g.mu.Unlock()
 		return ebiten.Termination
 	case sc, ok := <-g.sceneCh:
 		if !ok {
@@ -220,6 +224,10 @@ func (s *screenSession) present(sc screenScene) string {
 func (s *screenSession) close() {
 	s.closeOnce.Do(func() {
 		close(s.game.doneCh)
+		select {
+		case <-s.exited:
+		case <-time.After(2 * time.Second):
+		}
 	})
 }
 
