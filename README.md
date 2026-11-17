@@ -224,9 +224,12 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 
 ### Guards (`check`), Type Narrowing & Exhaustiveness
 
-`check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals (Ease has no `if` statement — all conditional branching uses `check` with optional `else`).
+`check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals (Ease has no `if` statement — all conditional branching uses `check`):
 
-- **Arrow Semantics (`->`)**: `->` indicates execution direction. Inside a `to` function, if the right side is a **value expression** (e.g. `res is "OK" -> "Processed"`), the function returns that value immediately (**early return**); if the right side is an **action** (`say ...`, assignment `x = ...`), the action executes and execution continues on the next line.
+- **Two `check` forms**:
+  - **Single-line guard**: `check <cond> -> <expr_or_stmt>` (no `end`, ideal for flat guards and filtering inside `for`/`repeat` loops).
+  - **Block form**: `check ... end` (for exhaustive union matching and `else` fallbacks). Incomplete `check` blocks without `->` or `else` are rejected at parse time — use `check <cond> -> do fail "<msg>"` for explicit aborts.
+- **Arrow Semantics (`->`)**: `->` indicates execution direction. Inside a `to` function, if the right side is a **value expression** (e.g. `res is "OK" -> "Processed"`), the entire function returns that value immediately (**early return**, even out of `for`/`repeat` loops); if the right side is a **statement** (`say ...`, assignment `cnt = cnt + 1`), it executes and continues on the next line or loop iteration. At top level (outside a `to` function), returning a value after `->` (e.g. `check x > 0 -> "A"`) is an error (`Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.`).
 - **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
 - **Exhaustiveness Check**: A `check ... end` block matching a closed union without a fallback (`else -> ...` or a post-`end` expression) must handle every flattened variant — otherwise compilation stops with `Non-exhaustive check on '<union>' (Missing case: ...)`.
 - **Explicit fallback (`else -> ...`)**: When only specific variants matter, add `else -> ...` to handle everything else explicitly.

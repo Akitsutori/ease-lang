@@ -2531,3 +2531,65 @@ say do inspect_decision d
 		t.Fatalf("expected runtime union literal typo error, got: %v", err)
 	}
 }
+
+func TestIssue8CheckFormsArrowSemanticsAndTopLevelValueError(t *testing.T) {
+	// 1. Parse-time rejection of bare `check` without `->` (single-line and block without `else`).
+	bareSingle := "x = 1\ncheck x > 0\n"
+	if _, err := ParseProgram(bareSingle); err == nil || !strings.Contains(err.Error(), "Expected '->'") {
+		t.Fatalf("expected parse error for single-line check without '->', got: %v", err)
+	}
+
+	bareBlock := "x = 1\ncheck\n    x > 0\nend\n"
+	if _, err := ParseProgram(bareBlock); err == nil || !strings.Contains(err.Error(), "'check' block requires '->' actions or an 'else' branch") {
+		t.Fatalf("expected parse error for check block without '->' or 'else', got: %v", err)
+	}
+
+	// 2. Arrow semantics in functions & loops:
+	//    - value expression returns from the entire function (even inside loops)
+	//    - statement (assignment / say) executes and continues to next iteration/line
+	arrowLoopSrc := `
+to count_a words
+    cnt = 0
+    for words do
+        check it is "a" -> cnt = cnt + 1
+    end
+    cnt
+end
+
+to first_big xs
+    for xs do
+        check it > 1 -> it
+    end
+    0
+end
+
+words = list "a", "b", "a"
+nums = list 1, 2, 3
+say do count_a words
+say do first_big nums
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(arrowLoopSrc, &out); err != nil {
+		t.Fatalf("expected arrow loop program to succeed, got: %v", err)
+	}
+	if got, want := strings.TrimSpace(out.String()), "2\n2"; got != want {
+		t.Fatalf("unexpected output: got %q, want %q", got, want)
+	}
+
+	// 3. Top-level value after `->` is rejected with clear diagnostic (both when true and when false).
+	for _, xVal := range []string{"1", "0"} {
+		topValSrc := "x = " + xVal + "\ncheck x > 0 -> \"A\"\n"
+		if _, err := EvalProgram(topValSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.") {
+			t.Fatalf("expected top-level check value error (x=%s), got: %v", xVal, err)
+		}
+	}
+
+	// Top-level statement after `->` works cleanly.
+	var topOut bytes.Buffer
+	if _, err := EvalProgram("x = 1\ncheck x > 0 -> say \"ok\"\n", &topOut); err != nil {
+		t.Fatalf("expected top-level check with say to succeed, got: %v", err)
+	}
+	if got := strings.TrimSpace(topOut.String()); got != "ok" {
+		t.Fatalf("unexpected top-level output: got %q, want %q", got, "ok")
+	}
+}

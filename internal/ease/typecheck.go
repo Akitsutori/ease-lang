@@ -1100,6 +1100,22 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 			return err
 		}
 		if r.Action != nil {
+			if !inFunction {
+				if es, isExpr := r.Action.(*ExprStmt); isExpr {
+					if _, isCall := es.Expression.(*CallExpr); !isCall {
+						v.popScope()
+						line, col := es.Pos()
+						return newError(
+							"TypeError",
+							line,
+							col,
+							v.source,
+							"Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.",
+							"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'do fail \"...\"'.",
+						)
+					}
+				}
+			}
 			actionScope := v.pushScope()
 			v.applyCondNarrowing(actionScope, r.Cond, true)
 			err := v.checkStmt(r.Action, inFunction)

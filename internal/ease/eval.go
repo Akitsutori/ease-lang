@@ -824,8 +824,20 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 					if err != nil || sig != nil {
 						return val, sig, err
 					}
-					if _, isExpr := rule.Action.(*ExprStmt); isExpr && ev.callDepth > 0 {
-						return val, &reportSignal{val: val}, nil
+					if _, isExpr := rule.Action.(*ExprStmt); isExpr {
+						if ev.callDepth > 0 {
+							return val, &reportSignal{val: val}, nil
+						}
+						if _, isCall := rule.Action.(*ExprStmt).Expression.(*CallExpr); !isCall {
+							return nil, nil, newError(
+								"RuntimeError",
+								rule.Line,
+								rule.Col,
+								ev.source,
+								"Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.",
+								"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'do fail \"...\"'.",
+							)
+						}
 					}
 					return val, nil, nil
 				}

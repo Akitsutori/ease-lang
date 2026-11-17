@@ -917,6 +917,24 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		return nil, err
 	}
 
+	hasArrow := false
+	for _, r := range rules {
+		if r.Action != nil {
+			hasArrow = true
+			break
+		}
+	}
+	if !hasArrow && len(elseBody) == 0 {
+		return nil, newError(
+			"SyntaxError",
+			chkTok.Line,
+			chkTok.Col,
+			p.source,
+			"'check' block requires '->' actions or an 'else' branch",
+			"Add '-> <action>' to each rule, or add an 'else' branch (e.g. 'check x <= 0 -> do fail \"...\"').",
+		)
+	}
+
 	return &CheckGuardStmt{
 		posInfo:  posInfo{Line: chkTok.Line, Col: chkTok.Col},
 		IsBlock:  true,
