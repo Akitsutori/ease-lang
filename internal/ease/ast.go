@@ -99,22 +99,21 @@ type SayStmt struct {
 
 func (*SayStmt) stmtNode() {}
 
-type RepeatStmt struct {
+// LoopStmt represents `loop <iterable> [do] ... end` (binding `it` and `it.index`).
+type LoopStmt struct {
 	posInfo
-	Count Expr
-	Body  []Stmt
-}
-
-func (*RepeatStmt) stmtNode() {}
-
-type ForStmt struct {
-	posInfo
-	ItemName string
 	Iterable Expr
 	Body     []Stmt
 }
 
-func (*ForStmt) stmtNode() {}
+func (*LoopStmt) stmtNode() {}
+
+// LoopEndStmt represents `-> end` inside a `check` guard to exit the enclosing `loop`.
+type LoopEndStmt struct {
+	posInfo
+}
+
+func (*LoopEndStmt) stmtNode() {}
 
 // CheckRule is a single line inside a `check ... end` guard block.
 // If Action != nil (`cond -> action`), Action runs when Cond is true.

@@ -9,8 +9,8 @@ end
 
 to sum_squares xs
     total = 0
-    for n in xs
-        total = total + (n * n)
+    loop xs
+        total = total + (it * it)
     end
     total
 end
@@ -18,7 +18,7 @@ end
 to count_down start
     out = list as number
     cur = start
-    repeat start
+    loop range 1 start
         out = do push out cur
         cur = cur - 1
     end
@@ -50,7 +50,7 @@ test "Listen, Schleifen & Verzweigungen"
     cloud.1.state is "active"
 
     sum_x = 0
-    for cloud do
+    loop cloud
         sum_x = sum_x + it.x
     end
     sum_x is 10
@@ -58,7 +58,7 @@ test "Listen, Schleifen & Verzweigungen"
     vx = 100
     seen_outer = 0
     seen_vx = 0
-    for cloud do
+    loop cloud
         check vx is not 100 -> do fail "vx shadowed"
         seen_outer = vx
         seen_vx = seen_vx + it.vx

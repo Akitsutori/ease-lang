@@ -268,6 +268,8 @@ type Env struct {
 	vars           map[string]binding
 	isFuncRoot     bool
 	assignedLocals map[string]bool
+	loopIndex      float64
+	hasLoopIndex   bool
 }
 
 func NewEnv(parent *Env) *Env {
@@ -289,6 +291,23 @@ func (e *Env) Define(name string, val Value, mutable bool) {
 
 func (e *Env) DefineParam(name string, val Value) {
 	e.vars[name] = binding{val: val, mutable: false, isParam: true}
+}
+
+func (e *Env) SetLoopIndex(idx float64) {
+	e.loopIndex = idx
+	e.hasLoopIndex = true
+}
+
+func (e *Env) LookupLoopIndex() (float64, bool) {
+	for cur := e; cur != nil; cur = cur.parent {
+		if cur.hasLoopIndex {
+			return cur.loopIndex, true
+		}
+		if cur.isFuncRoot {
+			break
+		}
+	}
+	return 0, false
 }
 
 func (e *Env) Lookup(name string) (Value, bool) {
@@ -357,9 +376,7 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 				assigned[s.Name] = true
 			case *ConstDeclStmt:
 				assigned[s.Name] = true
-			case *RepeatStmt:
-				walk(s.Body)
-			case *ForStmt:
+			case *LoopStmt:
 				walk(s.Body)
 			case *CheckGuardStmt:
 				for _, r := range s.Rules {
@@ -376,13 +393,13 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 }
 
 type reportSignal struct {
-	val Value
+	val     Value
+	loopEnd bool
 }
 
 const (
 	maxCallDepth     = 256
 	maxListSize      = 1_000_000
-	maxRepeatCount   = maxListSize
 	maxHTTPBodyBytes = 10 * 1024 * 1024
 )
 
@@ -724,10 +741,10 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: say ...", line)
 	case *CheckGuardStmt:
 		ev.logTrace("line %d: check guard (%d rule(s))", line, len(s.Rules))
-	case *ForStmt:
-		ev.logTrace("line %d: for %s in ...", line, s.ItemName)
-	case *RepeatStmt:
-		ev.logTrace("line %d: repeat ...", line)
+	case *LoopStmt:
+		ev.logTrace("line %d: loop ...", line)
+	case *LoopEndStmt:
+		ev.logTrace("line %d: -> end", line)
 	}
 	switch s := stmt.(type) {
 	case *ConstDeclStmt:
@@ -765,46 +782,10 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		fmt.Fprintln(ev.out, FormatValue(val))
 		return val, nil, nil
 
-	case *RepeatStmt:
-		countVal, err := ev.EvalExpr(s.Count, env)
-		if err != nil {
-			return nil, nil, err
-		}
-		nFloat, ok := countVal.(float64)
-		if !ok || nFloat < 0 || nFloat != math.Trunc(nFloat) {
-			line, col := s.Count.Pos()
-			return nil, nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("'repeat' count must be a non-negative integer, got %s", FormatValue(countVal)),
-				"Example: repeat 5 ... end",
-			)
-		}
-		if nFloat > float64(maxRepeatCount) {
-			line, col := s.Count.Pos()
-			return nil, nil, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("'repeat' count too large (limit %d)", maxRepeatCount),
-				fmt.Sprintf("Keep 'repeat' iterations within %d.", maxRepeatCount),
-			)
-		}
-		var last Value
-		for range int(nFloat) {
-			loopEnv := NewEnv(env)
-			val, sig, err := ev.execBlock(s.Body, loopEnv)
-			if err != nil || sig != nil {
-				return val, sig, err
-			}
-			last = val
-		}
-		return last, nil, nil
+	case *LoopEndStmt:
+		return nil, &reportSignal{loopEnd: true}, nil
 
-	case *ForStmt:
+	case *LoopStmt:
 		iterVal, err := ev.EvalExpr(s.Iterable, env)
 		if err != nil {
 			return nil, nil, err
@@ -812,26 +793,39 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		lv, ok := iterVal.(*ListValue)
 		if !ok {
 			line, col := s.Iterable.Pos()
+			if nFloat, isNum := iterVal.(float64); isNum {
+				return nil, nil, newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("'loop' requires a list or range, got number. Use 'loop range 1 %s' instead.", FormatValue(nFloat)),
+					fmt.Sprintf("Write: loop range 1 %s ... end", FormatValue(nFloat)),
+				)
+			}
 			return nil, nil, newError(
-				"RuntimeError",
+				"TypeError",
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("'for' requires a list, got %s", TypeName(iterVal)),
-				"Iterate over a list like 'list 1, 2, 3' or 'range 0 5'.",
+				fmt.Sprintf("'loop' requires a list or range, got %s", TypeName(iterVal)),
+				"Iterate over a list like 'loop xs ... end' or a range like 'loop range 1 5 ... end'.",
 			)
 		}
 		var last Value
-		for _, item := range lv.Elements {
+		for idx, item := range lv.Elements {
 			loopEnv := NewEnv(env)
-			if s.ItemName != "" {
-				loopEnv.Define(s.ItemName, item, false)
-			} else {
-				loopEnv.Define("it", item, false)
-			}
+			loopEnv.Define("it", item, false)
+			loopEnv.SetLoopIndex(float64(idx))
 			val, sig, err := ev.execBlock(s.Body, loopEnv)
-			if err != nil || sig != nil {
-				return val, sig, err
+			if err != nil {
+				return val, nil, err
+			}
+			if sig != nil {
+				if sig.loopEnd {
+					break
+				}
+				return val, sig, nil
 			}
 			last = val
 		}
@@ -1220,6 +1214,11 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		return ev.castValue(e, targetVal, env)
 
 	case *FieldExpr:
+		if id, ok := e.Target.(*IdentExpr); ok && id.Name == "it" && e.Field == "index" {
+			if idx, hasIdx := env.LookupLoopIndex(); hasIdx {
+				return idx, nil
+			}
+		}
 		targetVal, err := ev.EvalExpr(e.Target, env)
 		if err != nil {
 			return nil, err

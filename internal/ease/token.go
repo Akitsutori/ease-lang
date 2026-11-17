@@ -27,9 +27,7 @@ const (
 	TOK_ASK    TokenType = "ask"
 	TOK_AS     TokenType = "as"
 	TOK_ELSE   TokenType = "else"
-	TOK_REPEAT TokenType = "repeat"
-	TOK_FOR    TokenType = "for"
-	TOK_IN     TokenType = "in"
+	TOK_LOOP   TokenType = "loop"
 	TOK_AND    TokenType = "and"
 	TOK_OR     TokenType = "or"
 	TOK_NOT    TokenType = "not"
@@ -74,9 +72,7 @@ var keywords = map[string]TokenType{
 	"ask":    TOK_ASK,
 	"as":     TOK_AS,
 	"else":   TOK_ELSE,
-	"repeat": TOK_REPEAT,
-	"for":    TOK_FOR,
-	"in":     TOK_IN,
+	"loop":   TOK_LOOP,
 	"and":    TOK_AND,
 	"or":     TOK_OR,
 	"not":    TOK_NOT,

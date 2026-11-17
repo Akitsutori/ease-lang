@@ -76,15 +76,15 @@ to bad_interp val
 end
 
 # 6. Schleifen-Hilfsfunktionen für Negativtests
-to bad_repeat n
-    repeat n
-        1
+to bad_loop x
+    loop x
+        it
     end
 end
 
-to bad_for x
-    for item in x
-        item
+to bad_loop_range a b
+    loop range a b
+        it
     end
 end
 
@@ -187,10 +187,10 @@ test "Listen, Schleifen & Built-ins: 10 Negativtests"
     (42).0 raises "Cannot index"
     (list 10, "hi") raises "Mixed types"
     do push typed "bad" raises "Cannot push"
-    do bad_repeat -1 raises "non-negative integer"
-    do bad_repeat 1.5 raises "non-negative integer"
-    do bad_repeat "3" raises "non-negative integer"
-    do bad_for 42 raises "requires a list"
+    do bad_loop 42 raises "requires a list or range"
+    do bad_loop "3" raises "requires a list or range"
+    do bad_loop_range 1 "x" raises "requires two numbers"
+    xs.(1.5) raises "Index must be an integer"
     10 / 0 raises "Division by zero"
     5 % 0 raises "Modulo by zero"
     do num "abc" raises "Cannot convert"

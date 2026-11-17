@@ -20,7 +20,7 @@
    - [Records (`def`), `with` Copies & Union Types](#records-def-with-copies--union-types)
    - [Guards (`check`), Type Narrowing & Exhaustiveness](#guards-check-type-narrowing--exhaustiveness)
    - [Type Checks & Conversions (`is`, `is not`, `as`)](#type-checks--conversions-is-is-not-as)
-   - [Lists & Loops (`list`, `repeat`, `for`)](#lists--loops-list-repeat-for)
+   - [Lists & Loops (`list`, `loop`)](#lists--loops-list-loop)
    - [Built-in Tests (`test` & `check`)](#built-in-tests-test--check)
 4. [Why Ease Is Efficient for AI Agents](#why-ease-is-efficient-for-ai-agents)
 5. [Standard Modules (`import`)](#standard-modules-import)
@@ -110,7 +110,7 @@ Line comments start with `#`.
 - **Read-only globals in functions**: Top-level variables and `def` constants can be read inside `to` functions, never mutated.
 - **Assigned-in-Function = Local**: Any assignment `x = ...` inside a function creates or updates a local variable without touching a global of the same name. Reading a global name before assigning it locally in the same function raises `RuntimeError` (`Cannot modify global '<name>' inside a function; pass it in and return the new value instead.`).
 - **Immutable parameters**: Function parameters cannot be reassigned; bind a new local variable instead.
-- **Block scope**: `check` (both `->` and `else` branches), `for`, and `repeat` create their own block scope; loop variables (`it` or named item) stay strictly loop-local.
+- **Block scope**: `check` (both `->` and `else` branches) and `loop` create their own block scope; `it` and `it.index` stay strictly loop-local.
 
 ---
 
@@ -227,9 +227,9 @@ Fields are read via dot notation (`hero.name`, `ko.state`).
 `check` guards validate preconditions and dispatch over closed union types cleanly without deeply nested conditionals (Ease has no `if` statement — all conditional branching uses `check`):
 
 - **Two `check` forms**:
-  - **Single-line guard**: `check <cond> -> <expr_or_stmt>` (no `end`, ideal for flat guards and filtering inside `for`/`repeat` loops).
+  - **Single-line guard**: `check <cond> -> <expr_or_stmt>` (no `end`, ideal for flat guards and filtering inside `loop` blocks).
   - **Block form**: `check ... end` (for exhaustive union matching and `else` fallbacks). Incomplete `check` blocks without `->` or `else` are rejected at parse time — use `check <cond> -> do fail "<msg>"` for explicit aborts.
-- **Arrow Semantics (`->`)**: `->` indicates execution direction. Inside a `to` function, if the right side is a **value expression** (e.g. `res is "OK" -> "Processed"`), the entire function returns that value immediately (**early return**, even out of `for`/`repeat` loops); if the right side is a **statement** (`say ...`, assignment `cnt = cnt + 1`), it executes and continues on the next line or loop iteration. At top level (outside a `to` function), returning a value after `->` (e.g. `check x > 0 -> "A"`) is an error (`Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.`).
+- **Arrow Semantics (`->`)**: `->` indicates execution direction. Inside a `to` function, if the right side is a **value expression** (e.g. `res is "OK" -> "Processed"`), the entire function returns that value immediately (**early return**, even out of `loop` blocks); if the right side is a **statement** (`say ...`, assignment `cnt = cnt + 1`), it executes and continues on the next line or loop iteration. Inside a `loop`, `check <cond> -> end` exits only the innermost `loop` early. At top level (outside a `to` function), returning a value after `->` (e.g. `check x > 0 -> "A"`) is an error (`Cannot return a value from 'check' at top level; use 'say' or 'do fail' instead.`).
 - **Type Narrowing**: Inside a `res is ErrorMessage -> ...` branch of `check` (or after an early exit `check res is not ErrorMessage -> ...`), Ease narrows `res` to `ErrorMessage` and allows `res.code` and `res.message`. Accessing record fields outside a narrowed branch fails statically with `TypeError`.
 - **Exhaustiveness Check**: A `check ... end` block matching a closed union without a fallback (`else -> ...` or a post-`end` expression) must handle every flattened variant — otherwise compilation stops with `Non-exhaustive check on '<union>' (Missing case: ...)`.
 - **Explicit fallback (`else -> ...`)**: When only specific variants matter, add `else -> ...` to handle everything else explicitly.
@@ -340,13 +340,15 @@ end
 
 ---
 
-### Lists & Loops (`list`, `repeat`, `for`)
+### Lists & Loops (`list`, `loop`)
 
-Lists are homogeneous and use **0-based dot indexing** (`cloud.0.vx`):
+Lists are homogeneous and use **0-based dot indexing** — either with a literal index (`cloud.0.vx`) or a computed index in parentheses (`scores.(i)`):
 
 ```ease
 scores = list 10, 25, 40
 first = scores.0
+pos = 1
+second = scores.(pos)
 
 # Empty typed list
 empty_nums = list as number
@@ -359,27 +361,42 @@ end
 vx0 = cloud.0.vx
 ```
 
-Loops:
+Ease has one unified loop construct (`loop <iterable> ... end`), which binds `it` to the current element and `it.index` to the 0-based iteration index (`0, 1, 2, ...`):
 
 ```ease
-# Fixed-count loop
-repeat 3
-    say "Tick"
+# Inclusive range shorthand (1 through 5 inclusive)
+loop range 1 5
+    say "{it.index}: {it}"
 end
 
-# Inclusive range (1 through 10 inclusive)
-for i in do range 1 10
-    say i
+# Iterate over a record list (access fields via `it.<field>`)
+loop cloud
+    say "#{it.index}: x={it.x}, vx={it.vx}"
 end
 
-# Implicit `it` variable (access record fields explicitly via `it.<field>`)
-for cloud do
-    say "{it.x} (vx={it.vx})"
+# Early loop exit with `check <cond> -> end`
+loop range 1 100
+    check it > 3 -> end
+    say it
 end
 
-# Single-line for loop
-for do range 1 5 do say it end
+# Computed indexing `seq.(it.index - 1)` inside a loop (Fibonacci example)
+seq = list 0, 1
+loop range 1 10
+    check
+        it.index < 2 -> say "seed: {seq.(it.index)}"
+        else
+            next = seq.(it.index - 1) + seq.(it.index - 2)
+            check next > 25 -> end
+            seq = do push seq next
+    end
+end
+
+# Single-line loop
+loop range 1 5 do say it end
 ```
+
+> **Note:** `def` records cannot declare a field named `index` (reserved for `it.index` inside `loop`), and `loop` requires a list or `range` (e.g. `loop range 1 3`, not `loop 3`).
 
 ---
 
@@ -487,7 +504,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```text
 Keywords:
   to  import  def  with  end  test  check  is  raises
-  do  say  ask  as  else  repeat  for  in
+  do  say  ask  as  else  loop
   and  or  not  text  number  list
 
 Operators & Punctuation:
@@ -530,27 +547,23 @@ top_test_blk   ::= "test" [STRING] [NL] { check_item [NL] } "end"
 stmt           ::= "do" "say" expr stmt_end
                  | "do" expr stmt_end
                  | "say" expr stmt_end
-                 | repeat_stmt
-                 | for_stmt
+                 | loop_stmt
                  | check_guard
                  | assign_stmt
                  | expr stmt_end
 
 assign_stmt    ::= IDENT "=" expr stmt_end
 
-repeat_stmt    ::= "repeat" expr [NL] { stmt [NL] } "end" stmt_end
+loop_stmt      ::= "loop" ( "range" term term | expr ) ["do"] [NL] { stmt [NL] } "end" stmt_end
 
-for_stmt       ::= "for" IDENT "in" expr ["do"] [NL] { stmt [NL] } "end" stmt_end
-                 | "for" expr "do" [NL] { stmt [NL] } "end" stmt_end
+check_action   ::= "end" stmt_end | stmt
 
-check_guard    ::= "check" expr "->" stmt
-                 | "check" NL { check_rule [NL] } [ "else" ( "->" stmt | NL { stmt [NL] } ) ] "end" stmt_end
+check_guard    ::= "check" expr "->" check_action
+                 | "check" NL { check_rule [NL] } [ "else" ( "->" check_action | NL { stmt [NL] } ) ] "end" stmt_end
 
-check_rule     ::= expr ( "->" stmt | stmt_end )
+check_rule     ::= expr ( "->" check_action | stmt_end )
 
-check_item     ::= if_stmt
-                 | repeat_stmt
-                 | for_stmt
+check_item     ::= loop_stmt
                  | "do" "say" expr stmt_end
                  | assign_stmt
                  | expr "is" ["not"] ( "text" | "number" | "list" ) stmt_end
@@ -580,6 +593,7 @@ unary          ::= "-" unary | postfix
 
 postfix        ::= primary { "." IDENT
                            | "." INT_PATH                (* e.g. .0 or .0.1 *)
+                           | "." "(" expr ")"            (* computed list/string index *)
                            | with_clause
                            | "as" cast_type
                            | bare_call_args }            (* when base is IDENT *)

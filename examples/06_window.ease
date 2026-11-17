@@ -26,7 +26,7 @@ to run_window
     pos_x = 400
     state = frame_state
 
-    for range 1 3600 do
+    loop range 1 3600
         check state.status is "closed" -> "Fenster geschlossen"
 
         moved = do move_x pos_x state.key

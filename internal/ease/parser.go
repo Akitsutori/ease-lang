@@ -395,6 +395,16 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 			)
 		}
 		fieldTok := p.advance()
+		if fieldTok.Lexeme == "index" {
+			return nil, nil, nil, newError(
+				"SyntaxError",
+				fieldTok.Line,
+				fieldTok.Col,
+				p.source,
+				fmt.Sprintf("Field name %q in 'def %s' is reserved for 'it.index' inside 'loop'", fieldTok.Lexeme, nameTok.Lexeme),
+				"Choose another field name such as 'idx' or 'pos'.",
+			)
+		}
 		if !p.match(TOK_ASSIGN) {
 			tok := p.current()
 			return nil, nil, nil, newError(
@@ -529,7 +539,7 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 
 func (p *Parser) parseCheckItem() (Stmt, error) {
 	switch p.current().Type {
-	case TOK_REPEAT, TOK_FOR:
+	case TOK_LOOP:
 		return p.parseStmt()
 	case TOK_DO:
 		if p.peekNext().Type == TOK_SAY {
@@ -645,10 +655,8 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			return nil, err
 		}
 		return &SayStmt{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Value: val}, nil
-	case TOK_REPEAT:
-		return p.parseRepeatStmt()
-	case TOK_FOR:
-		return p.parseForStmt()
+	case TOK_LOOP:
+		return p.parseLoopStmt()
 	case TOK_CHECK:
 		return p.parseCheckGuardStmt()
 	case TOK_TO:
@@ -679,6 +687,28 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			"Close the enclosing block with 'end' before starting a 'test ... end' block.",
 		)
 	default:
+		if tok.Type == TOK_IDENT && p.peekNext().Type != TOK_ASSIGN {
+			if tok.Lexeme == "for" {
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'for' loops were removed; use 'loop' instead",
+					"Write: loop items ... end (access the current item via 'it' and index via 'it.index').",
+				)
+			}
+			if tok.Lexeme == "repeat" {
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'repeat' loops were removed; use 'loop range' instead",
+					"Write: loop range 1 N ... end",
+				)
+			}
+		}
 		if tok.Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
 			return p.parseBareAssignStmt()
 		}
@@ -706,57 +736,42 @@ func (p *Parser) parseBareAssignStmt() (Stmt, error) {
 	return &AssignStmt{posInfo: posInfo{Line: nameTok.Line, Col: nameTok.Col}, Name: nameTok.Lexeme, Value: val}, nil
 }
 
-func (p *Parser) parseRepeatStmt() (Stmt, error) {
-	repTok := p.advance()
-	countExpr, err := p.parseExpr()
-	if err != nil {
-		return nil, err
-	}
-	p.skipNewlines()
-
-	var body []Stmt
-	for !p.check(TOK_END) {
-		if p.check(TOK_EOF) {
-			return nil, newError(
-				"SyntaxError",
-				repTok.Line,
-				repTok.Col,
-				p.source,
-				"'repeat' loop is missing 'end'",
-				"Close every 'repeat <n> ...' loop with 'end'.",
-			)
-		}
-		s, err := p.parseStmt()
-		if err != nil {
-			return nil, err
-		}
-		body = append(body, s)
-		p.skipNewlines()
-	}
-	p.advance() // consume `end`
-	if err := p.expectStmtEnd("'repeat' block"); err != nil {
-		return nil, err
+func (p *Parser) parseLoopStmt() (Stmt, error) {
+	loopTok := p.advance()
+	if p.check(TOK_IDENT) && p.peekNext().Type == TOK_IDENT && p.peekNext().Lexeme == "in" {
+		return nil, newError(
+			"SyntaxError",
+			p.current().Line,
+			p.current().Col,
+			p.source,
+			fmt.Sprintf("Named loop variables like 'loop %s in ...' are not supported", p.current().Lexeme),
+			"Write 'loop <list> ... end' and access the current element via 'it' (or 'it.<field>').",
+		)
 	}
 
-	return &RepeatStmt{posInfo: posInfo{Line: repTok.Line, Col: repTok.Col}, Count: countExpr, Body: body}, nil
-}
-
-func (p *Parser) parseForStmt() (Stmt, error) {
-	forTok := p.advance()
-	itemName := ""
 	var iterExpr Expr
 	var err error
-	if p.check(TOK_IDENT) && p.peekNext().Type == TOK_IN {
-		itemName = p.advance().Lexeme
-		p.advance() // consume `in`
+	if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
+		rangeTok := p.advance()
 		prevDisallowDo := p.disallowDoAsArg
+		prevDisallowBare := p.disallowBareCall
 		p.disallowDoAsArg = true
-		iterExpr, err = p.parseExpr()
+		p.disallowBareCall = true
+		var startExpr, endExpr Expr
+		startExpr, err = p.parseTerm()
+		if err == nil {
+			endExpr, err = p.parseTerm()
+		}
 		p.disallowDoAsArg = prevDisallowDo
+		p.disallowBareCall = prevDisallowBare
 		if err != nil {
 			return nil, err
 		}
-		p.match(TOK_DO) // optional `do` for single-line `for x in list do ... end`
+		iterExpr = &CallExpr{
+			posInfo: posInfo{Line: rangeTok.Line, Col: rangeTok.Col},
+			Callee:  "range",
+			Args:    []Expr{startExpr, endExpr},
+		}
 	} else {
 		prevDisallowDo := p.disallowDoAsArg
 		p.disallowDoAsArg = true
@@ -765,18 +780,9 @@ func (p *Parser) parseForStmt() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !p.match(TOK_DO) {
-			tok := p.current()
-			return nil, newError(
-				"SyntaxError",
-				tok.Line,
-				tok.Col,
-				p.source,
-				fmt.Sprintf("Expected 'do' after 'for <list>', got %q", tok.Lexeme),
-				"Write: for items do ... end, or: for item in items ... end",
-			)
-		}
 	}
+
+	p.match(TOK_DO) // optional `do` for single-line `loop xs do say it end`
 	p.skipNewlines()
 
 	var body []Stmt
@@ -784,11 +790,11 @@ func (p *Parser) parseForStmt() (Stmt, error) {
 		if p.check(TOK_EOF) {
 			return nil, newError(
 				"SyntaxError",
-				forTok.Line,
-				forTok.Col,
+				loopTok.Line,
+				loopTok.Col,
 				p.source,
-				"'for' loop is missing 'end'",
-				"Close every 'for' loop with 'end'.",
+				"'loop' is missing 'end'",
+				"Close every 'loop' block with 'end'.",
 			)
 		}
 		s, err := p.parseStmt()
@@ -799,13 +805,12 @@ func (p *Parser) parseForStmt() (Stmt, error) {
 		p.skipNewlines()
 	}
 	p.advance() // consume `end`
-	if err := p.expectStmtEnd("'for' block"); err != nil {
+	if err := p.expectStmtEnd("'loop' block"); err != nil {
 		return nil, err
 	}
 
-	return &ForStmt{
-		posInfo:  posInfo{Line: forTok.Line, Col: forTok.Col},
-		ItemName: itemName,
+	return &LoopStmt{
+		posInfo:  posInfo{Line: loopTok.Line, Col: loopTok.Col},
 		Iterable: iterExpr,
 		Body:     body,
 	}, nil
@@ -831,7 +836,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 				"Write: check <condition> -> <action>, or put conditions on new lines inside 'check ... end'.",
 			)
 		}
-		action, err := p.parseStmt()
+		action, err := p.parseCheckArrowAction()
 		if err != nil {
 			return nil, err
 		}
@@ -864,7 +869,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		}
 		var action Stmt
 		if p.match(TOK_ARROW) {
-			action, err = p.parseStmt()
+			action, err = p.parseCheckArrowAction()
 			if err != nil {
 				return nil, err
 			}
@@ -880,7 +885,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	var elseBody []Stmt
 	if p.match(TOK_ELSE) {
 		if p.match(TOK_ARROW) {
-			action, err := p.parseStmt()
+			action, err := p.parseCheckArrowAction()
 			if err != nil {
 				return nil, err
 			}
@@ -941,6 +946,17 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		Rules:    rules,
 		ElseBody: elseBody,
 	}, nil
+}
+
+func (p *Parser) parseCheckArrowAction() (Stmt, error) {
+	if p.check(TOK_END) {
+		endTok := p.advance()
+		if err := p.expectStmtEnd("'-> end'"); err != nil {
+			return nil, err
+		}
+		return &LoopEndStmt{posInfo: posInfo{Line: endTok.Line, Col: endTok.Col}}, nil
+	}
+	return p.parseStmt()
 }
 
 // Expressions (precedence climbing)
@@ -1131,6 +1147,30 @@ func (p *Parser) parsePostfix() (Expr, error) {
 						Target:  expr,
 						Index:   &NumberExpr{posInfo: posInfo{Line: numTok.Line, Col: numTok.Col}, Value: float64(idx), Raw: part},
 					}
+				}
+				continue
+			}
+			if p.match(TOK_LPAREN) {
+				idxExpr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if !p.match(TOK_RPAREN) {
+					tok := p.current()
+					return nil, newError(
+						"SyntaxError",
+						tok.Line,
+						tok.Col,
+						p.source,
+						"Expected ')' after index expression",
+						"Example: xs.(it.index - 1)",
+					)
+				}
+				line, col := expr.Pos()
+				expr = &IndexExpr{
+					posInfo: posInfo{Line: line, Col: col},
+					Target:  expr,
+					Index:   idxExpr,
 				}
 				continue
 			}

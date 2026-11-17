@@ -14,7 +14,7 @@ end
 
 to update_particles items dt
     out = list as particle
-    for items do
+    loop items
         check it.state is "dead" -> out = do push out it
         check it.state is "active" -> out = do push out do step_particle it dt
     end

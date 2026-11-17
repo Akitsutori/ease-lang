@@ -221,6 +221,7 @@ type typeValidator struct {
 	resolvedUnions map[string][]resolvedUnionVariant
 	scope          *typeScope
 	inRaisesExpr   bool
+	loopDepth      int
 }
 
 func (v *typeValidator) pushScope() *typeScope {
@@ -852,9 +853,7 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 					}
 				}
 				collectFromStmts(st.ElseBody)
-			case *ForStmt:
-				collectFromStmts(st.Body)
-			case *RepeatStmt:
+			case *LoopStmt:
 				collectFromStmts(st.Body)
 			}
 		}
@@ -1034,33 +1033,54 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		}
 		return nil
 
-	case *RepeatStmt:
-		if err := v.checkExpr(st.Count); err != nil {
-			return err
+	case *LoopEndStmt:
+		if v.loopDepth == 0 {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"'-> end' can only be used inside a 'loop' block",
+				"Use 'check <cond> -> end' inside 'loop ... end' to exit the loop early.",
+			)
 		}
-		if err := v.checkNotCondition(st.Count); err != nil {
-			return err
-		}
-		v.pushScope()
-		err := v.checkStmts(st.Body, inFunction)
-		v.popScope()
-		return err
+		return nil
 
-	case *ForStmt:
+	case *LoopStmt:
 		if err := v.checkExpr(st.Iterable); err != nil {
 			return err
 		}
 		if err := v.checkNotCondition(st.Iterable); err != nil {
 			return err
 		}
-		loopScope := v.pushScope()
-		itemName := st.ItemName
-		if itemName == "" {
-			itemName = "it"
+		if !v.inRaisesExpr {
+			switch lit := st.Iterable.(type) {
+			case *NumberExpr:
+				return newError(
+					"TypeError",
+					lit.Line,
+					lit.Col,
+					v.source,
+					fmt.Sprintf("'loop' requires a list or range, got number. Use 'loop range 1 %s' instead.", FormatValue(lit.Value)),
+					fmt.Sprintf("Write: loop range 1 %s ... end", FormatValue(lit.Value)),
+				)
+			case *StringExpr, *InterpStringExpr:
+				line, col := st.Iterable.Pos()
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					"'loop' requires a list or range, got text",
+					"Iterate over a list like 'loop xs ... end' or a range like 'loop range 1 5 ... end'.",
+				)
+			}
 		}
-		elemState := v.inferIterableElemState(st.Iterable)
-		loopScope.vars[itemName] = elemState
+		loopScope := v.pushScope()
+		loopScope.vars["it"] = v.inferIterableElemState(st.Iterable)
+		v.loopDepth++
 		err := v.checkStmts(st.Body, inFunction)
+		v.loopDepth--
 		v.popScope()
 		return err
 
@@ -1449,6 +1469,9 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{exactRecord: baseSt.exactRecord}
 		}
 	case *FieldExpr:
+		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
+			return varTypeState{exactNonRecord: true}
+		}
 		targetSt := v.inferExprTypeState(ex.Target)
 		if targetSt.exactRecord != "" {
 			if variants, label, ok := v.fieldUnionVariants(targetSt.exactRecord, ex.Field); ok {
@@ -1456,6 +1479,19 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 					inlineUnionLabel:    label,
 					inlineUnionVariants: variants,
 				}
+			}
+		}
+	case *IndexExpr:
+		targetSt := v.inferExprTypeState(ex.Target)
+		if targetSt.listElemType != "" {
+			if v.unions[targetSt.listElemType] != nil {
+				return varTypeState{unionName: targetSt.listElemType}
+			}
+			if v.defs[targetSt.listElemType] != nil {
+				return varTypeState{exactRecord: targetSt.listElemType}
+			}
+			if targetSt.listElemType == "text" || targetSt.listElemType == "number" {
+				return varTypeState{exactNonRecord: true}
 			}
 		}
 	case *StringExpr, *InterpStringExpr, *NumberExpr, *UnaryExpr:
@@ -1496,8 +1532,21 @@ func (v *typeValidator) inferIterableElemState(iter Expr) varTypeState {
 				elemType = st.exactRecord
 			}
 		}
+	case *CallExpr:
+		if ex.Callee == "range" {
+			return varTypeState{exactNonRecord: true}
+		}
+		if ex.Callee == "push" && len(ex.Args) >= 1 {
+			argSt := v.inferExprTypeState(ex.Args[0])
+			if argSt.listElemType != "" {
+				elemType = argSt.listElemType
+			}
+		}
 	}
 	if elemType != "" {
+		if elemType == "number" || elemType == "text" {
+			return varTypeState{exactNonRecord: true}
+		}
 		if v.unions[elemType] != nil {
 			return varTypeState{unionName: elemType}
 		}
@@ -1609,6 +1658,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			return nil
 		}
 		if id, ok := ex.Target.(*IdentExpr); ok {
+			if id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
+				return nil
+			}
 			if st, tracked := v.lookupVar(id.Name); tracked {
 				if st.exactRecord != "" {
 					if defDecl, ok := v.defs[st.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
@@ -1666,7 +1718,10 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkExpr(ex.Target); err != nil {
 			return err
 		}
-		return v.checkExpr(ex.Index)
+		if err := v.checkExpr(ex.Index); err != nil {
+			return err
+		}
+		return v.checkNotCondition(ex.Index)
 
 	case *WithExpr:
 		if err := v.checkExpr(ex.Base); err != nil {

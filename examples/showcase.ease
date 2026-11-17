@@ -20,8 +20,8 @@ end
 
 to sum_squares nums
     total = 0
-    for n in nums
-        total = total + (n * n)
+    loop nums
+        total = total + (it * it)
     end
     total
 end

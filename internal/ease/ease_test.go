@@ -58,7 +58,7 @@ end
 test "loops and mutability"
   factor = 3
   acc = 0
-  repeat 4
+  loop range 1 4
     acc = acc + factor
   end
   acc is 12
@@ -560,7 +560,7 @@ scores = list 10, 25, 40
 names  = list "Aria", "Ben", "Cid"
 
 sum_x = 0
-for cloud do
+loop cloud
     sum_x = sum_x + it.x
 end
 
@@ -655,7 +655,7 @@ end
 
 to update_particles items dt
     out = list as particle
-    for items do
+    loop items
         check it.state is "dead" -> out = do push out it
         check it.state is "active" -> out = do push out do step_particle it dt
     end
@@ -940,7 +940,7 @@ to run_window
     pos_x = 400
     state = frame_state
 
-    for do range 1 10 do
+    loop do range 1 10
         check state.status is "closed" -> "Fenster geschlossen:{pos_x}"
 
         pos_x = do move_x pos_x state.key
@@ -976,9 +976,9 @@ end
 	}
 }
 
-func TestSingleLineForExpressions(t *testing.T) {
+func TestSingleLineLoopExpressions(t *testing.T) {
 	src := `
-for do range 1 10 do say it end
+loop range 1 10 do say it end
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(src, &out); err != nil {
@@ -991,9 +991,9 @@ for do range 1 10 do say it end
 
 	srcNamed := `
 sum = 0
-for x in do range 1 4 do sum = sum + x end
+loop range 1 4 do sum = sum + it end
 
-test "single-line for"
+test "single-line loop"
     sum is 10
 end
 `
@@ -1017,7 +1017,7 @@ to add_three a b c
 end
 
 sum = 0
-for x in range 1 3 do sum = sum + x end
+loop range 1 3 do sum = sum + it end
 
 test "comma-free parameters and calls"
     do greet "Welt" "!" is "Hallo Welt!"
@@ -1984,7 +1984,7 @@ end
 			want: []string{"Cannot read field '.code'", "outcome", "before narrowing"},
 		},
 		{
-			name: "exhaustiveness and narrowing inside for-loop over pushed union list",
+			name: "exhaustiveness and narrowing inside loop over pushed union list",
 			src: `
 def ErrorMessage
     code    = 500
@@ -1993,10 +1993,10 @@ end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 items = list as outcome
 items = do push items "OK"
-for item in items
+loop items
     check
-        item is "OK"         -> say "ok"
-        item is ErrorMessage -> say "{item.code}"
+        it is "OK"         -> say "ok"
+        it is ErrorMessage -> say "{it.code}"
     end
 end
 `,
@@ -2146,7 +2146,7 @@ end
 to check_param_and_field vx items
     outer_seen = 0
     field_seen = 0
-    for items do
+    loop items
         check vx is not 100 -> do fail "parameter vx was shadowed"
         check it.vx is not 5 -> do fail "unexpected it.vx"
         outer_seen = vx
@@ -2160,10 +2160,10 @@ p = particle with vx = 5
 ps = list as particle
 ps = do push ps p
 
-test "no implicit field injection in for ... do loops"
+test "no implicit field injection in loop"
     outer_seen = 0
     field_seen = 0
-    for ps do
+    loop ps
         check vx is not 100 -> do fail "outer vx was shadowed"
         check it.vx is not 5 -> do fail "unexpected it.vx"
         outer_seen = vx
@@ -2182,7 +2182,7 @@ end
 		t.Fatalf("expected 3 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
 	}
 
-	// 2. Accessing an undefined bare field `vx` inside `for ps do ... end` produces a tailored error pointing to `it.vx`.
+	// 2. Accessing an undefined bare field `vx` inside `loop ps` produces a tailored error pointing to `it.vx`.
 	missingFieldSrc := `
 def particle
     vx = 0
@@ -2192,7 +2192,7 @@ p = particle with vx = 5
 ps = list as particle
 ps = do push ps p
 
-for ps do
+loop ps
     say "{vx}"
 end
 `
@@ -2321,7 +2321,7 @@ total = 100
 
 to sum_to n
     total = 0
-    for do range 1 n do
+    loop range 1 n
         total = total + it
     end
     total
@@ -2359,7 +2359,7 @@ do bump
 	mixedScopeSrc := `
 total = 100
 to mixed n
-    for do range 1 n do
+    loop range 1 n
         total = 0
     end
     total
@@ -2553,14 +2553,14 @@ func TestIssue8CheckFormsArrowSemanticsAndTopLevelValueError(t *testing.T) {
 	arrowLoopSrc := `
 to count_a words
     cnt = 0
-    for words do
+    loop words
         check it is "a" -> cnt = cnt + 1
     end
     cnt
 end
 
 to first_big xs
-    for xs do
+    loop xs
         check it > 1 -> it
     end
     0
@@ -2598,11 +2598,11 @@ say do first_big nums
 }
 
 func TestHardeningEvalRepeatHTTPPoolingScreenCloseAndListDefaults(t *testing.T) {
-	// 1. RepeatStmt limit (Finding 2)
-	_, err := EvalProgram("repeat 1000001\n    1\nend\n", &bytes.Buffer{})
+	// 1. Loop range limit (Finding 2 / maxListSize)
+	_, err := EvalProgram("loop range 1 1000001\n    1\nend\n", &bytes.Buffer{})
 	var easeErr *EaseError
-	if err == nil || !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "too large") {
-		t.Fatalf("expected RuntimeError for oversized repeat, got: %v", err)
+	if err == nil || !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "range too large") {
+		t.Fatalf("expected RuntimeError for oversized loop range, got: %v", err)
 	}
 
 	// 2. Shared http.Client connection pooling & per-request timeout (Finding 3)
@@ -2714,5 +2714,145 @@ say "{do len items1}-{do len b2.items}-{do len bag.items}"
 	ptsList := bRec.Fields["pts"].(*ListValue)
 	if len(ptsList.Elements) != 1 || ptsList.Elements[0].(*RecordValue).IsPrototype {
 		t.Fatalf("expected nested record inside default list to be instantiated (IsPrototype=false)")
+	}
+}
+
+func TestUnifiedLoopItIndexBreakEndAndDynamicIndexing(t *testing.T) {
+	// 1. it.index (0-based) on range and records, plus dynamic indexing xs.(expr) & Fibonacci with `-> end`
+	happySrc := `
+def item
+    label = ""
+end
+
+items = list as item with
+    label = "a"
+    label = "b"
+end
+
+loop items
+    say "{it.index}:{items.(it.index).label}"
+end
+
+# Fibonacci with loop range 1 100, seq.(it.index - 1), and check -> end
+seq = list 0, 1
+loop range 1 100
+    check
+        it.index < 2 -> say "seed:{seq.(it.index)}"
+        else
+            next = seq.(it.index - 1) + seq.(it.index - 2)
+            check next > 25 -> end
+            seq = do push seq next
+    end
+end
+say do len seq
+say seq.((do len seq) - 1)
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(happySrc, &out); err != nil {
+		t.Fatalf("expected happy loop program to succeed, got: %v", err)
+	}
+	want := "0:a\n1:b\nseed:0\nseed:1\n9\n21"
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Fatalf("unexpected output:\ngot:  %q\nwant: %q", got, want)
+	}
+
+	// 2. check -> end exits ONLY innermost loop (not enclosing `to` function or outer loop)
+	nestedAndFnSrc := `
+to find_first_over limit xs
+    found = -1
+    loop xs
+        check
+            it <= limit -> say "small:{it}"
+            else
+                found = it
+                check it > 0 -> end
+        end
+    end
+    found + 100
+end
+
+xs_in = list 1, 8, 12
+say do find_first_over 5 xs_in
+
+pairs = list as text
+loop range 1 2
+    outer = it
+    loop range 10 12
+        check
+            it is 11 -> end
+        end
+        pairs = do push pairs "{outer}:{it}:{it.index}"
+    end
+end
+say do len pairs
+say pairs.0
+say pairs.1
+`
+	var out2 bytes.Buffer
+	if _, err := EvalProgram(nestedAndFnSrc, &out2); err != nil {
+		t.Fatalf("expected nested loop & check -> end in function to succeed, got: %v", err)
+	}
+	want2 := "small:1\n108\n2\n1:10:0\n2:10:0"
+	if got := strings.TrimSpace(out2.String()); got != want2 {
+		t.Fatalf("unexpected nested output:\ngot:  %q\nwant: %q", got, want2)
+	}
+
+	// 3. Negative tests: loop 3, loop x in xs, for, repeat, -> end outside loop, def field named index
+	negCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "loop scalar number",
+			src:  "loop 3\n    say it\nend\n",
+			want: "'loop' requires a list or range, got number. Use 'loop range 1 3' instead.",
+		},
+		{
+			name: "loop scalar text",
+			src:  "loop \"abc\"\n    say it\nend\n",
+			want: "'loop' requires a list or range, got text",
+		},
+		{
+			name: "loop named var",
+			src:  "xs = list 1, 2\nloop x in xs\n    say x\nend\n",
+			want: "Named loop variables like 'loop x in ...' are not supported",
+		},
+		{
+			name: "legacy for",
+			src:  "xs = list 1\nfor xs do\n    say it\nend\n",
+			want: "'for' loops were removed; use 'loop' instead",
+		},
+		{
+			name: "legacy repeat",
+			src:  "repeat 3\n    say 1\nend\n",
+			want: "'repeat' loops were removed; use 'loop range' instead",
+		},
+		{
+			name: "arrow end at top level",
+			src:  "x = 1\ncheck x > 0 -> end\n",
+			want: "'-> end' can only be used inside a 'loop' block",
+		},
+		{
+			name: "arrow end in function outside loop",
+			src:  "to f x\n    check x > 0 -> end\n    x\nend\n",
+			want: "'-> end' can only be used inside a 'loop' block",
+		},
+		{
+			name: "def field named index",
+			src:  "def bad\n    index = 0\nend\n",
+			want: "reserved for 'it.index'",
+		},
+		{
+			name: "reassign it inside loop",
+			src:  "loop range 1 3\n    it = 99\nend\n",
+			want: "Cannot reassign constant \"it\"",
+		},
+	}
+	for _, tc := range negCases {
+		_, err := EvalProgram(tc.src, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected error containing %q, got: %v", tc.name, tc.want, err)
+		}
 	}
 }

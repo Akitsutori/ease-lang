@@ -19,7 +19,7 @@ func TestReplMultilineAndDeclarations(t *testing.T) {
 		"say p.x",
 		"do add 2 3",
 		"total = 0",
-		"for do range 1 4 do",
+		"loop range 1 4",
 		"    total = total + it",
 		"end",
 		"say total",
