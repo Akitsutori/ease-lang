@@ -2595,3 +2595,19 @@ end
 		t.Fatalf("expected migration hint for bare 'fetch', got: %v", err)
 	}
 }
+
+func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
+	multilineCheck := "x = 1\ncheck x > 0 ->\n  say x\nend\n"
+	if _, err := ParseProgram(multilineCheck); err == nil ||
+		!strings.Contains(err.Error(), "Single-line 'check <cond> -> <action>' cannot span multiple lines") ||
+		!strings.Contains(err.Error(), "Put the action on the same line without 'end'") {
+		t.Fatalf("expected multiline single-line check hint, got: %v", err)
+	}
+
+	loopExpr := "xs = loop range 1 3\n  it * 2\nend\n"
+	if _, err := ParseProgram(loopExpr); err == nil ||
+		!strings.Contains(err.Error(), "'loop' is a statement, not an expression") ||
+		!strings.Contains(err.Error(), "xs = append xs val") {
+		t.Fatalf("expected loop-as-expression hint, got: %v", err)
+	}
+}

@@ -1121,6 +1121,17 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 				"Write: check <condition> -> <action>, or put conditions on new lines inside 'check ... end'.",
 			)
 		}
+		if p.check(TOK_NEWLINE) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Single-line 'check <cond> -> <action>' cannot span multiple lines",
+				"Put the action on the same line without 'end' (e.g. 'check cond -> x = x + 1'), or use a 'check ... end' block.",
+			)
+		}
 		action, err := p.parseCheckArrowAction()
 		if err != nil {
 			return nil, err
@@ -1724,6 +1735,15 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	case TOK_INTERP_STRING:
 		p.advance()
 		return p.parseInterpString(tok)
+	case TOK_LOOP:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'loop' is a statement, not an expression",
+			"Build lists imperatively with 'xs = list as <type>' and 'xs = append xs val' inside 'loop ... end'.",
+		)
 	case TOK_IDENT:
 		if tok.Lexeme == "do" {
 			return nil, p.removedDoError(tok)
