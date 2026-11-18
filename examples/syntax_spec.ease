@@ -97,7 +97,7 @@ test "Happy Paths gemäß README"
     greeting is "Hallo \{Ease\}: 15"
 
     add 2 3 is 5
-    client = network with url = "https://example.test"
+    client = network.network with url = "https://example.test"
     mock_fetch client "/posts/1" is "https://example.test/posts/1"
 
     hero.hp is 80

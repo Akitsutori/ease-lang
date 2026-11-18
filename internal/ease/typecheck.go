@@ -135,57 +135,58 @@ func validateProgramTypes(prog *Program, source string) error {
 
 	modules := make(map[string]modTypeInfo)
 	for _, imp := range prog.Imports {
-		if !imp.IsFileImport {
-			continue
-		}
-		if _, isBuiltin := builtinArities[imp.Alias]; isBuiltin {
-			return newError(
-				"TypeError",
-				imp.Line,
-				imp.Col,
-				source,
-				fmt.Sprintf("Cannot import module as %q: it conflicts with a built-in function", imp.Alias),
-				"Choose a different module alias after 'as'.",
-			)
-		}
-		if _, isType := known[imp.Alias]; isType {
-			return newError(
-				"TypeError",
-				imp.Line,
-				imp.Col,
-				source,
-				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'def' type", imp.Alias),
-				"Choose a different module alias after 'as'.",
-			)
-		}
-		if _, isFunc := funcNames[imp.Alias]; isFunc {
-			return newError(
-				"TypeError",
-				imp.Line,
-				imp.Col,
-				source,
-				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'to' function", imp.Alias),
-				"Choose a different module alias after 'as'.",
-			)
-		}
-		if _, dup := modules[imp.Alias]; dup {
-			return newError(
-				"TypeError",
-				imp.Line,
-				imp.Col,
-				source,
-				fmt.Sprintf("Duplicate module alias %q", imp.Alias),
-				"Each imported file must have a unique alias after 'as'.",
-			)
-		}
 		if imp.ModuleProg == nil {
 			continue
+		}
+		alias := imp.Alias
+		if alias == "" {
+			alias = imp.Name
+		}
+		if _, isBuiltin := builtinArities[alias]; isBuiltin {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a built-in function", alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, isType := known[alias]; isType {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'def' type", alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, isFunc := funcNames[alias]; isFunc {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'to' function", alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, dup := modules[alias]; dup {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Duplicate module alias %q", alias),
+				"Each imported module must have a unique alias.",
+			)
 		}
 		if err := validateProgramTypes(imp.ModuleProg, imp.ModuleSource); err != nil {
 			return err
 		}
 		mi := modTypeInfo{
-			alias:  imp.Alias,
+			alias:  alias,
 			defs:   make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
 			unions: make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
 			funcs:  make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
@@ -193,13 +194,13 @@ func validateProgramTypes(prog *Program, source string) error {
 		}
 		for _, d := range imp.ModuleProg.Defs {
 			mi.defs[d.Name] = d
-			qual := imp.Alias + "." + d.Name
+			qual := alias + "." + d.Name
 			known[qual] = typeDefInfo{line: imp.Line, imported: true, isRecord: true}
 			defs[qual] = d
 		}
 		for _, u := range imp.ModuleProg.Unions {
 			mi.unions[u.Name] = u
-			qual := imp.Alias + "." + u.Name
+			qual := alias + "." + u.Name
 			known[qual] = typeDefInfo{line: imp.Line, imported: true, isRecord: false}
 			unions[qual] = u
 		}
@@ -211,7 +212,7 @@ func validateProgramTypes(prog *Program, source string) error {
 				mi.consts[cs.Name] = cs.Value
 			}
 		}
-		modules[imp.Alias] = mi
+		modules[alias] = mi
 	}
 
 	v := &typeValidator{
@@ -1027,15 +1028,17 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 					}
 				}
 			}
-		case "sum", "avg":
-			return varTypeState{exactNonRecord: true}
-		case "sort":
+		case "floor", "round", "sum", "avg":
+			return varTypeState{exactNonRecord: true, exactBaseType: "number"}
+		case "sort", "slice":
 			if len(ex.Args) >= 1 {
 				return v.inferExprTypeState(ex.Args[0])
 			}
 		case "split":
 			return varTypeState{listElemType: "text"}
-		case "join", "trim", "replace", "load", "save":
+		case "upper", "lower", "join", "trim", "replace":
+			return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+		case "load", "save":
 			return varTypeState{exactNonRecord: true}
 		case "range":
 			return varTypeState{listElemType: "number"}
@@ -1266,13 +1269,21 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if st, tracked := v.lookupVar(id.Name); tracked {
 				if st.exactRecord != "" {
 					if defDecl, ok := v.defs[st.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
+						fieldNames := make([]string, len(defDecl.Fields))
+						for i, f := range defDecl.Fields {
+							fieldNames[i] = f.Name
+						}
+						fieldHint := fmt.Sprintf("Available fields on %s: %s.", st.exactRecord, defFieldNames(defDecl))
+						if suggestion := closestTypeName(ex.Field, fieldNames); suggestion != "" {
+							fieldHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fieldHint)
+						}
 						return newError(
 							"TypeError",
 							ex.Line,
 							ex.Col,
 							v.source,
 							fmt.Sprintf("%s has no field %q", st.exactRecord, ex.Field),
-							fmt.Sprintf("Available fields on %s: %s.", st.exactRecord, defFieldNames(defDecl)),
+							fieldHint,
 						)
 					}
 					return nil
@@ -1330,14 +1341,18 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			return err
 		}
 		if id, ok := ex.Base.(*IdentExpr); ok {
-			if _, isMod := v.modules[id.Name]; isMod {
+			if mod, isMod := v.modules[id.Name]; isMod {
+				hint := "'with' only updates 'def' blueprints, records, or lists of records."
+				if mod.defs[id.Name] != nil {
+					hint = fmt.Sprintf("Use '%s.%s with ...' to instantiate the module's blueprint.", id.Name, id.Name)
+				}
 				return newError(
 					"TypeError",
 					ex.Line,
 					ex.Col,
 					v.source,
 					fmt.Sprintf("Cannot use 'with' on module %q", id.Name),
-					"'with' only updates 'def' blueprints, records, or lists of records.",
+					hint,
 				)
 			}
 		}

@@ -31,24 +31,11 @@ func loadStdModuleSource(name string) (string, error) {
 }
 
 func resolveProgramImports(prog *Program, source string, seen map[string]bool) error {
-	if len(prog.Imports) == 0 {
-		return nil
-	}
-	var mergedFuncs []*FuncDecl
-	var mergedDefs []*DefDecl
-	var mergedUnions []*UnionDecl
-	var mergedBody []Stmt
-
 	for _, imp := range prog.Imports {
-		if imp.IsFileImport {
+		if imp.IsFileImport || imp.ModuleProg != nil {
 			continue
 		}
-		if seen[imp.Name] {
-			continue
-		}
-		seen[imp.Name] = true
-		modSrc, err := loadStdModuleSource(imp.Name)
-		if err != nil {
+		if _, err := loadStdModuleSource(imp.Name); err != nil {
 			return newError(
 				"ImportError",
 				imp.Line,
@@ -58,25 +45,6 @@ func resolveProgramImports(prog *Program, source string, seen map[string]bool) e
 				"Check available standard modules under std/, e.g. 'import network'.",
 			)
 		}
-		modProg, err := parseProgramWithSeen(modSrc, seen)
-		if err != nil {
-			return err
-		}
-		for _, d := range modProg.Defs {
-			d.Imported = true
-		}
-		for _, u := range modProg.Unions {
-			u.Imported = true
-		}
-		mergedFuncs = append(mergedFuncs, modProg.Functions...)
-		mergedDefs = append(mergedDefs, modProg.Defs...)
-		mergedUnions = append(mergedUnions, modProg.Unions...)
-		mergedBody = append(mergedBody, modProg.Body...)
 	}
-
-	prog.Functions = append(mergedFuncs, prog.Functions...)
-	prog.Defs = append(mergedDefs, prog.Defs...)
-	prog.Unions = append(mergedUnions, prog.Unions...)
-	prog.Body = append(mergedBody, prog.Body...)
 	return nil
 }

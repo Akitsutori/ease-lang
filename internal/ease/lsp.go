@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,7 +220,7 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 			} `json:"textDocument"`
 		}
 		if err := json.Unmarshal(msg.Params, &params); err == nil {
-			symbols := DocumentSymbolsForSource(s.getDoc(params.TextDocument.URI))
+			symbols := DocumentSymbolsForURI(params.TextDocument.URI, s.getDoc(params.TextDocument.URI))
 			s.sendResponse(msg.ID, symbols, nil)
 		} else {
 			s.sendResponse(msg.ID, []LSPDocumentSymbol{}, nil)
@@ -231,7 +233,7 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 			} `json:"textDocument"`
 		}
 		if err := json.Unmarshal(msg.Params, &params); err == nil {
-			items := CompletionItemsForSource(s.getDoc(params.TextDocument.URI))
+			items := CompletionItemsForURI(params.TextDocument.URI, s.getDoc(params.TextDocument.URI))
 			s.sendResponse(msg.ID, items, nil)
 		} else {
 			s.sendResponse(msg.ID, []LSPCompletionItem{}, nil)
@@ -267,8 +269,36 @@ func (s *LSPServer) deleteDoc(uri string) {
 	delete(s.docs, uri)
 }
 
+func fileURIToPath(uri string) string {
+	if uri == "" {
+		return ""
+	}
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	p, err := url.PathUnescape(u.Path)
+	if err != nil {
+		p = u.Path
+	}
+	if u.Host != "" {
+		p = "//" + u.Host + p
+	} else if len(p) >= 3 && p[0] == '/' && ((p[1] >= 'A' && p[1] <= 'Z') || (p[1] >= 'a' && p[1] <= 'z')) && p[2] == ':' {
+		// Strip leading slash before Windows drive letters (e.g. "/d:/work" -> "d:/work").
+		p = p[1:]
+	}
+	return filepath.FromSlash(p)
+}
+
+func parseProgramForURI(uri, source string) (*Program, error) {
+	if filePath := fileURIToPath(uri); filePath != "" {
+		return ParseProgramFromFile(source, filePath)
+	}
+	return ParseProgram(source)
+}
+
 func (s *LSPServer) publishDiagnostics(uri, source string) {
-	diags := DiagnoseSource(source)
+	diags := DiagnoseSourceForURI(uri, source)
 	s.sendNotification("textDocument/publishDiagnostics", map[string]any{
 		"uri":         uri,
 		"diagnostics": diags,
@@ -277,6 +307,11 @@ func (s *LSPServer) publishDiagnostics(uri, source string) {
 
 // DiagnoseSource parses an Ease source string and converts any EaseError into LSP diagnostics.
 func DiagnoseSource(source string) (diags []LSPDiagnostic) {
+	return DiagnoseSourceForURI("", source)
+}
+
+// DiagnoseSourceForURI parses an Ease source string resolved relative to `uri` and converts any EaseError into LSP diagnostics.
+func DiagnoseSourceForURI(uri, source string) (diags []LSPDiagnostic) {
 	defer func() {
 		if r := recover(); r != nil {
 			diags = []LSPDiagnostic{
@@ -292,7 +327,7 @@ func DiagnoseSource(source string) (diags []LSPDiagnostic) {
 			}
 		}
 	}()
-	_, err := ParseProgram(source)
+	_, err := parseProgramForURI(uri, source)
 	if err == nil {
 		return []LSPDiagnostic{}
 	}
@@ -384,13 +419,19 @@ func diagnosticUTF16Span(source string, lineIdx, runeCol int) (int, int) {
 }
 
 // DocumentSymbolsForSource extracts outline symbols (defs, unions, functions, checks) from Ease source.
+// DocumentSymbolsForSource parses an Ease source string and returns top-level document symbols.
 func DocumentSymbolsForSource(source string) (symbols []LSPDocumentSymbol) {
+	return DocumentSymbolsForURI("", source)
+}
+
+// DocumentSymbolsForURI parses an Ease source string resolved relative to `uri` and returns top-level document symbols.
+func DocumentSymbolsForURI(uri, source string) (symbols []LSPDocumentSymbol) {
 	defer func() {
 		if r := recover(); r != nil {
 			symbols = []LSPDocumentSymbol{}
 		}
 	}()
-	prog, err := ParseProgram(source)
+	prog, err := parseProgramForURI(uri, source)
 	if err != nil || prog == nil {
 		return []LSPDocumentSymbol{}
 	}
@@ -472,7 +513,13 @@ func symbolRange(lines []string, line, col, utf16Length int) LSPRange {
 }
 
 // CompletionItemsForSource returns Ease keywords plus declared defs/functions in the buffer.
+// CompletionItemsForSource returns completion candidates for an Ease source string.
 func CompletionItemsForSource(source string) (items []LSPCompletionItem) {
+	return CompletionItemsForURI("", source)
+}
+
+// CompletionItemsForURI returns completion candidates for an Ease source string resolved relative to `uri`.
+func CompletionItemsForURI(uri, source string) (items []LSPCompletionItem) {
 	defer func() {
 		if r := recover(); r != nil {
 			items = []LSPCompletionItem{}
@@ -487,7 +534,7 @@ func CompletionItemsForSource(source string) (items []LSPCompletionItem) {
 		})
 	}
 
-	if prog, err := ParseProgram(source); err == nil && prog != nil {
+	if prog, err := parseProgramForURI(uri, source); err == nil && prog != nil {
 		for _, d := range prog.Defs {
 			items = append(items, LSPCompletionItem{
 				Label:  d.Name,

@@ -29,6 +29,46 @@ type Env struct {
 	hasLoopIndex   bool
 }
 
+func (env *Env) collectVisibleNames() []string {
+	seen := make(map[string]bool)
+	var names []string
+	for cur := env; cur != nil; cur = cur.parent {
+		for k := range cur.vars {
+			if !seen[k] {
+				seen[k] = true
+				names = append(names, k)
+			}
+		}
+	}
+	return names
+}
+
+func (ev *Evaluator) collectCallableNames() []string {
+	seen := make(map[string]bool)
+	var names []string
+	for k := range ev.funcs {
+		if !seen[k] {
+			seen[k] = true
+			names = append(names, k)
+		}
+	}
+	for k := range builtinArities {
+		if !seen[k] {
+			seen[k] = true
+			names = append(names, k)
+		}
+	}
+	return names
+}
+
+func missingFieldHint(field string, available []string) string {
+	hint := fmt.Sprintf("Available fields: %s", strings.Join(available, ", "))
+	if suggestion := closestTypeName(field, available); suggestion != "" {
+		return fmt.Sprintf("Did you mean %q? %s", suggestion, hint)
+	}
+	return hint
+}
+
 func NewEnv(parent *Env) *Env {
 	return &Env{parent: parent, vars: make(map[string]binding)}
 }
@@ -180,6 +220,9 @@ type Evaluator struct {
 // SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
 func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	ev.headlessScreen = headless
+	for _, modEv := range ev.modules {
+		modEv.SetHeadlessScreen(headless)
+	}
 }
 
 // Close releases any active OS resources (such as an open screen window and idle HTTP connections).
@@ -199,6 +242,9 @@ func (ev *Evaluator) Close() {
 // SetTrace enables live execution trace logging to `w` (pass nil to disable).
 func (ev *Evaluator) SetTrace(w io.Writer) {
 	ev.trace = w
+	for _, modEv := range ev.modules {
+		modEv.SetTrace(w)
+	}
 }
 
 func (ev *Evaluator) logTrace(format string, args ...any) {
@@ -242,10 +288,14 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		return nil
 	}
 	for _, imp := range prog.Imports {
-		if !imp.IsFileImport || imp.ModuleProg == nil {
+		if imp.ModuleProg == nil {
 			continue
 		}
-		if _, exists := ev.modules[imp.Alias]; exists {
+		alias := imp.Alias
+		if alias == "" {
+			alias = imp.Name
+		}
+		if _, exists := ev.modules[alias]; exists {
 			continue
 		}
 		modEv := NewEvaluatorWithInput(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out)
@@ -259,13 +309,13 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 			return err
 		}
 		modVal := &ModuleValue{
-			Name:   imp.Alias,
+			Name:   alias,
 			Env:    modEv.global,
 			Funcs:  modEv.funcs,
 			Source: imp.ModuleSource,
 		}
-		ev.modules[imp.Alias] = modEv
-		ev.global.Define(imp.Alias, modVal, false)
+		ev.modules[alias] = modEv
+		ev.global.Define(alias, modVal, false)
 	}
 	for _, fn := range prog.Functions {
 		ev.funcs[fn.Name] = fn
@@ -781,13 +831,29 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 					}
 				}
 			}
+			varHint := fmt.Sprintf("Define %q first with '%s = ...' or 'def %s = ...'.", e.Name, e.Name, e.Name)
+			var modMatches []string
+			for modAlias, modEv := range ev.modules {
+				if _, ok := modEv.funcs[e.Name]; ok {
+					modMatches = append(modMatches, fmt.Sprintf("%s:%s", modAlias, e.Name))
+				}
+			}
+			slices.Sort(modMatches)
+			if len(modMatches) > 0 {
+				varHint = fmt.Sprintf("Did you mean '%s'? Module functions must be called with ':'.", modMatches[0])
+			} else {
+				candidates := append(env.collectVisibleNames(), ev.collectCallableNames()...)
+				if suggestion := closestTypeName(e.Name, candidates); suggestion != "" {
+					varHint = fmt.Sprintf("Did you mean %q? %s", suggestion, varHint)
+				}
+			}
 			return nil, newError(
 				"RuntimeError",
 				e.Line,
 				e.Col,
 				ev.source,
 				fmt.Sprintf("Unknown variable %q", e.Name),
-				fmt.Sprintf("Define %q first with '%s = ...' or 'def %s = ...'.", e.Name, e.Name, e.Name),
+				varHint,
 			)
 		}
 		return val, nil
@@ -1081,7 +1147,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 					e.Col,
 					ev.source,
 					fmt.Sprintf("map has no field %q", e.Field),
-					fmt.Sprintf("Available fields: %s", strings.Join(mv.Order, ", ")),
+					missingFieldHint(e.Field, mv.Order),
 				)
 			}
 			return val, nil
@@ -1105,7 +1171,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				e.Col,
 				ev.source,
 				fmt.Sprintf("%s has no field %q", rec.TypeName, e.Field),
-				fmt.Sprintf("Available fields: %s", strings.Join(rec.Order, ", ")),
+				missingFieldHint(e.Field, rec.Order),
 			)
 		}
 		return val, nil
@@ -1119,13 +1185,17 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			return ev.cloneRecordListWithUpdates(lv, e.Updates, env, e.Line, e.Col)
 		}
 		if modVal, isMod := baseVal.(*ModuleValue); isMod {
+			withHint := fmt.Sprintf("Clone a blueprint inside the module, e.g.: %s.invoice with net = 100", modVal.Name)
+			if _, hasSameDef := modVal.Env.Lookup(modVal.Name); hasSameDef {
+				withHint = fmt.Sprintf("Use '%s.%s with ...' to instantiate the module's blueprint.", modVal.Name, modVal.Name)
+			}
 			return nil, newError(
 				"RuntimeError",
 				e.Line,
 				e.Col,
 				ev.source,
 				fmt.Sprintf("Cannot use 'with' on module %q", modVal.Name),
-				fmt.Sprintf("Clone a blueprint inside the module, e.g.: %s.invoice with net = 100", modVal.Name),
+				withHint,
 			)
 		}
 		rec, ok := baseVal.(*RecordValue)
@@ -1262,7 +1332,7 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 					upd.Col,
 					ev.source,
 					fmt.Sprintf("%s has no field %q", recProto.TypeName, upd.Name),
-					fmt.Sprintf("Available fields: %s", strings.Join(recProto.Order, ", ")),
+					missingFieldHint(upd.Name, recProto.Order),
 				)
 			}
 		}
@@ -1311,7 +1381,7 @@ func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFiel
 				upd.Col,
 				ev.source,
 				fmt.Sprintf("%s has no field %q", rec.TypeName, upd.Name),
-				fmt.Sprintf("Available fields: %s", strings.Join(rec.Order, ", ")),
+				missingFieldHint(upd.Name, rec.Order),
 			)
 		}
 		newVal, err := ev.EvalExpr(upd.Value, env)
@@ -1650,13 +1720,17 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 
 	fn, ok := ev.funcs[name]
 	if !ok {
+		fnHint := fmt.Sprintf("Define it with 'to %s [...] ... end' or check the spelling.", name)
+		if suggestion := closestTypeName(name, ev.collectCallableNames()); suggestion != "" {
+			fnHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fnHint)
+		}
 		return nil, newError(
 			"RuntimeError",
 			line,
 			col,
 			ev.source,
 			fmt.Sprintf("Unknown function %q", name),
-			fmt.Sprintf("Define it with 'to %s [...] ... end' or check the spelling.", name),
+			fnHint,
 		)
 	}
 	if len(args) != len(fn.Params) {
@@ -1670,7 +1744,14 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 		)
 	}
 	if ev.callDepth >= maxCallDepth {
-		return nil, newError("RuntimeError", line, col, ev.source, "Maximum recursion depth exceeded", "Add a base case to stop recursion.")
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Maximum recursion depth (%d) exceeded", maxCallDepth),
+			"Add a base case to stop recursion, or use a 'loop' over 'range' for deep iterations.",
+		)
 	}
 
 	ev.callDepth++

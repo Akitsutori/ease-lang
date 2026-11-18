@@ -40,20 +40,20 @@ to describe_event ev
     "unknown"
 end
 
-test "import network, ask/send Schnittstelle & Form vs. Inhalt"
-    api = network with
+test "import network, fetch/send interface & form vs. content"
+    api = network.network with
         url     = "http://127.0.0.1:1"
         timeout = 1
         token   = "demo-token"
     end
 
-    api is network
+    api is network.network
     api.timeout is 1
     api.token is "demo-token"
 
-    # Offline / nicht erreichbare Gegenstelle liefert ehrlich ""
-    raw_get  = fetch api "/age"
-    raw_post = send api "/age" 42
+    # Offline / unreachable endpoint returns ""
+    raw_get  = network:fetch api "/age"
+    raw_post = network:send api "/age" 42
     raw_get is ""
     raw_post is ""
 

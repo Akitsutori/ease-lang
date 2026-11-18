@@ -76,17 +76,17 @@ to validate_age age
 end
 
 test "std/network real HTTP GET/POST & Form/Inhalt"
-    api = network with
+    api = network.network with
         url     = %q
         timeout = 2
         token   = "secret-123"
     end
 
-    # GET via ask
-    raw_ok  = fetch api "/age/ok"
-    raw_neg = fetch api "/age/negative"
-    raw_bad = fetch api "/age/bad"
-    raw_err = fetch api "/fail"
+    # GET via network:fetch
+    raw_ok  = network:fetch api "/age/ok"
+    raw_neg = network:fetch api "/age/negative"
+    raw_bad = network:fetch api "/age/bad"
+    raw_err = network:fetch api "/fail"
 
     raw_ok is "25"
     raw_err is ""
@@ -98,8 +98,8 @@ test "std/network real HTTP GET/POST & Form/Inhalt"
     validate_age parse_age raw_ok is 25
     validate_age parse_age raw_neg is "Alter kann nicht negativ sein"
 
-    # POST via send
-    posted = send api "/submit" 42
+    # POST via network:send
+    posted = network:send api "/submit" 42
     posted is "echo:42"
 end
 `, srv.URL)

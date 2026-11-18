@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +67,8 @@ func runCLI() (exitCode int) {
 	switch cmd {
 	case "run":
 		return cmdRun(os.Args[2:])
+	case "check":
+		return cmdCheck(os.Args[2:])
 	case "test":
 		return cmdTest(os.Args[2:])
 	case "build":
@@ -109,16 +113,156 @@ func runEmbedded(source string, args []string) int {
 	return 0
 }
 
+type jsonErrorInfo struct {
+	Stage   string `json:"stage"`
+	Line    int    `json:"line"`
+	Col     int    `json:"col"`
+	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
+}
+
+type jsonErrorResponse struct {
+	OK    bool           `json:"ok"`
+	File  string         `json:"file"`
+	Error *jsonErrorInfo `json:"error"`
+}
+
+type jsonCheckResult struct {
+	OK         bool   `json:"ok"`
+	File       string `json:"file"`
+	Defs       int    `json:"defs"`
+	Functions  int    `json:"functions"`
+	TestBlocks int    `json:"test_blocks"`
+}
+
+type jsonTestFailure struct {
+	Test         string `json:"test"`
+	Line         int    `json:"line"`
+	ContextLines []int  `json:"context_lines,omitempty"`
+	Vars         string `json:"vars,omitempty"`
+	Message      string `json:"message"`
+}
+
+type jsonTestResult struct {
+	OK         bool              `json:"ok"`
+	File       string            `json:"file"`
+	Passed     int               `json:"passed"`
+	Failed     int               `json:"failed"`
+	Total      int               `json:"total"`
+	TestBlocks int               `json:"test_blocks"`
+	Failures   []jsonTestFailure `json:"failures"`
+}
+
+type jsonRunResult struct {
+	OK   bool   `json:"ok"`
+	File string `json:"file"`
+}
+
+func toJSONError(err error) *jsonErrorInfo {
+	if err == nil {
+		return nil
+	}
+	var ee *ease.EaseError
+	if errors.As(err, &ee) {
+		stage := ee.Stage
+		if stage == "" {
+			stage = "EaseError"
+		}
+		return &jsonErrorInfo{
+			Stage:   stage,
+			Line:    ee.Line,
+			Col:     ee.Col,
+			Message: ee.Message,
+			Hint:    ee.Hint,
+		}
+	}
+	return &jsonErrorInfo{
+		Stage:   "IOError",
+		Message: err.Error(),
+	}
+}
+
+func writeJSON(out io.Writer, v any) {
+	enc := json.NewEncoder(out)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+}
+
+func cmdCheck(args []string) int {
+	return cmdCheckWithWriters(args, os.Stdout, os.Stderr)
+}
+
+func cmdCheckWithWriters(args []string, out, errOut io.Writer) int {
+	file := ""
+	jsonMode := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonMode = true
+		default:
+			if file == "" && !strings.HasPrefix(a, "-") {
+				file = a
+			}
+		}
+	}
+	if file == "" {
+		fmt.Fprintln(errOut, "Usage: ease check <file.ease> [--json]")
+		return 2
+	}
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
+		return 1
+	}
+
+	prog, err := ease.ParseProgramFromFile(string(src), file)
+	if err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
+		}
+		return 1
+	}
+
+	if jsonMode {
+		writeJSON(out, jsonCheckResult{
+			OK:         true,
+			File:       file,
+			Defs:       len(prog.Defs),
+			Functions:  len(prog.Functions),
+			TestBlocks: len(prog.Checks),
+		})
+	} else {
+		fmt.Fprintf(out, "OK: %s (%d defs, %d functions, %d test blocks)\n",
+			file, len(prog.Defs), len(prog.Functions), len(prog.Checks))
+	}
+	return 0
+}
+
 func cmdRun(args []string) int {
+	return cmdRunWithWriters(args, os.Stdout, os.Stderr)
+}
+
+func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	file := ""
 	runCheckFirst := false
 	traceMode := false
+	jsonMode := false
 	for _, a := range args {
 		switch a {
 		case "--check", "-c":
 			runCheckFirst = true
 		case "--trace", "-v":
 			traceMode = true
+		case "--json":
+			jsonMode = true
 		default:
 			if file == "" && !strings.HasPrefix(a, "-") {
 				file = a
@@ -126,48 +270,68 @@ func cmdRun(args []string) int {
 		}
 	}
 	if file == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ease run <file.ease> [--check] [--trace]")
+		fmt.Fprintln(errOut, "Usage: ease run <file.ease> [--json] [--check] [--trace]")
 		return 2
 	}
 
 	src, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", file, err)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
 		return 1
 	}
 	if runCheckFirst {
-		if code := executeChecks(string(src), file, traceMode); code != 0 {
+		if code := executeChecksWithWriters(string(src), file, traceMode, false, jsonMode, out, errOut); code != 0 {
 			return code
 		}
-		fmt.Println("---")
+		if !jsonMode {
+			fmt.Fprintln(out, "---")
+		}
 	}
-	var traceOut *os.File
+	var traceOut io.Writer
 	if traceMode {
-		traceOut = os.Stderr
+		traceOut = errOut
 	}
 	var errEval error
 	if runCheckFirst {
-		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, os.Stdin, os.Stdout, traceOut)
+		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, os.Stdin, out, traceOut)
 	} else {
-		_, errEval = ease.EvalProgramWithTraceFromFile(string(src), file, os.Stdin, os.Stdout, traceOut)
+		_, errEval = ease.EvalProgramWithTraceFromFile(string(src), file, os.Stdin, out, traceOut)
 	}
 	if errEval != nil {
-		fmt.Fprintln(os.Stderr, errEval)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(errEval)})
+		} else {
+			fmt.Fprintln(errOut, errEval)
+		}
 		return 1
+	}
+	if jsonMode {
+		writeJSON(out, jsonRunResult{OK: true, File: file})
 	}
 	return 0
 }
 
 func cmdTest(args []string) int {
+	return cmdTestWithWriters(args, os.Stdout, os.Stderr)
+}
+
+func cmdTestWithWriters(args []string, out, errOut io.Writer) int {
 	file := ""
 	traceMode := false
 	verbose := false
+	jsonMode := false
 	for _, a := range args {
 		switch a {
 		case "--trace":
 			traceMode = true
 		case "--verbose", "-v":
 			verbose = true
+		case "--json":
+			jsonMode = true
 		default:
 			if file == "" && !strings.HasPrefix(a, "-") {
 				file = a
@@ -175,41 +339,76 @@ func cmdTest(args []string) int {
 		}
 	}
 	if file == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ease test <file.ease> [--verbose] [--trace]")
+		fmt.Fprintln(errOut, "Usage: ease test <file.ease> [--json] [--verbose] [--trace]")
 		return 2
 	}
 	src, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", file, err)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
 		return 1
 	}
-	return executeChecksWithOptions(string(src), file, traceMode, verbose)
+	return executeChecksWithWriters(string(src), file, traceMode, verbose, jsonMode, out, errOut)
 }
 
 func executeChecks(source, label string, traceMode bool) int {
-	return executeChecksWithOptions(source, label, traceMode, false)
+	return executeChecksWithWriters(source, label, traceMode, false, false, os.Stdout, os.Stderr)
 }
 
-func executeChecksWithOptions(source, label string, traceMode, verbose bool) int {
+func executeChecksWithWriters(source, label string, traceMode, verbose, jsonMode bool, out, errOut io.Writer) int {
 	var report *ease.CheckReport
 	var err error
 	if traceMode {
-		report, err = ease.RunChecksWithTraceFromFile(source, label, os.Stderr)
+		report, err = ease.RunChecksWithTraceFromFile(source, label, errOut)
 	} else {
 		report, err = ease.RunChecksFromFile(source, label)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: label, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
+		}
 		return 1
+	}
+	if jsonMode {
+		failures := make([]jsonTestFailure, 0, report.Failed)
+		for _, r := range report.Results {
+			if !r.Passed {
+				failures = append(failures, jsonTestFailure{
+					Test:         r.TestTitle,
+					Line:         r.Line,
+					ContextLines: r.ContextLines,
+					Vars:         r.VarsDetail,
+					Message:      r.Message,
+				})
+			}
+		}
+		writeJSON(out, jsonTestResult{
+			OK:         report.Failed == 0,
+			File:       label,
+			Passed:     report.Passed,
+			Failed:     report.Failed,
+			Total:      report.Total,
+			TestBlocks: report.TestBlocks,
+			Failures:   failures,
+		})
+		if report.Failed > 0 {
+			return 1
+		}
+		return 0
 	}
 	for _, r := range report.Results {
 		if !r.Passed {
-			fmt.Print(ease.FormatFailure(r, label, source))
+			fmt.Fprint(out, ease.FormatFailure(r, label, source))
 		} else if verbose {
-			fmt.Printf("[PASS] (%s) %s\n", r.Scope, r.Message)
+			fmt.Fprintf(out, "[PASS] (%s) %s\n", r.Scope, r.Message)
 		}
 	}
-	fmt.Printf("Summary: %d passed, %d failed (%d assertions in %d test blocks)\n", report.Passed, report.Failed, report.Total, report.TestBlocks)
+	fmt.Fprintf(out, "Summary: %d passed, %d failed (%d assertions in %d test blocks)\n", report.Passed, report.Failed, report.Total, report.TestBlocks)
 	if report.Failed > 0 {
 		return 1
 	}
@@ -252,35 +451,68 @@ func cmdBuild(args []string) int {
 }
 
 func cmdAst(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: ease ast <file.ease>")
+	return cmdAstWithWriters(args, os.Stdout, os.Stderr)
+}
+
+func cmdAstWithWriters(args []string, out, errOut io.Writer) int {
+	file := ""
+	jsonMode := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonMode = true
+		default:
+			if file == "" && !strings.HasPrefix(a, "-") {
+				file = a
+			}
+		}
+	}
+	if file == "" {
+		fmt.Fprintln(errOut, "Usage: ease ast <file.ease> [--json]")
 		return 2
 	}
-	src, err := os.ReadFile(args[0])
+	src, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", args[0], err)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
 		return 1
 	}
-	prog, err := ease.ParseProgramFromFile(string(src), args[0])
+	prog, err := ease.ParseProgramFromFile(string(src), file)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
+		}
 		return 1
 	}
-	fmt.Printf("Program AST (%d defs, %d functions, %d check blocks, %d top-level statements)\n",
+	if jsonMode {
+		raw, mErr := json.MarshalIndent(prog, "", "  ")
+		if mErr != nil {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(mErr)})
+			return 1
+		}
+		fmt.Fprintln(out, string(raw))
+		return 0
+	}
+	fmt.Fprintf(out, "Program AST (%d defs, %d functions, %d check blocks, %d top-level statements)\n",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
 	for _, d := range prog.Defs {
 		names := make([]string, len(d.Fields))
 		for i, f := range d.Fields {
 			names[i] = f.Name
 		}
-		fmt.Printf("  - def %s (%s)\n", d.Name, strings.Join(names, ", "))
+		fmt.Fprintf(out, "  - def %s (%s)\n", d.Name, strings.Join(names, ", "))
 	}
 	for _, fn := range prog.Functions {
-		fmt.Printf("  - to %s %s (body=%d stmts)\n",
+		fmt.Fprintf(out, "  - to %s %s (body=%d stmts)\n",
 			fn.Name, strings.Join(fn.Params, ", "), len(fn.Body))
 	}
 	for _, blk := range prog.Checks {
-		fmt.Printf("  - check %q (%d items)\n", blk.Title, len(blk.Body))
+		fmt.Fprintf(out, "  - check %q (%d items)\n", blk.Title, len(blk.Body))
 	}
 	return 0
 }
@@ -430,12 +662,13 @@ func printUsage() {
 	fmt.Println("Ease Programming Language CLI")
 	fmt.Println("")
 	fmt.Println("Usage:")
-	fmt.Println("  ease run <file.ease> [--check] [--trace]  Run an Ease program (with optional tests/trace)")
-	fmt.Println("  ease test <file.ease> [--trace]           Run all 'test' and 'check' assertions")
-	fmt.Println("  ease build <file.ease> [-o <out>]         Compile an Ease program into a standalone binary")
-	fmt.Println("  ease ast <file.ease>                      Inspect parsed defs, functions, checks, and statements")
-	fmt.Println("  ease tokens <file.ease>                   Inspect lexer tokens with line/column positions")
-	fmt.Println("  ease repl                                 Start interactive Ease REPL")
-	fmt.Println("  ease lsp                                  Start Language Server (stdio JSON-RPC for editors)")
-	fmt.Println("  ease version                              Print Ease CLI version")
+	fmt.Println("  ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (with optional tests/trace/JSON)")
+	fmt.Println("  ease check <file.ease> [--json]                      Parse and type-check without executing")
+	fmt.Println("  ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' and 'check' assertions")
+	fmt.Println("  ease build <file.ease> [-o <out>]                    Compile an Ease program into a standalone binary")
+	fmt.Println("  ease ast <file.ease> [--json]                        Inspect parsed defs, functions, checks, and statements")
+	fmt.Println("  ease tokens <file.ease>                              Inspect lexer tokens with line/column positions")
+	fmt.Println("  ease repl                                            Start interactive Ease REPL")
+	fmt.Println("  ease lsp                                             Start Language Server (stdio JSON-RPC for editors)")
+	fmt.Println("  ease version                                         Print Ease CLI version")
 }

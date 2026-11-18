@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -232,5 +234,57 @@ func TestLSPUnicodeUTF16DiagnosticsAndSymbols(t *testing.T) {
 	// `to prüfe ö`: "to " (3) + "prüfe" (5 UTF-16 units) = 8
 	if syms[1].Name != "prüfe" || syms[1].Range.Start.Character != 0 || syms[1].Range.End.Character != 8 {
 		t.Fatalf("unexpected UTF-16 range for to prüfe: %+v", syms[1].Range)
+	}
+}
+
+func TestLSPFileURIToPath(t *testing.T) {
+	if got, want := fileURIToPath("file:///d:/work/src/main.ease"), filepath.FromSlash("d:/work/src/main.ease"); got != want {
+		t.Fatalf("fileURIToPath Windows URI: got %q, want %q", got, want)
+	}
+	if got, want := fileURIToPath("file:///tmp/my%20dir/main.ease"), filepath.FromSlash("/tmp/my dir/main.ease"); got != want {
+		t.Fatalf("fileURIToPath POSIX URI: got %q, want %q", got, want)
+	}
+	if got := fileURIToPath("untitled:Untitled-1"); got != "" {
+		t.Fatalf("expected empty path for non-file URI, got %q", got)
+	}
+	if got := fileURIToPath(""); got != "" {
+		t.Fatalf("expected empty path for empty URI, got %q", got)
+	}
+}
+
+func TestLSPDiagnoseRelativeModuleImportInSubdir(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	billingPath := filepath.Join(srcDir, "billing.ease")
+	billingSrc := "def invoice\n  net = 0\nend\nto total inv\n  inv.net * 1.19\nend\n"
+	if err := os.WriteFile(billingPath, []byte(billingSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(srcDir, "main.ease")
+	mainSrc := "import \"./billing.ease\" as billing\n\ndef order\n  id = 1\nend\n\ninv = billing.invoice with net = 100\nsay billing:total inv\n"
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	slash := filepath.ToSlash(mainPath)
+	if !strings.HasPrefix(slash, "/") {
+		slash = "/" + slash
+	}
+	uri := "file://" + slash
+
+	diags := DiagnoseSourceForURI(uri, mainSrc)
+	if len(diags) != 0 {
+		t.Fatalf("expected 0 diagnostics for valid relative module import, got: %+v", diags)
+	}
+	syms := DocumentSymbolsForURI(uri, mainSrc)
+	if len(syms) != 1 || syms[0].Name != "order" {
+		t.Fatalf("expected 1 symbol 'order', got: %+v", syms)
+	}
+	items := CompletionItemsForURI(uri, mainSrc)
+	if len(items) == 0 {
+		t.Fatalf("expected non-empty completion items")
 	}
 }

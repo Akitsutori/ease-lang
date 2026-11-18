@@ -65,13 +65,15 @@ go build -o ease.exe .\cmd\ease
 ## CLI Reference
 
 ```text
-ease run <file.ease> [--check] [--trace]  Run an Ease program (optionally running tests first and tracing)
-ease test <file.ease> [--trace]           Run all 'test' and 'check' assertions
-ease build <file.ease> [-o <out>]         Compile an Ease program into a standalone binary
-ease ast <file.ease>                      Inspect parsed defs, functions, checks, and statements
-ease tokens <file.ease>                   Inspect lexer tokens with line/column positions
-ease repl                                 Start interactive Ease REPL
-ease version                              Print Ease CLI version
+ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (optionally running tests first, tracing, or emitting JSON)
+ease check <file.ease> [--json]                      Parse and type-check without executing
+ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions
+ease build <file.ease> [-o <out>]                    Compile an Ease program into a standalone binary
+ease ast <file.ease> [--json]                        Inspect parsed defs, functions, checks, and statements (or full AST JSON)
+ease tokens <file.ease>                              Inspect lexer tokens with line/column positions
+ease repl                                            Start interactive Ease REPL
+ease lsp                                             Start Language Server (stdio JSON-RPC for editors)
+ease version                                         Print Ease CLI version
 ```
 
 Shorthand: `ease <file.ease> [--check] [--trace]` is equivalent to `ease run <file.ease> ...`.
@@ -520,16 +522,16 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 
 ## Standard Modules (`import`)
 
-Standard modules are embedded directly into the compiled binary (`internal/ease/std/*.ease`). Optional local overrides under `./std/` can be enabled explicitly via `EASE_STD=1` (or `EASE_STD=<dir>`):
+Standard modules are embedded directly into the compiled binary (`internal/ease/std/*.ease`) and behave identically to file modules: they bind an encapsulated module namespace (defaulting to the module name, or a custom alias via `import network as api`). Call module verbs with `:` and access module blueprints with `.`. Optional local overrides under `./std/` can be enabled explicitly via `EASE_STD=1` (or `EASE_STD=<dir>`):
 
 ### `import network`
 
 Wraps HTTP networking via the `http_call` host bridge:
 
-- **Blueprints**: `network` (`url`, `timeout = 5`, `token = ""`), `http_request` (`method`, `url`, `body`, `token`, `timeout`), `http_response` (`status`, `body`, `error`).
+- **Blueprints**: `network.network` (`url`, `timeout = 5`, `token = ""`), `network.http_request` (`method`, `url`, `body`, `token`, `timeout`), `network.http_response` (`status`, `body`, `error`).
 - **Verbs**:
-  - `fetch target path` — performs HTTP `GET` (`Content-Type: application/json`, optional Bearer token) and returns the response body or `""` on transport errors or HTTP status `>= 400`.
-  - `send target path payload` — serializes `payload` via `encode_json` and performs HTTP `POST` to `{target.url}{path}`.
+  - `network:fetch target path` — performs HTTP `GET` (`Content-Type: application/json`, optional Bearer token) and returns the response body or `""` on transport errors or HTTP status `>= 400`.
+  - `network:send target path payload` — serializes `payload` via `encode_json` and performs HTTP `POST` to `{target.url}{path}`.
 
 See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tests) and [`examples/051_network.ease`](examples/051_network.ease) (live REST example).
 
@@ -537,8 +539,8 @@ See [`examples/05_network.ease`](examples/05_network.ease) (offline contract tes
 
 Wraps 2D rendering and window input (via Ebitengine and `screen_present`):
 
-- **Blueprints**: `screen` (`width = 800`, `height = 600`, `title = "Ease Window"`), `circle` (`x`, `y`, `size`, `color`), `box` (`x`, `y`, `width`, `height`, `color`), `scene` (`background`, `circles`, `boxes`), `frame_state` (`status = "open" | "closed"`, `key`, `mouse_x`, `mouse_y`).
-- **Verb**: `present target current_scene` — renders one frame (60 FPS) and returns the current `frame_state` serialized as JSON text (typically decoded via `decode_json ... as frame_state`).
+- **Blueprints**: `screen.screen` (`width = 800`, `height = 600`, `title = "Ease Window"`), `screen.circle` (`x`, `y`, `size`, `color`), `screen.box` (`x`, `y`, `width`, `height`, `color`), `screen.scene` (`background`, `circles`, `boxes`), `screen.frame_state` (`status = "open" | "closed"`, `key`, `mouse_x`, `mouse_y`).
+- **Verb**: `screen:present target current_scene` — renders one frame (60 FPS) and returns the current `screen.frame_state` serialized as JSON text (typically decoded via `decode_json raw as screen.frame_state`).
 - **Headless test mode (`--check`)**: Simulates deterministic frames without opening a graphical window so UI loops can run cleanly in CI/CD environments.
 
 See [`examples/06_window.ease`](examples/06_window.ease).
@@ -563,9 +565,11 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `split txt sep` | Splits UTF-8 `text` by `sep` into a `list` of `text` (`split "äöü" ""` splits into runes) |
 | `join items sep` | Joins a `list` of `text` with `sep` into `text` |
 | `trim txt` | Strips leading and trailing Unicode whitespace |
+| `upper txt` / `lower txt` | Converts UTF-8 `text` to uppercase or lowercase |
+| `slice xs start end` | Returns 0-based `[start:end)` slice (clamped) of a `list` or UTF-8 `text` (by runes) |
 | `replace txt old new` | Replaces all occurrences of non-empty `old` with `new` in `text` |
 | `contains txt sub` | Condition verb (usable in `check`, `where`, `test`; not storable) checking if `txt` contains `sub` |
-| `abs n` / `min a b` / `max a b` | Numeric math helpers |
+| `abs n` / `floor n` / `round n` / `min a b` / `max a b` | Numeric math helpers |
 | `fields rec` | Returns a list of field names in declaration order for a `def` record or decoded `map` |
 | `decode_json txt` | Parses valid JSON `text` into structured Ease data (`map`, `list`, or primitives); aborts on empty/invalid JSON |
 | `encode_json val` | Encodes a `def` record, `map`, `list`, or primitive into JSON `text` |
@@ -704,7 +708,7 @@ top_item       ::= import_decl
                  | top_test_blk
                  | stmt
 
-import_decl    ::= "import" ( IDENT | STRING "as" IDENT ) stmt_end
+import_decl    ::= "import" ( IDENT [ "as" IDENT ] | STRING "as" IDENT ) stmt_end
 
 func_decl      ::= "to" IDENT { IDENT }
                    ( NL | &"end" )

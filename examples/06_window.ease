@@ -17,14 +17,14 @@ to clamp_x x min_x max_x
 end
 
 to run_window
-    win = screen with
+    win = screen.screen with
         width  = 800
         height = 600
         title  = "Go with ease"
     end
 
     pos_x = 400
-    state = frame_state
+    state = screen.frame_state
 
     loop range 1 3600
         check state.status is "closed" -> "Fenster geschlossen"
@@ -32,19 +32,19 @@ to run_window
         moved = move_x pos_x state.key
         pos_x = clamp_x moved 30 770
 
-        current = scene with
+        current = screen.scene with
             background = "slate"
-            circles = list as circle with
+            circles = list as screen.circle with
                 x = pos_x, y = 300, size = 35, color = "amber"
             end
-            boxes = list as box with
+            boxes = list as screen.box with
                 x = 120, y = 500, width = 560, height = 24, color = "emerald"
             end
         end
 
-        raw_state = present win current
-        state = decode_json raw_state as frame_state
-        check state is not frame_state -> "Fensterfehler"
+        raw_state = screen:present win current
+        state = decode_json raw_state as screen.frame_state
+        check state is not screen.frame_state -> "Fensterfehler"
     end
 
     "Fertig"

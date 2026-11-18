@@ -103,7 +103,7 @@ a = 42 as text
 b = "12" as number
 d = "open" as ticket
 e = (decode_json '{"name": "Ada"}') as custom_user
-f = (decode_json '{"status": 200, "body": "ok", "error": ""}') as http_response
+f = (decode_json '{"status": 200, "body": "ok", "error": ""}') as network.http_response
 g = list as number
 `
 	if _, err := ParseProgram(validSrc); err != nil {

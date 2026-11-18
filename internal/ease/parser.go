@@ -128,18 +128,32 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 			if blockDepth == 0 && i+1 < len(p.tokens) {
 				if p.tokens[i+1].Type == TOK_IDENT {
 					modName := p.tokens[i+1].Lexeme
-					if !importSeen[modName] {
-						importSeen[modName] = true
-						if modSrc, err := loadStdModuleSource(modName); err == nil {
-							modProg, err := parseProgramWithSeen(modSrc, importSeen)
-							if err != nil {
-								return nil, err
-							}
-							for _, fn := range modProg.Functions {
-								arities[fn.Name] = len(fn.Params)
-							}
-						}
+					alias := modName
+					if i+3 < len(p.tokens) && p.tokens[i+2].Type == TOK_AS && p.tokens[i+3].Type == TOK_IDENT {
+						alias = p.tokens[i+3].Lexeme
 					}
+					modSrc, err := loadStdModuleSource(modName)
+					if err != nil {
+						return nil, newError(
+							"ImportError",
+							tok.Line,
+							tok.Col,
+							p.source,
+							err.Error(),
+							"Check available standard modules under std/, e.g. 'import network'.",
+						)
+					}
+					modProg, modErr := parseProgramWithContext(modSrc, "", map[string]bool{}, activeStack, nil)
+					if modErr != nil {
+						return nil, modErr
+					}
+					modFns := make(map[string]int, len(modProg.Functions))
+					for _, fn := range modProg.Functions {
+						modFns[fn.Name] = len(fn.Params)
+					}
+					p.moduleArities[alias] = modFns
+					p.fileImports[alias] = modProg
+					p.fileImportSrcs[alias] = modSrc
 				} else if p.tokens[i+1].Type == TOK_STRING && i+3 < len(p.tokens) && p.tokens[i+2].Type == TOK_AS && p.tokens[i+3].Type == TOK_IDENT {
 					pathStr := p.tokens[i+1].Lexeme
 					alias := p.tokens[i+3].Lexeme
@@ -338,12 +352,31 @@ func (p *Parser) parseProgram() (*Program, error) {
 				)
 			}
 			modTok := p.advance()
+			alias := modTok.Lexeme
+			if p.match(TOK_AS) {
+				if !p.check(TOK_IDENT) {
+					tok := p.current()
+					return nil, newError(
+						"SyntaxError",
+						tok.Line,
+						tok.Col,
+						p.source,
+						"Expected module alias after 'as'",
+						fmt.Sprintf("Example: import %s as my_%s", modTok.Lexeme, modTok.Lexeme),
+					)
+				}
+				alias = p.advance().Lexeme
+			}
 			if err := p.expectStmtEnd("'import' statement"); err != nil {
 				return nil, err
 			}
 			prog.Imports = append(prog.Imports, &ImportDecl{
-				posInfo: posInfo{Line: impTok.Line, Col: impTok.Col},
-				Name:    modTok.Lexeme,
+				posInfo:      posInfo{Line: impTok.Line, Col: impTok.Col},
+				Name:         modTok.Lexeme,
+				Alias:        alias,
+				IsFileImport: false,
+				ModuleProg:   p.fileImports[alias],
+				ModuleSource: p.fileImportSrcs[alias],
 			})
 		case TOK_TO:
 			fn, err := p.parseFuncDecl()

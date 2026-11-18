@@ -28,6 +28,10 @@ var builtinArities = map[string]int{
 	"num":            1,
 	"type":           1,
 	"abs":            1,
+	"floor":          1,
+	"round":          1,
+	"upper":          1,
+	"lower":          1,
 	"fail":           1,
 	"fields":         1,
 	"decode_json":    1,
@@ -48,6 +52,7 @@ var builtinArities = map[string]int{
 	"max":            2,
 	"screen_present": 2,
 	"replace":        3,
+	"slice":          3,
 }
 
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
@@ -373,6 +378,26 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		}
 		return math.Abs(n), true, nil
 
+	case "floor":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "floor takes 1 argument", "")
+		}
+		n, ok := args[0].(float64)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("floor requires a number, got %s", TypeName(args[0])), "Example: floor 3.7")
+		}
+		return math.Floor(n), true, nil
+
+	case "round":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "round takes 1 argument", "")
+		}
+		n, ok := args[0].(float64)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("round requires a number, got %s", TypeName(args[0])), "Example: round 3.5")
+		}
+		return math.Round(n), true, nil
+
 	case "min", "max":
 		if len(args) != 2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("%s() takes 2 arguments", name), "")
@@ -515,6 +540,68 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("trim requires text, got %s", TypeName(args[0])), "Example: trim \"  hello  \"")
 		}
 		return strings.TrimSpace(s), true, nil
+
+	case "upper":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "upper takes 1 argument", "")
+		}
+		s, ok := args[0].(string)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("upper requires text, got %s", TypeName(args[0])), "Example: upper \"hello\"")
+		}
+		return strings.ToUpper(s), true, nil
+
+	case "lower":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "lower takes 1 argument", "")
+		}
+		s, ok := args[0].(string)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("lower requires text, got %s", TypeName(args[0])), "Example: lower \"HELLO\"")
+		}
+		return strings.ToLower(s), true, nil
+
+	case "slice":
+		if len(args) != 3 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "slice takes 3 arguments", "Example: slice items 1 3")
+		}
+		startNum, ok1 := args[1].(float64)
+		endNum, ok2 := args[2].(float64)
+		if !ok1 || !ok2 {
+			return nil, true, newError("TypeError", line, col, ev.source, "slice start and end must be numbers", "Example: slice items 0 2")
+		}
+		if math.IsNaN(startNum) || math.IsInf(startNum, 0) || math.Trunc(startNum) != startNum ||
+			math.IsNaN(endNum) || math.IsInf(endNum, 0) || math.Trunc(endNum) != endNum {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "slice start and end must be whole numbers", "Use integer indices such as 0, 1, 2.")
+		}
+		clampBounds := func(length int) (int, int) {
+			s := int(startNum)
+			e := int(endNum)
+			if s < 0 {
+				s = 0
+			} else if s > length {
+				s = length
+			}
+			if e < s {
+				e = s
+			} else if e > length {
+				e = length
+			}
+			return s, e
+		}
+		switch target := args[0].(type) {
+		case *ListValue:
+			s, e := clampBounds(len(target.Elements))
+			out := make([]Value, e-s)
+			copy(out, target.Elements[s:e])
+			return &ListValue{ElemType: target.ElemType, Elements: out}, true, nil
+		case string:
+			runes := []rune(target)
+			s, e := clampBounds(len(runes))
+			return string(runes[s:e]), true, nil
+		default:
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("slice requires a list or text, got %s", TypeName(args[0])), "Example: slice \"hello\" 1 4")
+		}
 
 	case "replace":
 		if len(args) != 3 {

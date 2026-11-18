@@ -624,32 +624,32 @@ to move_x x key
 end
 
 to run_window
-    win = screen with
+    win = screen.screen with
         width  = 800
         height = 600
         title  = "Go with ease"
     end
 
     pos_x = 400
-    state = frame_state
+    state = screen.frame_state
 
     loop range 1 10
         check state.status is "closed" -> "Fenster geschlossen:{pos_x}"
 
         pos_x = move_x pos_x state.key
-        current = scene with
+        current = screen.scene with
             background = "slate"
-            circles = list as circle with
+            circles = list as screen.circle with
                 x = pos_x, y = 300, size = 35, color = "amber"
             end
-            boxes = list as box with
+            boxes = list as screen.box with
                 x = 120, y = 500, width = 560, height = 24, color = "emerald"
             end
         end
 
-        raw_state = present win current
-        state = decode_json raw_state as frame_state
-        check state is not frame_state -> "Fensterfehler"
+        raw_state = screen:present win current
+        state = decode_json raw_state as screen.frame_state
+        check state is not screen.frame_state -> "Fensterfehler"
     end
 
     "Fertig"
@@ -1038,11 +1038,11 @@ func TestLargeInputsAndResourceLimitsIssue13(t *testing.T) {
 
 	httpSrc := fmt.Sprintf(`
 import network
-n = network with url = %q, timeout = 5
-body = fetch n "/big"
+n = network.network with url = %q, timeout = 5
+body = network:fetch n "/big"
 body is ""
 
-req = http_request with method = "GET", url = "%s/big", timeout = 5
+req = network.http_request with method = "GET", url = "%s/big", timeout = 5
 resp = http_call req
 `, srv.URL, srv.URL)
 	prog, err := ParseProgram(httpSrc)
@@ -1088,11 +1088,11 @@ resp = http_call req
 
 	// Without EASE_STD, the poisoned disk file must be ignored.
 	t.Setenv("EASE_STD", "")
-	pEmbedded, err := ParseProgram("import network\nn = network with url = \"https://example.test\"\n")
-	if err != nil || len(pEmbedded.Defs) == 0 {
+	pEmbedded, err := ParseProgram("import network\nn = network.network with url = \"https://example.test\"\n")
+	if err != nil || len(pEmbedded.Imports) == 0 || pEmbedded.Imports[0].ModuleProg == nil || len(pEmbedded.Imports[0].ModuleProg.Defs) == 0 {
 		t.Fatalf("expected embedded network stdlib to load cleanly, got err=%v", err)
 	}
-	for _, d := range pEmbedded.Defs {
+	for _, d := range pEmbedded.Imports[0].ModuleProg.Defs {
 		if d.Name == "poisoned" {
 			t.Fatalf("unexpectedly loaded ./std/network.ease without EASE_STD opt-in")
 		}
@@ -1100,11 +1100,11 @@ resp = http_call req
 
 	// With EASE_STD=1, disk override is honored explicitly.
 	t.Setenv("EASE_STD", "1")
-	pOverride, err := ParseProgram("import network\nx = poisoned with flag = \"ok\"\n")
+	pOverride, err := ParseProgram("import network\nx = network.poisoned with flag = \"ok\"\n")
 	if err != nil {
 		t.Fatalf("expected EASE_STD=1 to load ./std/network.ease override, got err=%v", err)
 	}
-	if _, err := EvalProgram("import network\nx = poisoned with flag = \"ok\"\n", &bytes.Buffer{}); err != nil {
+	if _, err := EvalProgram("import network\nx = network.poisoned with flag = \"ok\"\n", &bytes.Buffer{}); err != nil {
 		t.Fatalf("expected EvalProgram with EASE_STD=1 override to succeed, got: %v", err)
 	}
 	_ = pOverride
@@ -1324,10 +1324,10 @@ func TestHardeningEvalRepeatHTTPPoolingScreenCloseAndListDefaults(t *testing.T) 
 
 	httpSrc := fmt.Sprintf(`
 import network
-n = network with url = %q, timeout = 2
-a = fetch n "/fast"
-b = fetch n "/fast"
-c = fetch n "/fast"
+n = network.network with url = %q, timeout = 2
+a = network:fetch n "/fast"
+b = network:fetch n "/fast"
+c = network:fetch n "/fast"
 say "{a}-{b}-{c}"
 `, srv.URL)
 	var httpOut bytes.Buffer
@@ -1343,7 +1343,7 @@ say "{a}-{b}-{c}"
 
 	timeoutSrc := fmt.Sprintf(`
 import network
-req = http_request with url = %q, timeout = 0.03
+req = network.http_request with url = %q, timeout = 0.03
 r = http_call req
 say r.error
 `, srv.URL+"/slow")
@@ -2120,12 +2120,12 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	badHTTPSrc := fmt.Sprintf("import network\nreq = http_request with method = \"GET\", url = %q\nres = http_call req\n", srv.URL+"/bad")
+	badHTTPSrc := fmt.Sprintf("import network\nreq = network.http_request with method = \"GET\", url = %q\nres = http_call req\n", srv.URL+"/bad")
 	if _, err := EvalProgram(badHTTPSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "HTTP response body contains invalid UTF-8 bytes") {
 		t.Fatalf("expected RuntimeError on invalid UTF-8 HTTP body, got: %v", err)
 	}
 
-	nfdHTTPSrc := fmt.Sprintf("import network\nreq = http_request with method = \"GET\", url = %q\nres = http_call req\nsay res.body\n", srv.URL+"/nfd")
+	nfdHTTPSrc := fmt.Sprintf("import network\nreq = network.http_request with method = \"GET\", url = %q\nres = http_call req\nsay res.body\n", srv.URL+"/nfd")
 	var httpOut bytes.Buffer
 	if _, err := EvalProgram(nfdHTTPSrc, &httpOut); err != nil {
 		t.Fatalf("expected valid NFD HTTP body to succeed, got: %v", err)
@@ -2531,5 +2531,67 @@ end
 	// Runtime TypeError for dynamically typed parameters
 	if _, err := EvalProgram("to f a b\n  a + b\nend\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
 		t.Fatalf("expected runtime TypeError for dynamic mixed '+', got: %v", err)
+	}
+}
+
+func TestBuiltinsFloorRoundUpperLowerSliceAndDidYouMean(t *testing.T) {
+	src := `nums = list 10, 20, 30, 40
+txt = "äöü€!"
+
+test "math, text, and slice built-ins"
+  (floor 3.9) is 3
+  (floor -1.2) is -2
+  (round 3.5) is 4
+  (round 3.4) is 3
+  (upper "hello äöü") is "HELLO ÄÖÜ"
+  (lower "HELLO ÄÖÜ") is "hello äöü"
+  (slice nums 1 3) is (list 20, 30)
+  (slice nums -5 2) is (list 10, 20)
+  (slice nums 2 99) is (list 30, 40)
+  (slice nums 3 1) is (list 0) where it > 0
+  (slice txt 1 4) is "öü€"
+  (slice txt -1 2) is "äö"
+  (slice txt 3 10) is "€!"
+  (slice "abc" 1.5 2) is error
+  (floor "x") is error
+  (upper 123) is error
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 16 {
+		t.Fatalf("expected 16 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Did you mean hints for variables, functions, and record fields
+	if _, err := EvalProgram("user = \"Ada\"\nsay usr\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Did you mean "user"?`) {
+		t.Fatalf("expected Did you mean hint for variable, got: %v", err)
+	}
+	if _, err := EvalProgram("say cunt\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Did you mean "count"?`) {
+		t.Fatalf("expected Did you mean hint for function, got: %v", err)
+	}
+	if _, err := EvalProgram("def player\n  speed = 10\nend\np = player with speed = 5\nsay p.speeed\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Did you mean "speed"?`) {
+		t.Fatalf("expected Did you mean hint for field, got: %v", err)
+	}
+
+	// Recursion limit message and hint
+	recSrc := "to down n\n  check n <= 0 -> 0\n  down (n - 1)\nend\nsay down 300\n"
+	if _, err := EvalProgram(recSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Maximum recursion depth (256) exceeded") || !strings.Contains(err.Error(), "use a 'loop' over 'range'") {
+		t.Fatalf("expected recursion limit (256) message and loop hint, got: %v", err)
+	}
+
+	// Standard module encapsulation, `as <alias>`, and migration hints
+	aliasSrc := "import network as net\napi = net.network with url = \"http://127.0.0.1:1\", timeout = 1\nsay net:fetch api \"/x\"\n"
+	var aliasOut bytes.Buffer
+	if _, err := EvalProgram(aliasSrc, &aliasOut); err != nil {
+		t.Fatalf("expected import network as net to succeed, got: %v", err)
+	}
+	if _, err := ParseProgram("import network\nx = network with url = \"http://127.0.0.1:1\"\n"); err == nil || !strings.Contains(err.Error(), "Use 'network.network with ...'") {
+		t.Fatalf("expected migration hint for 'network with ...', got: %v", err)
+	}
+	if _, err := EvalProgram("import network\nsay fetch\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Did you mean 'network:fetch'?") {
+		t.Fatalf("expected migration hint for bare 'fetch', got: %v", err)
 	}
 }

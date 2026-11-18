@@ -121,7 +121,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `xs.(1.5)`, `x as csv`, `save p (list 256)`, malformed/duplicate CSV -> `is error` in `.ease`)
 
 ## 9. Built-in Tests (`test`) & Imports (`import`) (`README.md`)
-- **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network`, `import screen`, `import "./file.ease" as mod` (`mod:verb`, `mod.def`, `mod.const`, `as mod.def`, `is mod.def`)
+- **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network` (`network:fetch`, `network:send`, `network.network`), `import screen` (`screen:present`, `screen.screen`, `screen.frame_state`), `import "./file.ease" as mod` (`mod:verb`, `mod.def`, `mod.const`, `as mod.def`, `is mod.def`)
 - **Negative Cases**:
   1. `test` missing `end`
   2. Nested `test` inside `to`
