@@ -2,16 +2,23 @@ package ease
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
+
+const maxFileSize = 50 * 1024 * 1024
 
 // builtinArities defines the fixed parameter count for every built-in function.
 var builtinArities = map[string]int{
@@ -29,11 +36,18 @@ var builtinArities = map[string]int{
 	"sum":            1,
 	"avg":            1,
 	"sort":           1,
+	"trim":           1,
+	"load":           1,
 	"range":          2,
 	"append":         2,
+	"split":          2,
+	"join":           2,
+	"contains":       2,
+	"save":           2,
 	"min":            2,
 	"max":            2,
 	"screen_present": 2,
+	"replace":        3,
 }
 
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
@@ -54,7 +68,17 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if err != nil && err != io.EOF {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "Failed to read input: "+err.Error(), "")
 		}
-		res := strings.TrimRight(inputLine, "\r\n")
+		if !utf8.ValidString(inputLine) {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"Input from stdin contains invalid UTF-8 bytes",
+				"Ensure standard input provides valid UTF-8 text.",
+			)
+		}
+		res := norm.NFC.String(strings.TrimRight(inputLine, "\r\n"))
 		ev.logTrace("line %d: ask received %q", line, res)
 		return res, true, nil
 
@@ -441,6 +465,139 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		}
 		return string(b), true, nil
 
+	case "split":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "split takes 2 arguments", "")
+		}
+		s, ok1 := args[0].(string)
+		sep, ok2 := args[1].(string)
+		if !ok1 || !ok2 {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("split requires two text arguments, got %s and %s", TypeName(args[0]), TypeName(args[1])), "Example: split \"a,b,c\" \",\"")
+		}
+		parts := strings.Split(s, sep)
+		if len(parts) > maxListSize {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("split result exceeds list limit (%d elements)", maxListSize),
+				fmt.Sprintf("Keep split results within %d elements.", maxListSize),
+			)
+		}
+		out := make([]Value, len(parts))
+		for i, p := range parts {
+			out[i] = p
+		}
+		return &ListValue{ElemType: "text", Elements: out}, true, nil
+
+	case "join":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "join takes 2 arguments", "")
+		}
+		lv, ok1 := args[0].(*ListValue)
+		sep, ok2 := args[1].(string)
+		if !ok1 || !isTextList(lv) || !ok2 {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("join requires a list of text and a text separator, got %s and %s", describeListOrType(args[0]), TypeName(args[1])), "Example: join (list \"a\", \"b\") \"-\"")
+		}
+		strs := make([]string, len(lv.Elements))
+		for i, el := range lv.Elements {
+			strs[i] = el.(string)
+		}
+		return strings.Join(strs, sep), true, nil
+
+	case "trim":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "trim takes 1 argument", "")
+		}
+		s, ok := args[0].(string)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("trim requires text, got %s", TypeName(args[0])), "Example: trim \"  hello  \"")
+		}
+		return strings.TrimSpace(s), true, nil
+
+	case "replace":
+		if len(args) != 3 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "replace takes 3 arguments", "")
+		}
+		s, ok1 := args[0].(string)
+		oldStr, ok2 := args[1].(string)
+		newStr, ok3 := args[2].(string)
+		if !ok1 || !ok2 || !ok3 {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("replace requires three text arguments, got %s, %s, and %s", TypeName(args[0]), TypeName(args[1]), TypeName(args[2])), "Example: replace \"foo bar\" \"foo\" \"baz\"")
+		}
+		if oldStr == "" {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "replace requires a non-empty search text", "Pass a non-empty substring as the second argument to 'replace'.")
+		}
+		return strings.ReplaceAll(s, oldStr, newStr), true, nil
+
+	case "contains":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "contains takes 2 arguments", "")
+		}
+		s, ok1 := args[0].(string)
+		sub, ok2 := args[1].(string)
+		if !ok1 || !ok2 {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("contains requires two text arguments, got %s and %s", TypeName(args[0]), TypeName(args[1])), "Example: check contains email \"@example.com\" -> ...")
+		}
+		return strings.Contains(s, sub), true, nil
+
+	case "load":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "load takes 1 argument (file path)", "")
+		}
+		pathStr, ok := args[0].(string)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("load requires a text file path, got %s", TypeName(args[0])), "Example: load \"./notes.txt\"")
+		}
+		val, err := ev.evalLoad(pathStr, "text", line, col)
+		if err != nil {
+			return nil, true, err
+		}
+		return val, true, nil
+
+	case "save":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "save takes 2 arguments (path, data)", "")
+		}
+		pathStr, ok := args[0].(string)
+		if !ok || strings.TrimSpace(pathStr) == "" {
+			return nil, true, newError("TypeError", line, col, ev.source, "save requires a non-empty text file path as first argument", "Example: save \"./out.txt\" content")
+		}
+		switch data := args[1].(type) {
+		case string:
+			if !utf8.ValidString(data) {
+				return nil, true, newError("RuntimeError", line, col, ev.source, "Text passed to save contains invalid UTF-8 bytes", "")
+			}
+			raw := []byte(data)
+			if err := os.WriteFile(pathStr, raw, 0o644); err != nil {
+				return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+			}
+			return float64(len(raw)), true, nil
+		case *ListValue:
+			buf := make([]byte, len(data.Elements))
+			for i, el := range data.Elements {
+				n, isNum := el.(float64)
+				if !isNum || n != math.Trunc(n) || n < 0 || n > 255 {
+					return nil, true, newError(
+						"RuntimeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Byte value at index %d must be an integer in 0..255, got %s", i, FormatValue(el)),
+						"Pass a list of integer byte values (0..255) to save binary files.",
+					)
+				}
+				buf[i] = byte(int(n))
+			}
+			if err := os.WriteFile(pathStr, buf, 0o644); err != nil {
+				return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+			}
+			return float64(len(buf)), true, nil
+		default:
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("save expects text or a list of bytes (0..255), got %s", TypeName(args[1])), "Pass text or a list of numbers (0..255) to 'save'.")
+		}
+
 	case "http_call":
 		if len(args) != 1 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "http_call takes 1 argument (http_request)", "")
@@ -449,7 +606,11 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if !ok {
 			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("http_call requires an http_request record, got %s", TypeName(args[0])), "")
 		}
-		return ev.execHTTPCall(reqRec), true, nil
+		resRec, err := ev.execHTTPCall(reqRec, line, col)
+		if err != nil {
+			return nil, true, err
+		}
+		return resRec, true, nil
 
 	case "screen_present":
 		if len(args) != 2 {
@@ -504,7 +665,7 @@ func (ev *Evaluator) newHTTPResponseRecord(status float64, body, errMsg string) 
 	}
 }
 
-func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
+func (ev *Evaluator) execHTTPCall(reqRec *RecordValue, line, col int) (*RecordValue, error) {
 	method := "GET"
 	if v, ok := reqRec.Fields["method"].(string); ok && v != "" {
 		method = strings.ToUpper(v)
@@ -526,7 +687,7 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 
 	httpReq, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
 	if err != nil {
-		return ev.newHTTPResponseRecord(0, "", err.Error())
+		return ev.newHTTPResponseRecord(0, "", err.Error()), nil
 	}
 	if token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+token)
@@ -546,22 +707,32 @@ func (ev *Evaluator) execHTTPCall(reqRec *RecordValue) *RecordValue {
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return ev.newHTTPResponseRecord(0, "", err.Error())
+		return ev.newHTTPResponseRecord(0, "", err.Error()), nil
 	}
 	defer resp.Body.Close()
 
 	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBodyBytes+1))
 	if err != nil {
-		return ev.newHTTPResponseRecord(float64(resp.StatusCode), "", err.Error())
+		return ev.newHTTPResponseRecord(float64(resp.StatusCode), "", err.Error()), nil
 	}
 	if len(rawBody) > maxHTTPBodyBytes {
 		return ev.newHTTPResponseRecord(
 			float64(resp.StatusCode),
 			"",
 			fmt.Sprintf("HTTP response body exceeds %d MB limit", maxHTTPBodyBytes/(1024*1024)),
+		), nil
+	}
+	if !utf8.Valid(rawBody) {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			"HTTP response body contains invalid UTF-8 bytes",
+			"The remote endpoint returned non-UTF-8 binary or corrupted data.",
 		)
 	}
-	return ev.newHTTPResponseRecord(float64(resp.StatusCode), string(rawBody), "")
+	return ev.newHTTPResponseRecord(float64(resp.StatusCode), norm.NFC.String(string(rawBody)), ""), nil
 }
 
 func jsonAnyToEase(v any) Value {
@@ -596,6 +767,8 @@ func jsonAnyToEase(v any) Value {
 			return "true"
 		}
 		return "false"
+	case string:
+		return norm.NFC.String(x)
 	default:
 		return x
 	}
@@ -747,4 +920,83 @@ func describeListOrType(v Value) string {
 		return "list"
 	}
 	return TypeName(v)
+}
+
+func (ev *Evaluator) evalLoad(pathStr, mode string, line, col int) (Value, error) {
+	if strings.TrimSpace(pathStr) == "" {
+		return nil, newError("RuntimeError", line, col, ev.source, "load requires a non-empty file path", "Example: load \"./notes.txt\"")
+	}
+	f, err := os.Open(pathStr)
+	if err != nil {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to read file %q: %v", pathStr, err), "Check that the file path exists and is readable.")
+	}
+	defer f.Close()
+
+	if info, err := f.Stat(); err == nil && info.Size() > maxFileSize {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("File %q exceeds %d MB limit", pathStr, maxFileSize/(1024*1024)), "Keep loaded files within the 50 MB size limit.")
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
+	if err != nil {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to read file %q: %v", pathStr, err), "")
+	}
+	if len(raw) > maxFileSize {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("File %q exceeds %d MB limit", pathStr, maxFileSize/(1024*1024)), "Keep loaded files within the 50 MB size limit.")
+	}
+
+	if mode == "bytes" {
+		out := make([]Value, len(raw))
+		for i, b := range raw {
+			out[i] = float64(b)
+		}
+		return &ListValue{ElemType: "number", Elements: out}, nil
+	}
+
+	if !utf8.Valid(raw) {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("File %q contains invalid UTF-8 bytes", pathStr),
+			"Use 'load <path> as bytes' for binary files.",
+		)
+	}
+	text := norm.NFC.String(strings.TrimPrefix(string(raw), "\uFEFF"))
+	if mode == "text" {
+		return text, nil
+	}
+
+	// mode == "csv"
+	reader := csv.NewReader(strings.NewReader(text))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Invalid CSV in %q: %v", pathStr, err), "Check CSV quoting and ensure every row has the same number of columns.")
+	}
+	if len(records) == 0 || len(records[0]) == 0 {
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("CSV file %q is empty", pathStr), "Provide at least a header row in the CSV file.")
+	}
+
+	headers := make([]string, len(records[0]))
+	seenHeaders := make(map[string]bool, len(records[0]))
+	for i, h := range records[0] {
+		nh := norm.NFC.String(h)
+		if seenHeaders[nh] {
+			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Duplicate CSV header %q in %q", nh, pathStr), "Ensure every CSV column header has a unique name.")
+		}
+		seenHeaders[nh] = true
+		headers[i] = nh
+	}
+
+	rows := make([]Value, 0, len(records)-1)
+	for _, row := range records[1:] {
+		fields := make(map[string]Value, len(headers))
+		order := make([]string, len(headers))
+		copy(order, headers)
+		for i, h := range headers {
+			fields[h] = norm.NFC.String(row[i])
+		}
+		rows = append(rows, &MapValue{Fields: fields, Order: order, FromCSV: true})
+	}
+	return &ListValue{Elements: rows}, nil
 }

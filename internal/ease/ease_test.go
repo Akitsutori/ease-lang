@@ -2040,3 +2040,246 @@ end
 		}
 	}
 }
+
+func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
+	// 1. Happy paths: split, join, trim, replace, NFC normalization (NFD vs NFC), contains in where/check/test.
+	happySrc := "def user\n" +
+		"    email = \"\"\n" +
+		"end\n\n" +
+		"to classify_msg s\n" +
+		"    check contains s \"ok\" -> \"accepted\"\n" +
+		"    \"rejected\"\n" +
+		"end\n\n" +
+		"test \"UTF-8, NFC, and text built-ins\"\n" +
+		"    split \"äöü👍\" \"\" is list \"ä\", \"ö\", \"ü\", \"👍\"\n" +
+		"    split \"a,b,c\" \",\" is list \"a\", \"b\", \"c\"\n" +
+		"    join (list \"a\", \"b\") \"-\" is \"a-b\"\n" +
+		"    trim \"  hi \\t\\n\" is \"hi\"\n" +
+		"    replace \"foo bar foo\" \"foo\" \"baz\" is \"baz bar baz\"\n\n" +
+		"    # NFD vs NFC canonical equivalence\n" +
+		"    nfd = \"a\u0308\"\n" +
+		"    nfc = \"ä\"\n" +
+		"    nfd is nfc\n" +
+		"    count nfd is 1\n" +
+		"    nfd.0 is \"ä\"\n\n" +
+		"    # contains as condition in check, where, and test (including is error)\n" +
+		"    classify_msg \"status: ok\" is \"accepted\"\n" +
+		"    classify_msg \"status: fail\" is \"rejected\"\n" +
+		"    contains \"hello world\" \"world\"\n" +
+		"    (contains 123 \"a\") is error\n" +
+		"    contains 123 \"a\" is error\n\n" +
+		"    users = list as user with\n" +
+		"        email = \"ada@example.com\"\n" +
+		"        email = \"bob@other.org\"\n" +
+		"    end\n" +
+		"    matched = users where contains it.email \"@example.com\"\n" +
+		"    count matched is 1\n" +
+		"    matched.0.email is \"ada@example.com\"\n\n" +
+		"    replace \"abc\" \"\" \"x\" is error\n" +
+		"    join (list 1, 2) \",\" is error\n" +
+		"end\n"
+
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 17 {
+		t.Fatalf("expected 17 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// 2. Invalid UTF-8 in source code (lexer).
+	badSrc := "x = \"\xff\xfe\"\n"
+	if _, err := ParseProgram(badSrc); err == nil || !strings.Contains(err.Error(), "Invalid UTF-8 byte sequence (0xFF)") {
+		t.Fatalf("expected Invalid UTF-8 syntax error from lexer, got: %v", err)
+	}
+
+	// 3. Invalid UTF-8 from stdin (`ask`).
+	if _, err := EvalProgramWithInput("x = ask \"\"\n", bytes.NewReader([]byte{0xff, '\n'}), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Input from stdin contains invalid UTF-8 bytes") {
+		t.Fatalf("expected RuntimeError on invalid UTF-8 from ask, got: %v", err)
+	}
+
+	// 4. Valid NFD over stdin (`ask`) is normalized to NFC.
+	nfdVal, err := EvalProgramWithInput("ask \"\"\n", strings.NewReader("a\u0308\n"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("ask NFD failed: %v", err)
+	}
+	if nfdVal != "ä" {
+		t.Fatalf("expected NFC %q from ask, got %q", "ä", nfdVal)
+	}
+
+	// 5. Invalid UTF-8 and NFC normalization in `http_call`.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/bad":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte{0xff, 0xfe})
+		case "/nfd":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("a\u0308"))
+		}
+	}))
+	defer srv.Close()
+
+	badHTTPSrc := fmt.Sprintf("import network\nreq = http_request with method = \"GET\", url = %q\nres = http_call req\n", srv.URL+"/bad")
+	if _, err := EvalProgram(badHTTPSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "HTTP response body contains invalid UTF-8 bytes") {
+		t.Fatalf("expected RuntimeError on invalid UTF-8 HTTP body, got: %v", err)
+	}
+
+	nfdHTTPSrc := fmt.Sprintf("import network\nreq = http_request with method = \"GET\", url = %q\nres = http_call req\nsay res.body\n", srv.URL+"/nfd")
+	var httpOut bytes.Buffer
+	if _, err := EvalProgram(nfdHTTPSrc, &httpOut); err != nil {
+		t.Fatalf("expected valid NFD HTTP body to succeed, got: %v", err)
+	}
+	if httpOut.String() != "ä\n" {
+		t.Fatalf("expected NFC HTTP body %q, got %q", "ä\n", httpOut.String())
+	}
+
+	// 6. Storing or printing `contains` is forbidden (condition guardrail).
+	for _, badCondSrc := range []string{
+		"ok = contains \"abc\" \"a\"\n",
+		"say contains \"abc\" \"a\"\n",
+	} {
+		if _, err := ParseProgram(badCondSrc); err == nil || !strings.Contains(err.Error(), "Conditions cannot be stored or printed") {
+			t.Fatalf("expected condition storage/print TypeError for %q, got: %v", badCondSrc, err)
+		}
+	}
+}
+
+func TestLoadSaveAndCSVMapping(t *testing.T) {
+	tmpDir := t.TempDir()
+	txtPath := filepath.Join(tmpDir, "notes.txt")
+	binPath := filepath.Join(tmpDir, "image.bin")
+	asiaCSVPath := filepath.Join(tmpDir, "export_asia.csv")
+	cleanCSVPath := filepath.Join(tmpDir, "sales_clean.csv")
+	badUTF8Path := filepath.Join(tmpDir, "bad.bin")
+	badCSVPath := filepath.Join(tmpDir, "bad.csv")
+	emptyCSVPath := filepath.Join(tmpDir, "empty.csv")
+	dupCSVPath := filepath.Join(tmpDir, "dup.csv")
+	nanCSVPath := filepath.Join(tmpDir, "nan.csv")
+
+	// Write BOM + NFD text file to verify BOM stripping & NFC normalization on load.
+	if err := os.WriteFile(txtPath, []byte("\uFEFFa\u0308"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Write BOM + mixed/non-ASCII CSV matching the README boundary-mapping example.
+	asiaCSV := "\uFEFFProduct Name,单价 (EUR),Order Status\n" +
+		"Mechanical Keyboard,89.50,paid\n" +
+		"Wireless Mouse,25.00,refunded\n"
+	if err := os.WriteFile(asiaCSVPath, []byte(asiaCSV), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cleanCSV := "product,price,status\nKeyboard,89.50,paid\nMouse,25.00,refunded\n"
+	if err := os.WriteFile(cleanCSVPath, []byte(cleanCSV), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(badUTF8Path, []byte{0xff, 0xfe, 0x00}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(badCSVPath, []byte("a,b\n1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(emptyCSVPath, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dupCSVPath, []byte("id,id\n1,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nanCSVPath, []byte("product,price,status\nKeyboard,NaN,paid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	happySrc := fmt.Sprintf(`
+def sale_status = "paid" | "refunded"
+
+def sales_entry
+    product = ""
+    price   = 0
+    status  = "paid" | "refunded"
+end
+
+test "load, save, bytes, and CSV boundary mapping"
+    # 1. Text load (with BOM strip + NFC) & save round-trip
+    loaded_txt = load %q
+    loaded_txt is "ä"
+    (load %q as text) is "ä"
+    written_txt = save %q "hello ä"
+    written_txt is 8
+    load %q is "hello ä"
+
+    # 2. Binary save & load as bytes (1:1 raw, including 0xFF/0xFE)
+    raw_bytes = list 0, 137, 80, 78, 71, 255, 254
+    written_bin = save %q raw_bytes
+    written_bin is 7
+    loaded_bytes = load %q as bytes
+    loaded_bytes is raw_bytes
+
+    # 3. CSV boundary mapping with mixed/non-ASCII headers (index + dynamic key)
+    raw_rows = load %q as csv
+    count raw_rows is 2
+    raw_rows.0.("Product Name") is "Mechanical Keyboard"
+    raw_rows.0.("单价 (EUR)") is "89.50"
+
+    entries = list as sales_entry
+    loop raw_rows
+        entry = sales_entry with
+            product = it.0
+            price   = it.1 as number
+            status  = it.2 as sale_status
+        end
+        entries = append entries entry
+    end
+
+    paid = entries where it.status is "paid"
+    count paid is 1
+    paid.0.product is "Mechanical Keyboard"
+    paid.0.price is 89.5
+
+    # 4. Direct CSV cast (`+"`as sales_entry`"+`) converts CSV numeric cells
+    clean_rows = load %q as csv
+    direct_entries = clean_rows as sales_entry
+    count direct_entries is 2
+    direct_entries.0.price is 89.5
+
+    # 5. Negative runtime assertions
+    load %q is error
+    load %q as csv is error
+    load %q as csv is error
+    load %q as csv is error
+    load %q as csv is error
+    (load %q as csv) as sales_entry is error
+    raw_rows.0.99 is error
+    raw_rows.0.("missing") is error
+    save %q (list -1) is error
+    save %q (list 256) is error
+    save %q (list 1.5) is error
+end
+`, txtPath, txtPath, txtPath, txtPath, binPath, binPath, asiaCSVPath, cleanCSVPath,
+		badUTF8Path, badUTF8Path, badCSVPath, emptyCSVPath, dupCSVPath, nanCSVPath,
+		binPath, binPath, binPath)
+
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 25 {
+		t.Fatalf("expected 25 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Verify static TypeError when `as csv` or `as bytes` is used outside `load`.
+	for _, badCast := range []string{
+		"x = \"abc\" as csv\n",
+		"x = (list 1, 2) as bytes\n",
+	} {
+		if _, err := ParseProgram(badCast); err == nil || !strings.Contains(err.Error(), "can only be used with 'load <path>") {
+			t.Fatalf("expected static TypeError for %q, got: %v", badCast, err)
+		}
+	}
+
+	// Verify specific English error messages for duplicate CSV header & NaN CSV cell.
+	if _, err := EvalProgram(fmt.Sprintf("x = load %q as csv\n", dupCSVPath), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Duplicate CSV header") {
+		t.Fatalf("expected Duplicate CSV header error, got: %v", err)
+	}
+	if _, err := EvalProgram(fmt.Sprintf("def s\n  product = \"\"\n  price = 0\n  status = \"paid\"\nend\nx = (load %q as csv) as s\n", nanCSVPath), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "expected number") {
+		t.Fatalf("expected NaN CSV number error, got: %v", err)
+	}
+}

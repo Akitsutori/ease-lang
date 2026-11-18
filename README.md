@@ -439,6 +439,13 @@ server_errors = items where it is ErrorMessage and it.code >= 500
 
 # Batch `with` on record lists (uses `it` and `it.index`, never implicit field injection)
 moved = cloud with x = it.x + it.vx
+
+# UTF-8 text processing (all text inputs are validated as UTF-8 and NFC-normalized)
+clean = trim "  ada@example.com  "
+parts = split clean "@"                  # -> ["ada", "example.com"]
+rebuilt = join parts " at "              # -> "ada at example.com"
+updated = replace clean ".com" ".org"    # -> "ada@example.org"
+org_users = users where contains it.email "@example.com"
 ```
 
 > **Note:** `def` records cannot declare a field named `index` (reserved for `it.index` inside `loop`), and `loop` requires a list or `range` (e.g. `loop range 1 3`, not `loop 3`).
@@ -553,11 +560,62 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `sum xs` | Sums all elements of a numeric `list` (`0` for empty numeric list) |
 | `avg xs` | Computes the arithmetic mean of a non-empty numeric `list` |
 | `sort xs` | Returns a new ascending sorted copy of a `number` or `text` `list` |
+| `split txt sep` | Splits UTF-8 `text` by `sep` into a `list` of `text` (`split "äöü" ""` splits into runes) |
+| `join items sep` | Joins a `list` of `text` with `sep` into `text` |
+| `trim txt` | Strips leading and trailing Unicode whitespace |
+| `replace txt old new` | Replaces all occurrences of non-empty `old` with `new` in `text` |
+| `contains txt sub` | Condition verb (usable in `check`, `where`, `test`; not storable) checking if `txt` contains `sub` |
 | `abs n` / `min a b` / `max a b` | Numeric math helpers |
 | `fields rec` | Returns a list of field names in declaration order for a `def` record or decoded `map` |
 | `decode_json txt` | Parses valid JSON `text` into structured Ease data (`map`, `list`, or primitives); aborts on empty/invalid JSON |
 | `encode_json val` | Encodes a `def` record, `map`, `list`, or primitive into JSON `text` |
+| `load path [as text\|csv\|bytes]` | Reads a file (50 MB max) as UTF-8/NFC `text`, structured `csv` rows (`map` list), or raw byte list (`0..255`) |
+| `save path data` | Writes UTF-8 `text` or a `list` of byte numbers (`0..255`) to `path`, returning written byte count |
 | `fail msg` | Raises an explicit `RuntimeError` (testable with `is error` / `-> ... end`) |
+
+---
+
+### File I/O (`load` & `save`)
+
+`load` and `save` are directly available built-in verbs (no `import` required):
+
+- `load "./notes.txt"` (or `load "./notes.txt" as text`) validates UTF-8, strips an optional UTF-8 BOM, and normalizes to Unicode NFC.
+- `load "./image.png" as bytes` reads raw bytes (`0..255`) as a `list` of `number` without UTF-8 checks or normalization.
+- `load "./data.csv" as csv` parses uniform CSV rows into a list of maps (`FromCSV`), supporting both positional column access (`it.0`, `it.1`, `it.(i)`) and dynamic header lookup (`it.("Product Name")`, `it.("单价 (EUR)")`).
+- `save path data` writes `text` or byte lists (`0..255`) and returns the number of bytes written.
+
+```ease
+# CSV with mixed/non-ASCII headers:
+# Product Name,单价 (EUR),Order Status
+# Mechanical Keyboard,89.50,paid
+# Wireless Mouse,25.00,refunded
+
+def sale_status = "paid" | "refunded"
+
+def sales_entry
+    product = ""
+    price   = 0
+    status  = "paid" | "refunded"
+end
+
+# Step 1: Parse CSV structure (UTF-8 + NFC + uniform columns), no domain assumptions yet
+raw_rows = load "./datafiles/export_asia.csv" as csv
+
+# Step 2: Translate explicitly at the boundary by column index (`it.0`, `it.1`, `it.2`)
+# or by header string (`it.("Product Name")`, `it.("单价 (EUR)")`)
+entries = list as sales_entry
+loop raw_rows
+    entry = sales_entry with
+        product = it.0
+        price   = it.1 as number
+        status  = it.2 as sale_status
+    end
+    entries = append entries entry
+end
+
+paid = entries where it.status is "paid"
+say "Paid count: {count paid}"
+```
 
 ---
 
@@ -689,7 +747,7 @@ with_field     ::= IDENT "=" expr
 where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
                  | "where" expr
 
-cast_type      ::= "text" | "number" | IDENT       (* must name a built-in type or previously defined/imported `def` blueprint *)
+cast_type      ::= "text" | "number" | "csv" | "bytes" | IDENT  (* "csv" and "bytes" are valid only directly on `load <path>` *)
 
 call_args      ::= unary{k}                              (* exactly k space-separated arguments for arity k; 'as' binds outside the full call *)
 
@@ -708,6 +766,8 @@ list_elem_type ::= "text" | "number" | IDENT    (* must name a built-in type or 
 ```
 
 > **Note on `as` binding**: Inside `call_args`, nested `as` postfix casts are suppressed so `decode_json raw_text as api_user` binds `(decode_json raw_text) as api_user` rather than casting only the final argument.
+>
+> **Note on `contains`:** `contains txt sub` is a condition-producing built-in (like `is` or `>`): it can be used directly in `check`, `where`, `test`, and with `and`/`or`/`not`, and cannot be stored in variables or printed.
 
 ---
 

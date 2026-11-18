@@ -18,10 +18,11 @@ type RecordValue struct {
 	IsPrototype bool
 }
 
-// MapValue represents a structured key-value object produced by `do decode_json`.
+// MapValue represents a structured key-value object produced by `decode_json` or `load ... as csv`.
 type MapValue struct {
-	Fields map[string]Value
-	Order  []string
+	Fields  map[string]Value
+	Order   []string
+	FromCSV bool
 }
 
 // UnionValue represents a union value-space defined with `def <name> = v1 | v2 | ...`.

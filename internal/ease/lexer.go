@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Lexer transforms Ease source text into a slice of Tokens.
@@ -24,6 +27,24 @@ func NewLexer(source string) *Lexer {
 		line:   1,
 		col:    1,
 	}
+}
+
+func findInvalidUTF8Pos(s string) (line, col int, badByte byte) {
+	line, col = 1, 1
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			return line, col, s[i]
+		}
+		if r == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+		i += size
+	}
+	return line, col, 0
 }
 
 func (l *Lexer) eof() bool {
@@ -69,6 +90,17 @@ func isIdentPart(r rune) bool {
 
 // Tokenize scans the complete input into tokens, ending with TOK_EOF.
 func (l *Lexer) Tokenize() ([]Token, error) {
+	if !utf8.ValidString(l.source) {
+		line, col, badByte := findInvalidUTF8Pos(l.source)
+		return nil, newError(
+			"SyntaxError",
+			line,
+			col,
+			l.source,
+			fmt.Sprintf("Invalid UTF-8 byte sequence (0x%02X)", badByte),
+			"Ensure source files are encoded as valid UTF-8.",
+		)
+	}
 	var tokens []Token
 
 	for !l.eof() {
@@ -217,10 +249,10 @@ func (l *Lexer) scanString() (Token, error) {
 		if r == '"' {
 			l.advance()
 			if !hasInterp {
-				return Token{Type: TOK_STRING, Lexeme: b.String(), Line: line, Col: col}, nil
+				return Token{Type: TOK_STRING, Lexeme: norm.NFC.String(b.String()), Line: line, Col: col}, nil
 			}
 			if b.Len() > 0 {
-				segments = append(segments, StringSegment{IsExpr: false, Text: b.String(), Line: line, Col: col})
+				segments = append(segments, StringSegment{IsExpr: false, Text: norm.NFC.String(b.String()), Line: line, Col: col})
 			}
 			return Token{Type: TOK_INTERP_STRING, Lexeme: "", Line: line, Col: col, Segments: segments}, nil
 		}
@@ -230,7 +262,7 @@ func (l *Lexer) scanString() (Token, error) {
 		if r == '{' {
 			hasInterp = true
 			if b.Len() > 0 {
-				segments = append(segments, StringSegment{IsExpr: false, Text: b.String(), Line: line, Col: col})
+				segments = append(segments, StringSegment{IsExpr: false, Text: norm.NFC.String(b.String()), Line: line, Col: col})
 				b.Reset()
 			}
 			exprLine, exprCol := l.line, l.col
@@ -282,7 +314,7 @@ func (l *Lexer) scanRawString() (Token, error) {
 		r := l.peek()
 		if r == '\'' {
 			l.advance()
-			return Token{Type: TOK_STRING, Lexeme: b.String(), Line: line, Col: col}, nil
+			return Token{Type: TOK_STRING, Lexeme: norm.NFC.String(b.String()), Line: line, Col: col}, nil
 		}
 		if r == '\n' {
 			return Token{}, newError("SyntaxError", line, col, l.source, "Unterminated raw string literal", "Close raw strings with a matching '\\'' before the end of the line.")

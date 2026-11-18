@@ -71,7 +71,7 @@ func coerceToUnionOptions(val Value, opts []Value, env *Env, candidatePrefix str
 			if candidatePrefix != "" {
 				prefix = candidatePrefix + "(" + recOpt.TypeName + ")"
 			}
-			mapped, err := mapToRecord(mv.Fields, recOpt, env, prefix)
+			mapped, err := mapToRecord(mv.Fields, recOpt, env, prefix, mv.FromCSV)
 			if err == nil {
 				matches = append(matches, mapped)
 			} else {
@@ -148,7 +148,7 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 			if !isMap || mv == nil {
 				return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, idx, structuredTypeName(item))
 			}
-			mapped, mapErr := mapToRecord(mv.Fields, proto, env, elemPath)
+			mapped, mapErr := mapToRecord(mv.Fields, proto, env, elemPath, mv.FromCSV)
 			if mapErr != nil {
 				return nil, mapErr
 			}
@@ -426,7 +426,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 			)
 		}
 
-		mapped, mapErr := mapToRecord(mv.Fields, proto, env, e.TypeName)
+		mapped, mapErr := mapToRecord(mv.Fields, proto, env, e.TypeName, mv.FromCSV)
 		if mapErr != nil {
 			return nil, newError(
 				"RuntimeError",
@@ -441,7 +441,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 	}
 }
 
-func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path string) (*RecordValue, error) {
+func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path string, fromCSV bool) (*RecordValue, error) {
 	fields := make(map[string]Value, len(proto.Fields))
 	order := make([]string, len(proto.Order))
 	copy(order, proto.Order)
@@ -454,7 +454,7 @@ func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path str
 			return nil, fmt.Errorf("Missing field '%s'", fieldPath)
 		}
 		if opts, hasAllowed := proto.Allowed[fieldName]; hasAllowed && len(opts) > 0 {
-			converted, cErr := coerceToUnionOptions(rawVal, opts, env, fieldPath)
+			converted, cErr := coerceCSVOrUnionOptions(rawVal, opts, env, fieldPath, fromCSV)
 			if cErr != nil {
 				allowed := formatUnionOptions(opts)
 				return nil, fmt.Errorf("Invalid value %s for field '%s': allowed values are %s (%s)", FormatValue(rawVal), fieldPath, strings.Join(allowed, ", "), cErr.Error())
@@ -462,7 +462,7 @@ func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path str
 			fields[fieldName] = converted
 			continue
 		}
-		converted, err := coerceToTemplate(rawVal, defaultVal, env, fieldPath)
+		converted, err := coerceToTemplate(rawVal, defaultVal, env, fieldPath, fromCSV)
 		if err != nil {
 			return nil, err
 		}
@@ -478,9 +478,36 @@ func mapToRecord(rawMap map[string]Value, proto *RecordValue, env *Env, path str
 	}, nil
 }
 
-func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, error) {
+func coerceCSVOrUnionOptions(rawVal Value, opts []Value, env *Env, fieldPath string, fromCSV bool) (Value, error) {
+	if fromCSV {
+		if s, isStr := rawVal.(string); isStr {
+			if n, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) {
+				for _, opt := range opts {
+					if _, isNumOpt := opt.(float64); isNumOpt && opt == n {
+						return n, nil
+					}
+					if bt, isBT := opt.(BaseTypeValue); isBT && string(bt) == "number" {
+						return n, nil
+					}
+				}
+			}
+		}
+	}
+	return coerceToUnionOptions(rawVal, opts, env, fieldPath)
+}
+
+func coerceToTemplate(val Value, template Value, env *Env, path string, fromCSV bool) (Value, error) {
 	switch tmpl := template.(type) {
 	case float64:
+		if fromCSV {
+			if s, isStr := val.(string); isStr {
+				n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+				if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+					return nil, fmt.Errorf("Field '%s' expected number, got %s (%s)", path, structuredTypeName(val), FormatValue(val))
+				}
+				return n, nil
+			}
+		}
 		n, ok := val.(float64)
 		if !ok {
 			return nil, fmt.Errorf("Field '%s' expected number, got %s (%s)", path, structuredTypeName(val), FormatValue(val))
@@ -500,7 +527,7 @@ func coerceToTemplate(val Value, template Value, env *Env, path string) (Value, 
 		if !ok || subMap == nil {
 			return nil, fmt.Errorf("Field '%s' expected %s map/record, got %s", path, tmpl.TypeName, structuredTypeName(val))
 		}
-		return mapToRecord(subMap.Fields, tmpl, env, path)
+		return mapToRecord(subMap.Fields, tmpl, env, path, subMap.FromCSV)
 	case *ListValue:
 		lv, ok := val.(*ListValue)
 		if !ok {

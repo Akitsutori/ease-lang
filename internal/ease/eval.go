@@ -906,6 +906,31 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if mv, isMap := targetVal.(*MapValue); isMap {
+			if keyStr, isStr := idxVal.(string); isStr {
+				val, exists := mv.Fields[keyStr]
+				if !exists {
+					return nil, newError(
+						"RuntimeError",
+						e.Line,
+						e.Col,
+						ev.source,
+						fmt.Sprintf("Map has no key %q", keyStr),
+						fmt.Sprintf("Available keys: %s.", strings.Join(mv.Order, ", ")),
+					)
+				}
+				return val, nil
+			}
+			idxFloat, ok := idxVal.(float64)
+			if !ok || idxFloat != math.Trunc(idxFloat) {
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Map index must be an integer column index or text key, got %s", FormatValue(idxVal)), "Example: row.0 or row.(\"Product Name\")")
+			}
+			idx := int(idxFloat)
+			if idx < 0 || idx >= len(mv.Order) {
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Column index %d out of range (columns: %d)", idx, len(mv.Order)), fmt.Sprintf("Valid column indices are 0 to %d.", len(mv.Order)-1))
+			}
+			return mv.Fields[mv.Order[idx]], nil
+		}
 		idxFloat, ok := idxVal.(float64)
 		if !ok || idxFloat != math.Trunc(idxFloat) {
 			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Index must be an integer, got %s", FormatValue(idxVal)), "Use integer indices starting at 0, e.g. xs.0.")
@@ -924,7 +949,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			return string(runes[idx]), nil
 		default:
-			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Cannot index into %s", TypeName(targetVal)), "Only lists and strings support '.<index>' access.")
+			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Cannot index into %s", TypeName(targetVal)), "Only lists, maps, and strings support '.<index>' access.")
 		}
 
 	case *TypeCheckExpr:
@@ -942,6 +967,17 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		return matched, nil
 
 	case *CastExpr:
+		if call, isCall := e.Target.(*CallExpr); isCall && call.Callee == "load" && len(call.Args) == 1 && (e.TypeName == "csv" || e.TypeName == "bytes" || e.TypeName == "text") {
+			pathVal, err := ev.EvalExpr(call.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			pathStr, ok := pathVal.(string)
+			if !ok {
+				return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("load requires a text file path, got %s", TypeName(pathVal)), "Example: load \"./data.csv\" as csv")
+			}
+			return ev.evalLoad(pathStr, e.TypeName, e.Line, e.Col)
+		}
 		targetVal, err := ev.EvalExpr(e.Target, env)
 		if err != nil {
 			return nil, err

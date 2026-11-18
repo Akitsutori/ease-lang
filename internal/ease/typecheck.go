@@ -709,7 +709,14 @@ func (v *typeValidator) typeStateFromName(name string) varTypeState {
 func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 	switch ex := e.(type) {
 	case *CastExpr:
-		return v.typeStateFromName(ex.TypeName)
+		switch ex.TypeName {
+		case "bytes":
+			return varTypeState{listElemType: "number"}
+		case "csv":
+			return varTypeState{}
+		default:
+			return v.typeStateFromName(ex.TypeName)
+		}
 	case *TypedListExpr:
 		return varTypeState{listElemType: ex.ElemType}
 	case *IdentExpr:
@@ -795,6 +802,10 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			if len(ex.Args) >= 1 {
 				return v.inferExprTypeState(ex.Args[0])
 			}
+		case "split":
+			return varTypeState{listElemType: "text"}
+		case "join", "trim", "replace", "load", "save":
+			return varTypeState{exactNonRecord: true}
 		case "range":
 			return varTypeState{listElemType: "number"}
 		}
@@ -827,6 +838,22 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		}
 		if err := v.checkNotCondition(ex.Target); err != nil {
 			return err
+		}
+		if ex.TypeName == "csv" || ex.TypeName == "bytes" {
+			call, isCall := ex.Target.(*CallExpr)
+			if !isCall || call.Callee != "load" {
+				if !v.inErrorTestExpr {
+					return newError(
+						"TypeError",
+						ex.TypeLine,
+						ex.TypeCol,
+						v.source,
+						fmt.Sprintf("Target type %q can only be used with 'load <path> as %s'", ex.TypeName, ex.TypeName),
+						fmt.Sprintf("Write: load \"./path\" as %s", ex.TypeName),
+					)
+				}
+			}
+			return nil
 		}
 		return v.validateTypeTarget(ex.TypeName, ex.TypeLine, ex.TypeCol, "as", false)
 
@@ -1126,6 +1153,8 @@ func isConditionExpr(e Expr) bool {
 	switch ex := e.(type) {
 	case *TypeCheckExpr:
 		return true
+	case *CallExpr:
+		return ex.Callee == "contains"
 	case *UnaryExpr:
 		return ex.Op == "not"
 	case *BinaryExpr:
