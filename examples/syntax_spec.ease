@@ -123,7 +123,7 @@ test "Happy Paths gemäß README"
 end
 
 # ============================================================================
-# NEGATIVTESTS (Laufzeit-Fehlerabbrüche via `raises`)
+# NEGATIVTESTS (Laufzeit-Fehlerabbrüche via `is error`)
 # ============================================================================
 test "Funktionen & Aufrufe: 10 Negativtests"
     num "abc" is error

@@ -796,7 +796,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 					pCol,
 					ev.source,
 					fmt.Sprintf("Cannot interpolate %s into text", TypeName(val)),
-					"String interpolation '{...}' only allows atomic values (text, number). Interpolate a field like '{hero.hp}' or use 'do encode_json ...'.",
+					"String interpolation '{...}' only allows atomic values (text, number). Interpolate a field like '{hero.hp}' or use 'encode_json ...'.",
 				)
 			}
 			b.WriteString(FormatValue(val))
@@ -826,7 +826,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 							e.Col,
 							ev.source,
 							fmt.Sprintf("Unknown variable %q (field %q belongs to loop item 'it' of type %s — write 'it.%s')", e.Name, e.Name, rec.TypeName, e.Name),
-							fmt.Sprintf("Record fields are not injected into 'for ... do' loops. Use 'it.%s' instead of bare '%s'.", e.Name, e.Name),
+							fmt.Sprintf("Record fields are not injected into 'loop' blocks. Use 'it.%s' instead of bare '%s'.", e.Name, e.Name),
 						)
 					}
 				}

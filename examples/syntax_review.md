@@ -128,7 +128,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   3. Nested `test` inside `loop`
   4. Legacy `test:` with colon
   5. `check "label"` missing `end`
-  6. Legacy `raises` rejected (`1 / 0 raises "x"`)
+  6. Error assertions require `is error` (`1 / 0 is error`, not unknown trailing expressions)
   7. `import nonexistent_mod` / missing `.ease` file (`ImportError`)
   8. `import "network"` (string without `as alias`) or non-relative / cyclic `.ease` import
   9. `import network` inside `to`

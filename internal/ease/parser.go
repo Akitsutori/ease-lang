@@ -748,18 +748,8 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 			"Write conditions directly as assertions inside 'test ... end'.",
 		)
 	}
-	if p.current().Type == TOK_IDENT {
-		switch p.current().Lexeme {
-		case "do":
-			return nil, p.removedDoError(p.current())
-		case "push":
-			return nil, p.removedPushError(p.current())
-		case "raises":
-			return nil, p.removedRaisesError(p.current())
-		}
-		if p.peekNext().Type == TOK_ASSIGN {
-			return p.parseStmt()
-		}
+	if p.current().Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
+		return p.parseStmt()
 	}
 
 	p.disallowTopIs = true
@@ -864,10 +854,6 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 		return &CheckIsStmt{posInfo: posInfo{Line: line, Col: col}, Actual: expr, Expected: rhs}, nil
 	}
 
-	if p.check(TOK_IDENT) && p.current().Lexeme == "raises" {
-		return nil, p.removedRaisesError(p.current())
-	}
-
 	if err := p.expectStmtEnd("test assertion"); err != nil {
 		return nil, err
 	}
@@ -885,39 +871,6 @@ func (p *Parser) parseLogicTail(left Expr) (Expr, error) {
 		left = &BinaryExpr{posInfo: posInfo{Line: line, Col: col}, Left: left, Op: opTok.Lexeme, Right: right}
 	}
 	return left, nil
-}
-
-func (p *Parser) removedRaisesError(tok Token) error {
-	return newError(
-		"SyntaxError",
-		tok.Line,
-		tok.Col,
-		p.source,
-		"'raises' was replaced by 'is error'",
-		"Use 'expr is error' or 'expr -> error.type is \"...\" end' inside a 'test' block.",
-	)
-}
-
-func (p *Parser) removedDoError(tok Token) error {
-	return newError(
-		"SyntaxError",
-		tok.Line,
-		tok.Col,
-		p.source,
-		"'do' was removed; call functions directly by name, e.g. 'add 2 3'",
-		"Remove 'do' and call functions directly, e.g. 'say add 2 3' or 'sum_squares range 1 5'.",
-	)
-}
-
-func (p *Parser) removedPushError(tok Token) error {
-	return newError(
-		"SyntaxError",
-		tok.Line,
-		tok.Col,
-		p.source,
-		"'push' was replaced by 'append'",
-		"Use 'append xs item' to add an element or 'append xs other_list' to combine lists.",
-	)
 }
 
 func (p *Parser) parseStmt() (Stmt, error) {
@@ -970,12 +923,6 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			"Close the enclosing block with 'end' before starting a 'test ... end' block.",
 		)
 	default:
-		if tok.Type == TOK_IDENT && tok.Lexeme == "do" {
-			return nil, p.removedDoError(tok)
-		}
-		if tok.Type == TOK_IDENT && tok.Lexeme == "push" {
-			return nil, p.removedPushError(tok)
-		}
 		if tok.Type == TOK_IDENT && p.peekNext().Type != TOK_ASSIGN {
 			if tok.Lexeme == "for" {
 				return nil, newError(
@@ -1745,12 +1692,6 @@ func (p *Parser) parsePrimary() (Expr, error) {
 			"Build lists imperatively with 'xs = list as <type>' and 'xs = append xs val' inside 'loop ... end'.",
 		)
 	case TOK_IDENT:
-		if tok.Lexeme == "do" {
-			return nil, p.removedDoError(tok)
-		}
-		if tok.Lexeme == "push" {
-			return nil, p.removedPushError(tok)
-		}
 		p.advance()
 		return &IdentExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Name: tok.Lexeme}, nil
 	case TOK_LPAREN:

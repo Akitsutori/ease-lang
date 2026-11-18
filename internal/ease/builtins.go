@@ -146,7 +146,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 				col,
 				ev.source,
 				fmt.Sprintf("range too large (limit %d elements)", maxListSize),
-				fmt.Sprintf("Keep 'do range start end' within %d elements.", maxListSize),
+				fmt.Sprintf("Keep 'range start end' within %d elements.", maxListSize),
 			)
 		}
 		if endF >= startF && (endF-startF+1) > float64(maxListSize) {
@@ -156,7 +156,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 				col,
 				ev.source,
 				fmt.Sprintf("range too large (limit %d elements)", maxListSize),
-				fmt.Sprintf("Keep 'do range start end' within %d elements.", maxListSize),
+				fmt.Sprintf("Keep 'range start end' within %d elements.", maxListSize),
 			)
 		}
 		start, end := int(startF), int(endF)

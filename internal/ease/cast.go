@@ -284,7 +284,7 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate list as %s: expected structured map or %s record, got list of %s", targetType, targetType, lv.ElemType),
-				fmt.Sprintf("Expected a list of maps from 'do decode_json' or %s records.", targetType),
+				fmt.Sprintf("Expected a list of maps from 'decode_json' or %s records.", targetType),
 			)
 		}
 
@@ -327,7 +327,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot convert %s to text", TypeName(targetVal)),
-				"Only atomic values (text, number) can be cast with 'as text'. Use 'do encode_json ...' to serialize structured data to JSON.",
+				"Only atomic values (text, number) can be cast with 'as text'. Use 'encode_json ...' to serialize structured data to JSON.",
 			)
 		default:
 			return nil, newError(
@@ -423,7 +423,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate record %q as %q", rec.TypeName, e.TypeName),
-				fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from 'decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 
@@ -436,7 +436,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 					col,
 					ev.source,
 					fmt.Sprintf("Cannot validate text as %s: expected structured map or %s record", e.TypeName, e.TypeName),
-					fmt.Sprintf("Parse JSON text explicitly first with 'do decode_json ...', then validate with 'as %s'.", e.TypeName),
+					fmt.Sprintf("Parse JSON text explicitly first with 'decode_json ...', then validate with 'as %s'.", e.TypeName),
 				)
 			}
 			return nil, newError(
@@ -445,7 +445,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate %s as %s: expected structured map or %s record", TypeName(targetVal), e.TypeName, e.TypeName),
-				fmt.Sprintf("Expected a map from 'do decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from 'decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 

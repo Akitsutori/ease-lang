@@ -118,7 +118,7 @@ Line comments start with `#`.
 
 ### Functions (`to ... end`) & Arity-Based Calls
 
-Functions are declared with `to <name> <params...>` (space-separated, **no commas**) and implicitly return the value of their **last evaluated expression**. Functions are invoked **directly by name** without `do`, without parentheses, and without commas:
+Functions are declared with `to <name> <params...>` (space-separated, **no commas**) and implicitly return the value of their **last evaluated expression**. Functions are invoked **directly by name** without parentheses and without commas:
 
 ```ease
 to add a b

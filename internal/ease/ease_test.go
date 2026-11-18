@@ -995,7 +995,7 @@ end
 `
 	_, err = EvalProgram(missingFieldSrc, &bytes.Buffer{})
 	if err == nil {
-		t.Fatal("expected RuntimeError for bare record field access inside 'for ... do', got nil")
+		t.Fatal("expected RuntimeError for bare record field access inside 'loop', got nil")
 	}
 	full := err.Error()
 	for _, want := range []string{"Unknown variable \"vx\"", "it.vx", "particle"} {
@@ -1627,9 +1627,9 @@ loop range 1 3 say it end
 		want string
 	}{
 		{
-			name: "legacy do",
+			name: "unknown prefix identifier do",
 			src:  "to add a b\n  a + b\nend\nx = do add 2 3\n",
-			want: "'do' was removed",
+			want: "SyntaxError",
 		},
 		{
 			name: "too few arguments",
@@ -1770,9 +1770,9 @@ end
 			want: "sort requires a homogeneous list of numbers or text",
 		},
 		{
-			name: "legacy push",
+			name: "unknown function push",
 			src:  "say push (list 1, 2) 3\n",
-			want: "'push' was replaced by 'append'",
+			want: "SyntaxError",
 		},
 	}
 	for _, tc := range negCases {
@@ -1905,9 +1905,9 @@ end
 		want string
 	}{
 		{
-			name: "legacy raises",
+			name: "trailing raises expression",
 			src:  "test \"x\"\n    1 / 0 raises \"Division by zero\"\nend\n",
-			want: "'raises' was replaced by 'is error'",
+			want: "SyntaxError",
 		},
 		{
 			name: "legacy top-level check label",
