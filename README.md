@@ -112,22 +112,25 @@ say "Farewell, adventurer!"
 
 ### 3. Choosing Your Move
 
-Typing commands is only fun if the dungeon reacts. The player should be able to `"look"`, `"fight"`, or `"flee"` — and get a helpful message if they type anything else.
+Typing commands is only fun if the dungeon reacts. The player should be able to `"look"`, `"fight"`, `"rest"` (for a 3-round breather using `loop range 1 3`, where `it` counts `1, 2, 3`), or `"flee"` — and get a helpful message if they type anything else.
 
-Ease has no `if` keyword and no `bool` (`true`/`false`) type. Instead, you model choices explicitly (for example as a closed union type `def move = "look" | "fight" | "flee"`) and dispatch with a multi-line `check ... else -> ... end` block:
+Ease has no `if` keyword and no `bool` (`true`/`false`) type. Instead, you model choices explicitly (for example as a closed union type `def move = "look" | "fight" | "rest" | "flee"`) and dispatch with a multi-line `check ... else -> ... end` block:
 
 ```ease
-def move = "look" | "fight" | "flee"
+def move = "look" | "fight" | "rest" | "flee"
 
 loop
-    cmd = ask "Choose (look, fight, flee, quit)> "
+    cmd = ask "Choose (look, fight, rest, flee, quit)> "
     check cmd is "quit" -> end
 
     check
         cmd is "look"  -> say "Torchlight flickers along damp stone walls."
         cmd is "fight" -> say "You raise your sword!"
+        cmd is "rest"  -> loop range 1 3
+            say "Resting... round {it} of 3"
+        end
         cmd is "flee"  -> say "You slip back into the shadows."
-        else -> say "Unknown move '{cmd}'. Try look, fight, or flee."
+        else -> say "Unknown move '{cmd}'. Try look, fight, rest, or flee."
     end
 end
 ```

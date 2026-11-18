@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"ease-lang/internal/ease"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -185,5 +186,32 @@ func TestReplRejectsPrintingConditions(t *testing.T) {
 	}
 	if strings.Count(errOut.String(), "Conditions cannot be stored or printed") != 2 {
 		t.Fatalf("expected 2 condition TypeErrors on stderr, got: %q", errOut.String())
+	}
+}
+
+func TestCmdBuildMultiFileCLI(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	modPath := filepath.Join(subDir, "mod.ease")
+	if err := os.WriteFile(modPath, []byte("def tax = 1.19\nto gross x\n  x * tax\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(subDir, "main.ease")
+	if err := os.WriteFile(mainPath, []byte("import \"./mod.ease\" as mod\nsay mod:gross 100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outExe := filepath.Join(dir, "app.exe")
+	if code := cmdBuild([]string{mainPath, "-o", outExe}); code != 0 {
+		t.Fatalf("cmdBuild failed with exit code %d", code)
+	}
+	bundle, ok, err := ease.ReadEmbeddedBundle(outExe)
+	if err != nil || !ok {
+		t.Fatalf("ReadEmbeddedBundle failed: ok=%v err=%v", ok, err)
+	}
+	if bundle.Entry != "main.ease" || len(bundle.Files) != 2 {
+		t.Fatalf("unexpected CLI bundle: entry=%q files=%d", bundle.Entry, len(bundle.Files))
 	}
 }

@@ -107,6 +107,13 @@ jobs:
           ./${{ matrix.bin }} build examples/00_hello_world.ease -o ${{ matrix.hello_bin }}
           ./${{ matrix.hello_bin }}
 
+          mkdir -p tmp_bundle/sub
+          printf 'to greet name\n  "Hi {name}"\nend\n' > tmp_bundle/sub/mod.ease
+          printf 'import "./mod.ease" as mod\nsay mod:greet "Ease"\n' > tmp_bundle/sub/main.ease
+          ./${{ matrix.bin }} build tmp_bundle/sub/main.ease -o tmp_bundle/${{ matrix.hello_bin }}
+          ./tmp_bundle/${{ matrix.hello_bin }}
+          rm -rf tmp_bundle
+
       - name: Upload built ease binary
         uses: actions/upload-artifact@v4
         with:

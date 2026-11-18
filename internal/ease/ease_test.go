@@ -2698,3 +2698,74 @@ end
 		t.Fatalf("expected infinite loop exit condition TypeError, got: %v", err)
 	}
 }
+
+func TestStandaloneBundleMultiFileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "sub")
+	sharedDir := filepath.Join(dir, "shared")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	utilPath := filepath.Join(sharedDir, "util.ease")
+	if err := os.WriteFile(utilPath, []byte("to bonus x\n  x + 5\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	combatPath := filepath.Join(subDir, "combat.ease")
+	combatSrc := "import \"../shared/util.ease\" as util\ndef crit = 1.5\ndef fighter\n  hp = 100\nend\nto strike f power\n  f with hp = f.hp - util:bonus (power * crit)\nend\n"
+	if err := os.WriteFile(combatPath, []byte(combatSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mainPath := filepath.Join(subDir, "main.ease")
+	mainSrc := "import \"./combat.ease\" as combat\ng = combat.fighter with hp = 30\nhit = combat:strike g 10\nsay hit.hp\ntest \"bundled\"\n  hit.hp is 10\nend\n"
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hostBin := filepath.Join(dir, "host.bin")
+	outBin := filepath.Join(dir, "app.bin")
+	if err := os.WriteFile(hostBin, []byte("DUMMYHOST"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := BuildStandaloneExeFromFile(hostBin, mainSrc, mainPath, outBin); err != nil {
+		t.Fatalf("BuildStandaloneExeFromFile failed: %v", err)
+	}
+
+	bundle, ok, err := ReadEmbeddedBundle(outBin)
+	if err != nil || !ok {
+		t.Fatalf("ReadEmbeddedBundle failed: ok=%v err=%v", ok, err)
+	}
+	if bundle.Entry != "sub/main.ease" || len(bundle.Files) != 3 {
+		t.Fatalf("unexpected bundle contents: entry=%q files=%d", bundle.Entry, len(bundle.Files))
+	}
+
+	// Unpack and verify the bundled files execute and pass `test` cleanly from a fresh directory
+	unpackDir := filepath.Join(dir, "unpacked")
+	for rel, content := range bundle.Files {
+		target := filepath.Join(unpackDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unpackedEntry := filepath.Join(unpackDir, filepath.FromSlash(bundle.Entry))
+	var out bytes.Buffer
+	if _, err := EvalProgramFromFile(bundle.Files[bundle.Entry], unpackedEntry, &out); err != nil {
+		t.Fatalf("EvalProgramFromFile on unpacked bundle failed: %v", err)
+	}
+	if out.String() != "10\n" {
+		t.Fatalf("unexpected unpacked output: got %q, want %q", out.String(), "10\n")
+	}
+	report, err := RunChecksFromFile(bundle.Files[bundle.Entry], unpackedEntry)
+	if err != nil || report.Failed != 0 || report.Passed != 1 {
+		t.Fatalf("RunChecksFromFile on unpacked bundle failed: report=%+v err=%v", report, err)
+	}
+}

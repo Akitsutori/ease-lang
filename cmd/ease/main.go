@@ -53,9 +53,9 @@ func runCLI() (exitCode int) {
 			exitCode = 1
 		}
 	}()
-	// If this binary carries an embedded `.ease` program, run directly as a standalone app.
-	if embeddedSrc, ok, err := ease.ReadEmbeddedSource(""); err == nil && ok {
-		return runEmbedded(embeddedSrc, os.Args[1:])
+	// If this binary carries an embedded `.ease` program/bundle, run directly as a standalone app.
+	if bundle, ok, err := ease.ReadEmbeddedBundle(""); err == nil && ok {
+		return runEmbeddedBundle(bundle, os.Args[1:])
 	}
 
 	if len(os.Args) < 2 {
@@ -100,13 +100,56 @@ func runCLI() (exitCode int) {
 	}
 }
 
-func runEmbedded(source string, args []string) int {
+func runEmbeddedBundle(bundle *ease.EmbeddedBundle, args []string) int {
+	testMode := false
 	for _, a := range args {
 		if a == "--test" || a == "-t" {
-			return executeChecks(source, "<embedded>", false)
+			testMode = true
+			break
 		}
 	}
-	if _, err := ease.EvalProgram(source, os.Stdout); err != nil {
+	if len(bundle.Files) == 1 && !strings.Contains(bundle.Entry, "/") {
+		src := bundle.Files[bundle.Entry]
+		if testMode {
+			return executeChecks(src, "<embedded>", false)
+		}
+		if _, err := ease.EvalProgram(src, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ease-app-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to unpack embedded bundle: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for relSlash, src := range bundle.Files {
+		cleanRel := filepath.Clean(filepath.FromSlash(relSlash))
+		if filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, "..") {
+			fmt.Fprintf(os.Stderr, "Invalid embedded bundle path %q\n", relSlash)
+			return 1
+		}
+		target := filepath.Join(tmpDir, cleanRel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create embedded bundle directory: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(target, []byte(src), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write embedded bundle file: %v\n", err)
+			return 1
+		}
+	}
+
+	entryFile := filepath.Join(tmpDir, filepath.FromSlash(bundle.Entry))
+	entrySrc := bundle.Files[bundle.Entry]
+	if testMode {
+		return executeChecksWithWriters(entrySrc, entryFile, false, false, false, os.Stdout, os.Stderr)
+	}
+	if _, err := ease.EvalProgramFromFile(entrySrc, entryFile, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -442,7 +485,7 @@ func cmdBuild(args []string) int {
 		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", inputFile, err)
 		return 1
 	}
-	if err := ease.BuildStandaloneExe("", string(src), outFile); err != nil {
+	if err := ease.BuildStandaloneExeFromFile("", string(src), inputFile, outFile); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
