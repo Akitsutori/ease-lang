@@ -670,7 +670,7 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (with optional tests/trace/JSON)")
 	fmt.Println("  ease check <file.ease> [--json]                      Parse and type-check without executing")
-	fmt.Println("  ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' and 'check' assertions")
+	fmt.Println("  ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions")
 	fmt.Println("  ease build <file.ease> [-o <out>]                    Compile an Ease program into a standalone binary")
 	fmt.Println("  ease ast <file.ease> [--json]                        Inspect parsed defs, functions, checks, and statements")
 	fmt.Println("  ease tokens <file.ease>                              Inspect lexer tokens with line/column positions")
