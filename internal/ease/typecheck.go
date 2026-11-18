@@ -12,6 +12,14 @@ type typeDefInfo struct {
 	isRecord bool
 }
 
+type modTypeInfo struct {
+	alias  string
+	defs   map[string]*DefDecl
+	unions map[string]*UnionDecl
+	funcs  map[string]*FuncDecl
+	consts map[string]Expr
+}
+
 type fieldSchema struct {
 	anyText   bool
 	anyNumber bool
@@ -27,6 +35,7 @@ type varTypeState struct {
 	unionName           string
 	exactRecord         string
 	exactNonRecord      bool
+	exactBaseType       string
 	listElemType        string
 	excludedRecords     map[string]bool
 	inlineUnionLabel    string
@@ -124,6 +133,87 @@ func validateProgramTypes(prog *Program, source string) error {
 		funcNames[fn.Name] = fn.Line
 	}
 
+	modules := make(map[string]modTypeInfo)
+	for _, imp := range prog.Imports {
+		if !imp.IsFileImport {
+			continue
+		}
+		if _, isBuiltin := builtinArities[imp.Alias]; isBuiltin {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a built-in function", imp.Alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, isType := known[imp.Alias]; isType {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'def' type", imp.Alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, isFunc := funcNames[imp.Alias]; isFunc {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Cannot import module as %q: it conflicts with a 'to' function", imp.Alias),
+				"Choose a different module alias after 'as'.",
+			)
+		}
+		if _, dup := modules[imp.Alias]; dup {
+			return newError(
+				"TypeError",
+				imp.Line,
+				imp.Col,
+				source,
+				fmt.Sprintf("Duplicate module alias %q", imp.Alias),
+				"Each imported file must have a unique alias after 'as'.",
+			)
+		}
+		if imp.ModuleProg == nil {
+			continue
+		}
+		if err := validateProgramTypes(imp.ModuleProg, imp.ModuleSource); err != nil {
+			return err
+		}
+		mi := modTypeInfo{
+			alias:  imp.Alias,
+			defs:   make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
+			unions: make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
+			funcs:  make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
+			consts: make(map[string]Expr),
+		}
+		for _, d := range imp.ModuleProg.Defs {
+			mi.defs[d.Name] = d
+			qual := imp.Alias + "." + d.Name
+			known[qual] = typeDefInfo{line: imp.Line, imported: true, isRecord: true}
+			defs[qual] = d
+		}
+		for _, u := range imp.ModuleProg.Unions {
+			mi.unions[u.Name] = u
+			qual := imp.Alias + "." + u.Name
+			known[qual] = typeDefInfo{line: imp.Line, imported: true, isRecord: false}
+			unions[qual] = u
+		}
+		for _, fn := range imp.ModuleProg.Functions {
+			mi.funcs[fn.Name] = fn
+		}
+		for _, s := range imp.ModuleProg.Body {
+			if cs, ok := s.(*ConstDeclStmt); ok {
+				mi.consts[cs.Name] = cs.Value
+			}
+		}
+		modules[imp.Alias] = mi
+	}
+
 	v := &typeValidator{
 		source:         source,
 		known:          known,
@@ -132,7 +222,8 @@ func validateProgramTypes(prog *Program, source string) error {
 		consts:         consts,
 		constExprs:     constExprs,
 		funcNames:      funcNames,
-		resolvedUnions: make(map[string][]resolvedUnionVariant, len(prog.Unions)),
+		modules:        modules,
+		resolvedUnions: make(map[string][]resolvedUnionVariant, len(unions)),
 		scope:          newTypeScope(nil),
 	}
 
@@ -188,6 +279,7 @@ type typeValidator struct {
 	consts          map[string]int
 	constExprs      map[string]Expr
 	funcNames       map[string]int
+	modules         map[string]modTypeInfo
 	resolvedUnions  map[string][]resolvedUnionVariant
 	scope           *typeScope
 	inErrorTestExpr bool
@@ -214,6 +306,16 @@ func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind st
 			v.source,
 			fmt.Sprintf("Cannot name %s %q the same as a 'to' function", kind, name),
 			fmt.Sprintf("Choose a different %s name so calls to '%s' remain unambiguous.", kind, name),
+		)
+	}
+	if _, isMod := v.modules[name]; isMod {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Cannot name %s %q the same as an imported module alias", kind, name),
+			fmt.Sprintf("Choose a different %s name.", kind),
 		)
 	}
 	return nil
@@ -355,6 +457,18 @@ func (v *typeValidator) exprToPatternVariants(e Expr) ([]resolvedUnionVariant, b
 		}
 		if sub, ok := v.resolvedUnions[ex.Name]; ok {
 			return sub, true
+		}
+	case *FieldExpr:
+		if id, ok := ex.Target.(*IdentExpr); ok {
+			if _, isMod := v.modules[id.Name]; isMod {
+				qual := id.Name + "." + ex.Field
+				if v.defs[qual] != nil {
+					return []resolvedUnionVariant{{kind: variantRecord, recordName: qual}}, true
+				}
+				if sub, ok := v.resolvedUnions[qual]; ok {
+					return sub, true
+				}
+			}
 		}
 	}
 	return nil, false
@@ -669,6 +783,43 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 						scope.vars[id.Name] = next
 					}
 				}
+			case *FieldExpr:
+				if modId, ok := rhs.Target.(*IdentExpr); ok {
+					if _, isMod := v.modules[modId.Name]; isMod {
+						qual := modId.Name + "." + rhs.Field
+						if v.defs[qual] != nil {
+							if effective {
+								next.exactRecord = qual
+								next.exactNonRecord = false
+							} else {
+								if next.exactRecord == qual {
+									next.exactRecord = ""
+								}
+								if next.excludedRecords == nil {
+									next.excludedRecords = make(map[string]bool)
+								}
+								next.excludedRecords[qual] = true
+							}
+							scope.vars[id.Name] = next
+						} else if uVars, isU := v.resolvedUnions[qual]; isU {
+							if effective {
+								next.unionName = qual
+								hasRec := false
+								for _, uv := range uVars {
+									if uv.kind == variantRecord {
+										hasRec = true
+										break
+									}
+								}
+								if !hasRec {
+									next.exactRecord = ""
+									next.exactNonRecord = true
+								}
+								scope.vars[id.Name] = next
+							}
+						}
+					}
+				}
 			case *StringExpr, *NumberExpr, *UnaryExpr:
 				if effective {
 					next.exactRecord = ""
@@ -701,9 +852,53 @@ func (v *typeValidator) typeStateFromName(name string) varTypeState {
 		return varTypeState{exactRecord: name}
 	}
 	if name == "text" || name == "number" {
-		return varTypeState{exactNonRecord: true}
+		return varTypeState{exactNonRecord: true, exactBaseType: name}
 	}
 	return varTypeState{}
+}
+
+func (v *typeValidator) staticAddOperandType(st varTypeState) string {
+	if st.exactBaseType != "" {
+		return st.exactBaseType
+	}
+	if st.exactRecord != "" {
+		return st.exactRecord
+	}
+	if st.listElemType != "" {
+		return "list"
+	}
+	var variants []resolvedUnionVariant
+	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
+		variants = st.inlineUnionVariants
+	} else if st.unionName != "" {
+		variants = v.resolvedUnions[st.unionName]
+	}
+	if len(variants) == 0 {
+		return ""
+	}
+	kind := ""
+	for _, vr := range variants {
+		cur := ""
+		switch vr.kind {
+		case variantStringLit:
+			cur = "text"
+		case variantNumberLit:
+			cur = "number"
+		case variantBaseType:
+			cur = vr.baseType
+		case variantRecord:
+			cur = "record"
+		}
+		if cur == "" {
+			return ""
+		}
+		if kind == "" {
+			kind = cur
+		} else if kind != cur {
+			return ""
+		}
+	}
+	return kind
 }
 
 func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
@@ -719,6 +914,18 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *TypedListExpr:
 		return varTypeState{listElemType: ex.ElemType}
+	case *ListExpr:
+		if len(ex.Elements) == 0 {
+			return varTypeState{listElemType: "any"}
+		}
+		firstSt := v.inferExprTypeState(ex.Elements[0])
+		if firstSt.exactBaseType != "" {
+			return varTypeState{listElemType: firstSt.exactBaseType}
+		}
+		if firstSt.exactRecord != "" {
+			return varTypeState{listElemType: firstSt.exactRecord}
+		}
+		return varTypeState{listElemType: "any"}
 	case *IdentExpr:
 		if v.defs[ex.Name] != nil {
 			return varTypeState{exactRecord: ex.Name}
@@ -743,6 +950,19 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "error" && (ex.Field == "type" || ex.Field == "message") && v.inErrorBlock {
 			return varTypeState{exactNonRecord: true}
 		}
+		if id, ok := ex.Target.(*IdentExpr); ok {
+			if mod, isMod := v.modules[id.Name]; isMod {
+				if mod.defs[ex.Field] != nil {
+					return varTypeState{exactRecord: id.Name + "." + ex.Field}
+				}
+				if mod.unions[ex.Field] != nil {
+					return varTypeState{unionName: id.Name + "." + ex.Field}
+				}
+				if cExpr, isConst := mod.consts[ex.Field]; isConst {
+					return v.inferExprTypeState(cExpr)
+				}
+			}
+		}
 		targetSt := v.inferExprTypeState(ex.Target)
 		if targetSt.exactRecord != "" {
 			if variants, label, ok := v.fieldUnionVariants(targetSt.exactRecord, ex.Field); ok {
@@ -757,8 +977,10 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if targetSt.listElemType != "" {
 			return v.typeStateFromName(targetSt.listElemType)
 		}
-	case *StringExpr, *InterpStringExpr, *NumberExpr, *UnaryExpr:
-		return varTypeState{exactNonRecord: true}
+	case *StringExpr, *InterpStringExpr:
+		return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+	case *NumberExpr, *UnaryExpr:
+		return varTypeState{exactNonRecord: true, exactBaseType: "number"}
 	case *BinaryExpr:
 		switch ex.Op {
 		case "+", "-", "*", "/", "%":
@@ -767,7 +989,16 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			if leftSt.listElemType == "number" || rightSt.listElemType == "number" {
 				return varTypeState{listElemType: "number"}
 			}
-			return varTypeState{exactNonRecord: true}
+			if ex.Op == "+" {
+				if leftSt.exactBaseType == "text" && rightSt.exactBaseType == "text" {
+					return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+				}
+				if leftSt.exactBaseType == "number" && rightSt.exactBaseType == "number" {
+					return varTypeState{exactNonRecord: true, exactBaseType: "number"}
+				}
+				return varTypeState{exactNonRecord: true}
+			}
+			return varTypeState{exactNonRecord: true, exactBaseType: "number"}
 		}
 	case *CallExpr:
 		switch ex.Callee {
@@ -948,6 +1179,27 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					"Vector arithmetic requires numeric lists.",
 				)
 			}
+			if ex.Op == "+" {
+				lt := v.staticAddOperandType(leftSt)
+				rt := v.staticAddOperandType(rightSt)
+				if lt != "" && rt != "" {
+					allowed := (lt == "text" && rt == "text") ||
+						(lt == "number" && rt == "number") ||
+						(lt == "list" && rt == "list") ||
+						(lt == "list" && rt == "number") ||
+						(lt == "number" && rt == "list")
+					if !allowed {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("Cannot add %s and %s with '+'", lt, rt),
+							"Use string interpolation '\"{a}{b}\"' or explicit 'as text' conversion to combine text with other values.",
+						)
+					}
+				}
+			}
 		}
 		return nil
 
@@ -986,6 +1238,29 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return nil
 			}
 			if id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
+				return nil
+			}
+			if mod, isMod := v.modules[id.Name]; isMod {
+				if mod.funcs[ex.Field] != nil {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("Cannot access module function %q on '%s' with '.'", ex.Field, id.Name),
+						fmt.Sprintf("Use ':' to call module functions, e.g. '%s:%s ...'.", id.Name, ex.Field),
+					)
+				}
+				if mod.defs[ex.Field] == nil && mod.unions[ex.Field] == nil && mod.consts[ex.Field] == nil {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("Module %q has no member %q", id.Name, ex.Field),
+						fmt.Sprintf("Check the definitions exported by module %q.", id.Name),
+					)
+				}
 				return nil
 			}
 			if st, tracked := v.lookupVar(id.Name); tracked {
@@ -1053,6 +1328,18 @@ func (v *typeValidator) checkExpr(e Expr) error {
 	case *WithExpr:
 		if err := v.checkExpr(ex.Base); err != nil {
 			return err
+		}
+		if id, ok := ex.Base.(*IdentExpr); ok {
+			if _, isMod := v.modules[id.Name]; isMod {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Cannot use 'with' on module %q", id.Name),
+					"'with' only updates 'def' blueprints, records, or lists of records.",
+				)
+			}
 		}
 		baseSt := v.inferExprTypeState(ex.Base)
 		if baseSt.listElemType != "" {
@@ -1124,7 +1411,30 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		return condErr
 
 	case *CallExpr:
-		if !v.inErrorTestExpr && (ex.Callee == "sum" || ex.Callee == "avg") && len(ex.Args) >= 1 {
+		if ex.Module != "" {
+			mod, isMod := v.modules[ex.Module]
+			if !isMod {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Unknown module %q", ex.Module),
+					"Import the file module with 'import \"./file.ease\" as <alias>' first.",
+				)
+			}
+			if mod.funcs[ex.Callee] == nil {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Module %q has no function %q", ex.Module, ex.Callee),
+					fmt.Sprintf("Define 'to %s ...' in module %q.", ex.Callee, ex.Module),
+				)
+			}
+		}
+		if !v.inErrorTestExpr && ex.Module == "" && (ex.Callee == "sum" || ex.Callee == "avg") && len(ex.Args) >= 1 {
 			argSt := v.inferExprTypeState(ex.Args[0])
 			if (argSt.listElemType != "" && argSt.listElemType != "number") || argSt.exactRecord != "" {
 				return newError(

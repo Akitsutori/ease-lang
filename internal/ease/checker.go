@@ -31,12 +31,32 @@ type CheckReport struct {
 
 // RunChecks executes all `test` blocks in `source`.
 func RunChecks(source string) (*CheckReport, error) {
-	return RunChecksWithTrace(source, nil)
+	return runChecksWithOptions(source, "", nil)
+}
+
+// RunChecksFromFile executes all `test` blocks in `source` resolved relative to `filePath`.
+func RunChecksFromFile(source string, filePath string) (*CheckReport, error) {
+	return runChecksWithOptions(source, filePath, nil)
 }
 
 // RunChecksWithTrace executes all `test` blocks, writing optional trace logs to `trace`.
 func RunChecksWithTrace(source string, trace io.Writer) (*CheckReport, error) {
-	prog, err := ParseProgram(source)
+	return runChecksWithOptions(source, "", trace)
+}
+
+// RunChecksWithTraceFromFile executes all `test` blocks resolved relative to `filePath`, writing optional trace logs to `trace`.
+func RunChecksWithTraceFromFile(source string, filePath string, trace io.Writer) (*CheckReport, error) {
+	return runChecksWithOptions(source, filePath, trace)
+}
+
+func runChecksWithOptions(source string, filePath string, trace io.Writer) (*CheckReport, error) {
+	var prog *Program
+	var err error
+	if filePath != "" {
+		prog, err = ParseProgramFromFile(source, filePath)
+	} else {
+		prog, err = ParseProgram(source)
+	}
 	if err != nil {
 		return nil, err
 	}

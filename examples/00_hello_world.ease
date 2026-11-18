@@ -1,11 +1,11 @@
 # Minimalbeispiel: Hallo Welt mit String-Interpolation
 
-to greet name
-    "Hallo {name}, willkommen bei ease!"
+to greet name i
+    "Hallo {name}, willkommen bei ease!{i}"
 end
 
 test
-    do greet "Welt" is "Hallo Welt, willkommen bei ease!"
+    greet "Welt" "" is "Hallo Welt, willkommen bei ease!"
 end
 
-say do greet "Welt"
+say greet "Welt" "!"

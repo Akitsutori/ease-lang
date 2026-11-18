@@ -2283,3 +2283,253 @@ end
 		t.Fatalf("expected NaN CSV number error, got: %v", err)
 	}
 }
+
+func TestFileModules(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Write billing.ease with constants, def, union, 0/1/2-arg verbs, and a module-local test block.
+	billingPath := filepath.Join(dir, "billing.ease")
+	billingSrc := `def default_tax = 0.19
+
+def status = "open" | "paid"
+
+def invoice
+  id = ""
+  net = 0
+  state = "open"
+end
+
+def outcome = invoice | "empty"
+
+to version
+  "v1"
+end
+
+to total inv
+  inv.net * (1 + default_tax)
+end
+
+to apply_tax amount rate
+  amount * (1 + rate)
+end
+
+test "module internal check should be ignored on import"
+  1 is 2
+end
+`
+	if err := os.WriteFile(billingPath, []byte(billingSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Write two sibling modules with colliding names to verify encapsulation.
+	aPath := filepath.Join(dir, "mod_a.ease")
+	bPath := filepath.Join(dir, "mod_b.ease")
+	if err := os.WriteFile(aPath, []byte("def rate = 10\ndef item\n  label = \"A\"\nend\nto tag x\n  \"A:\" + x\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("def rate = 20\ndef item\n  label = \"B\"\nend\nto tag x\n  \"B:\" + x\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Nested relative import test: sub/helper.ease imports ../mod_a.ease.
+	subDir := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helperPath := filepath.Join(subDir, "helper.ease")
+	if err := os.WriteFile(helperPath, []byte("import \"../mod_a.ease\" as ma\nto double_rate\n  ma.rate * 2\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mainPath := filepath.Join(dir, "main.ease")
+	mainSrc := `import "./billing.ease" as billing
+import "./mod_a.ease" as a
+import "./mod_b.ease" as b
+import "./sub/helper.ease" as helper
+
+def item
+  label = "local"
+end
+
+to tag x
+  "L:" + x
+end
+
+inv = billing.invoice with id = "INV-1", net = 100
+inv2 = billing.invoice with id = "INV-1", net = 100
+
+raw = decode_json '[{"id": "INV-2", "net": 200, "state": "paid"}]'
+typed_list = raw as billing.invoice
+first = typed_list.0
+
+res = (billing.invoice with id = "INV-3", net = 50) as billing.outcome
+res_label = ""
+check
+  res is billing.invoice -> res_label = res.id
+  res is "empty" -> res_label = "none"
+end
+
+say billing:version
+say billing.default_tax
+say billing:total inv
+say billing:apply_tax 100 0.05
+check inv is billing.invoice -> say "inv_type_ok"
+check inv is inv2 -> say "inv_eq_ok"
+check first.state is "paid" -> say "first_paid_ok"
+say res_label
+say (a:tag "x") + "|" + (b:tag "y") + "|" + (tag "z")
+say a.rate + b.rate
+say helper:double_rate
+
+test "main checks pass without running billing's failing test"
+  inv is billing.invoice
+  inv is inv2
+  first.state is "paid"
+  billing:total inv is 119
+  billing:apply_tax 100 0.25 is 125
+  helper:double_rate is 20
+end
+`
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if _, err := EvalProgramFromFile(mainSrc, mainPath, &out); err != nil {
+		t.Fatalf("EvalProgramFromFile failed: %v", err)
+	}
+	expected := "v1\n0.19\n119\n105\ninv_type_ok\ninv_eq_ok\nfirst_paid_ok\nINV-3\nA:x|B:y|L:z\n30\n20\n"
+	if out.String() != expected {
+		t.Fatalf("unexpected output:\ngot:\n%s\nwant:\n%s", out.String(), expected)
+	}
+
+	report, err := RunChecksFromFile(mainSrc, mainPath)
+	if err != nil {
+		t.Fatalf("RunChecksFromFile failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 6 {
+		t.Fatalf("expected 6 passed / 0 failed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Negative tests:
+	// a) Missing file
+	if _, err := ParseProgramFromFile("import \"./missing.ease\" as m\n", mainPath); err == nil || !strings.Contains(err.Error(), "ImportError") {
+		t.Fatalf("expected ImportError for missing file, got: %v", err)
+	}
+
+	// b) Cyclic import
+	cycA := filepath.Join(dir, "cyc_a.ease")
+	cycB := filepath.Join(dir, "cyc_b.ease")
+	_ = os.WriteFile(cycA, []byte("import \"./cyc_b.ease\" as b\n"), 0o644)
+	_ = os.WriteFile(cycB, []byte("import \"./cyc_a.ease\" as a\n"), 0o644)
+	if _, err := ParseProgramFromFile("import \"./cyc_b.ease\" as b\n", cycA); err == nil || !strings.Contains(err.Error(), "Cyclic import detected") {
+		t.Fatalf("expected cyclic import error, got: %v", err)
+	}
+
+	// c) Dot call on module function
+	if _, err := ParseProgramFromFile("import \"./billing.ease\" as billing\nx = billing.total\n", mainPath); err == nil || !strings.Contains(err.Error(), "Use ':' to call module functions") {
+		t.Fatalf("expected ':' hint for billing.total, got: %v", err)
+	}
+
+	// d) Unknown module function
+	if _, err := ParseProgramFromFile("import \"./billing.ease\" as billing\nx = billing:nope\n", mainPath); err == nil || !strings.Contains(err.Error(), "has no function \"nope\"") {
+		t.Fatalf("expected unknown module function error, got: %v", err)
+	}
+
+	// e) Non-exhaustive check on module union
+	nonExh := "import \"./billing.ease\" as billing\nr = billing.invoice with id = \"1\", net = 1\ncheck r\n  is billing.invoice -> say r.id\nend\n"
+	if _, err := ParseProgramFromFile(nonExh, mainPath); err != nil {
+		// Note: r is exactRecord billing.invoice here unless inferred as union, so test an inline/casted union value:
+	}
+	nonExhUnion := "import \"./billing.ease\" as billing\nr = (billing.invoice with id = \"1\", net = 1) as billing.outcome\ncheck\n  r is billing.invoice -> say r.id\nend\n"
+	if _, err := ParseProgramFromFile(nonExhUnion, mainPath); err == nil || !strings.Contains(err.Error(), "Non-exhaustive check") {
+		t.Fatalf("expected non-exhaustive check error for billing.outcome, got: %v", err)
+	}
+
+	// f) Reassigning module alias
+	if _, err := EvalProgramFromFile("import \"./billing.ease\" as billing\nbilling = 1\n", mainPath, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "imported module alias") {
+		t.Fatalf("expected module alias reassignment error, got: %v", err)
+	}
+
+	// g) `with` on module alias
+	if _, err := ParseProgramFromFile("import \"./billing.ease\" as billing\nx = billing with net = 1\n", mainPath); err == nil || !strings.Contains(err.Error(), "Cannot use 'with' on module") {
+		t.Fatalf("expected with-on-module error, got: %v", err)
+	}
+}
+
+func TestStrictPlusOperator(t *testing.T) {
+	// Happy path: number + number, text + text (NFC normalized), numeric_list + numeric_list / number
+	happySrc := `say "hello " + "world"
+say 10 + 32
+say "a" + "\u0308" is "ä"
+`
+	// Note: conditions cannot be passed to `say`, so test `"a" + "\u0308" is "ä"` in a `test` block.
+	_ = happySrc
+	src := `def user
+  name = "Ada"
+end
+
+to bad_add a b
+  a + b
+end
+
+say "hello " + "world"
+say 10 + 32
+say "a" + "b"
+
+test "strict + operator happy and negative cases"
+  ("hello " + "world") is "hello world"
+  (10 + 32) is 42
+  ((list 1, 2) + (list 3, 4)) is (list 4, 6)
+  ("41" + 1) is error
+  (1 + "41") is error
+  ("user: " + user) is error
+  ("items: " + (list 1, 2)) is error
+  ((list "a") + "b") is error
+  (bad_add "41" 1) is error
+  ("41" + 1) ->
+    error.type is "TypeError"
+    error.message is "Cannot add text and number with '+'"
+  end
+  (1 + "41") ->
+    error.type is "TypeError"
+    error.message is "Cannot add number and text with '+'"
+  end
+end
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	if out.String() != "hello world\n42\nab\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 13 {
+		t.Fatalf("expected 13 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Static TypeError checks outside `is error`
+	for _, bad := range []struct {
+		code string
+		want string
+	}{
+		{`x = "41" + 1`, `Cannot add text and number with '+'`},
+		{`x = 1 + "41"`, `Cannot add number and text with '+'`},
+		{"def user\n  name = \"Ada\"\nend\nx = \"user: \" + user\n", `Cannot add text and user with '+'`},
+		{`x = "items: " + (list 1, 2)`, `Cannot add text and list with '+'`},
+	} {
+		if _, err := ParseProgram(bad.code); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Fatalf("expected static TypeError %q for %q, got: %v", bad.want, bad.code, err)
+		}
+	}
+
+	// Runtime TypeError for dynamically typed parameters
+	if _, err := EvalProgram("to f a b\n  a + b\nend\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
+		t.Fatalf("expected runtime TypeError for dynamic mixed '+', got: %v", err)
+	}
+}

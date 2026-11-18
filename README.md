@@ -513,7 +513,7 @@ Ease is explicitly designed to minimize token ambiguity, context overhead, and r
 1. **One-page learnable grammar ([`llms.txt`](llms.txt))**: A model with zero prior Ease training data can load the entire formal grammar and standard library in a single small prompt without conflicting dialects.
 2. **One canonical syntax per construct**: Function declarations (`to add a b`) and arity-based calls (`add 2 3`, `sum_squares range 1 5`) never use brackets or commas; equality and type assertions both use `is` / `is not` (no `==`/`!=`/`is-not` aliases); blocks always close with `end`. Commas appear only in `list` literals and single-line `with` updates.
 3. **Self-documenting states instead of `bool`, enforced by `def`/`to`**: Removing `bool` eliminates boolean blindness — conditions (`amount >= 50`) live inside `check` and `test`, while returned states use explicit `def` union types (`"yes" | "no"`, `"open" | "locked"`). At the same time, the `def` (noun) / `to` (infinitive verb) split exposes sloppy names like `to can_ship` immediately when read aloud.
-4. **Zero implicit magic + repairable diagnostics**: Parsing (`decode_json`) is strictly separated from schema validation (`as <def>`, where every declared field is mandatory without silent default-filling; defaults stay exclusively in `with`). Unknown types (`as ö`, `as bool`) and mismatched fields abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
+4. **Zero implicit magic + repairable diagnostics**: Parsing (`decode_json`) is strictly separated from schema validation (`as <def>`, where every declared field is mandatory without silent default-filling; defaults stay exclusively in `with`). `+` never coerces mixed types (`number + number`, `text + text`, and numeric-list arithmetic only; `"41" + 1` or `"x: " + rec` raises `TypeError` — use `"{a}{b}"` or `as text`). Unknown types (`as ö`, `as bool`) and mismatched fields abort immediately with exact `Line`/`Col`, source caret, `"Did you mean ...?"` suggestions, and actionable hints.
 5. **Built-in self-verification & machine interfaces**: Agents can verify their own output in one command with `ease test` (including `is error` / `-> error.type` assertions and block-context diagnostics) and inspect structure deterministically via `ease ast`, `ease tokens`, and `ease lsp`.
 
 ---
@@ -617,6 +617,46 @@ paid = entries where it.status is "paid"
 say "Paid count: {count paid}"
 ```
 
+### File Modules (`import "./file.ease" as mod`)
+
+Split larger Ease programs into reusable `.ease` files without polluting the global namespace:
+
+```ease
+# billing.ease
+def default_tax = 0.19
+
+def invoice
+    id    = ""
+    net   = 0
+    state = "open"
+end
+
+def outcome = invoice | "empty"
+
+to total inv
+    inv.net * (1 + default_tax)
+end
+```
+
+```ease
+# main.ease
+import "./billing.ease" as billing
+
+inv = billing.invoice with id = "INV-1", net = 100
+say billing:total inv          # 119
+say billing.default_tax        # 0.19
+
+res = inv as billing.outcome
+check
+    res is billing.invoice -> say res.id
+    res is "empty"         -> say "nothing"
+end
+```
+
+- **Paths**: File imports must be relative to the importing file (`./...` or `../...`) and end in `.ease`; cyclic imports are rejected with `ImportError`.
+- **Encapsulation**: Functions are called with `:` (`mod:verb arg1 arg2`), while `def` blueprints, unions, and constants are accessed with `.` (`mod.invoice`, `mod.default_tax`). Two modules can define identically named functions or `def` types without colliding.
+- **Isolation**: Imported modules run in their own isolated environment; module-local `test` blocks are not executed on import.
+
 ---
 
 ## Formal Grammar (BNF / EBNF Specification)
@@ -650,7 +690,7 @@ Keywords:
   and  or  not  text  number  list
 
 Operators & Punctuation:
-  ->  (  )  ,  .  |  =  <  <=  >  >=  +  -  *  /  %
+  ->  (  )  ,  .  :  |  =  <  <=  >  >=  +  -  *  /  %
 ```
 
 ### Program & Top-Level Declarations
@@ -664,7 +704,7 @@ top_item       ::= import_decl
                  | top_test_blk
                  | stmt
 
-import_decl    ::= "import" IDENT stmt_end
+import_decl    ::= "import" ( IDENT | STRING "as" IDENT ) stmt_end
 
 func_decl      ::= "to" IDENT { IDENT }
                    ( NL | &"end" )

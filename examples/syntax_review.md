@@ -8,8 +8,8 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
 ---
 
 ## 1. Lexical Structure (`README.md`)
-- **Happy Path**: Unicode identifier `größe_1 = 42`, comments `# ...`, escapes `\n \t \" \\ \{`, interpolation `"Hi {name}: {1 + 2}"`, raw string `'{"id": 7}'` (1:1 without interpolation or escapes)
-- **10 Negative Cases**:
+- **Happy Path**: Unicode identifier `größe_1 = 42`, comments `# ...`, escapes `\n \t \" \\ \{`, interpolation `"Hi {name}: {1 + 2}"`, raw string `'{"id": 7}'` (1:1 without interpolation or escapes), strict `+` (`"a" + "b"`, `1 + 2`, `(list 1, 2) + 3`)
+- **Negative Cases**:
   1. Unterminated string: `"hello`
   2. Multi-line string literal: `"hello\nworld"`
   3. Unterminated raw string `'...'`: `'hello`
@@ -20,6 +20,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   8. Illegal character outside string: `@x = 1`
   9. Leading dot number: `.5`
   10. Trailing dot number: `5.`
+  11. Mixed `+` coercion rejected: `"41" + 1`, `1 + "41"`, `"user: " + u`, `"items: " + (list 1, 2)` (`TypeError`)
 
 ## 2. Variables & Constants (`README.md`)
 - **Happy Path**: `x = 10`, `x = x + 5`, `def pi = 3.14`
@@ -120,15 +121,15 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `xs.(1.5)`, `x as csv`, `save p (list 256)`, malformed/duplicate CSV -> `is error` in `.ease`)
 
 ## 9. Built-in Tests (`test`) & Imports (`import`) (`README.md`)
-- **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network`, `import screen`
-- **10 Negative Cases**:
+- **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network`, `import screen`, `import "./file.ease" as mod` (`mod:verb`, `mod.def`, `mod.const`, `as mod.def`, `is mod.def`)
+- **Negative Cases**:
   1. `test` missing `end`
   2. Nested `test` inside `to`
   3. Nested `test` inside `loop`
   4. Legacy `test:` with colon
   5. `check "label"` missing `end`
   6. Legacy `raises` rejected (`1 / 0 raises "x"`)
-  7. `import nonexistent_mod`
-  8. `import "network"` (string instead of identifier)
+  7. `import nonexistent_mod` / missing `.ease` file (`ImportError`)
+  8. `import "network"` (string without `as alias`) or non-relative / cyclic `.ease` import
   9. `import network` inside `to`
-  10. `import` missing module name (`import\n`)
+  10. `import` missing module name (`import\n`), `mod.fn` dot call (`TypeError` hinting `mod:fn`), `mod = 1`, `mod with ...`

@@ -9,6 +9,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type binding struct {
@@ -165,6 +167,7 @@ type Evaluator struct {
 	trace            io.Writer
 	inReader         *bufio.Reader
 	funcs            map[string]*FuncDecl
+	modules          map[string]*Evaluator
 	global           *Env
 	callDepth        int
 	initErr          error
@@ -187,6 +190,9 @@ func (ev *Evaluator) Close() {
 	}
 	if ev.httpClient != nil {
 		ev.httpClient.CloseIdleConnections()
+	}
+	for _, modEv := range ev.modules {
+		modEv.Close()
 	}
 }
 
@@ -219,6 +225,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		out:        out,
 		inReader:   bufio.NewReader(in),
 		funcs:      make(map[string]*FuncDecl),
+		modules:    make(map[string]*Evaluator),
 		global:     NewEnv(nil),
 		httpClient: &http.Client{},
 	}
@@ -233,6 +240,32 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 	if prog == nil {
 		return nil
+	}
+	for _, imp := range prog.Imports {
+		if !imp.IsFileImport || imp.ModuleProg == nil {
+			continue
+		}
+		if _, exists := ev.modules[imp.Alias]; exists {
+			continue
+		}
+		modEv := NewEvaluatorWithInput(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out)
+		modEv.httpClient = ev.httpClient
+		modEv.SetHeadlessScreen(ev.headlessScreen)
+		modEv.SetTrace(ev.trace)
+		if modEv.initErr != nil {
+			return modEv.initErr
+		}
+		if _, err := modEv.ExecStatements(imp.ModuleProg.Body, modEv.global); err != nil {
+			return err
+		}
+		modVal := &ModuleValue{
+			Name:   imp.Alias,
+			Env:    modEv.global,
+			Funcs:  modEv.funcs,
+			Source: imp.ModuleSource,
+		}
+		ev.modules[imp.Alias] = modEv
+		ev.global.Define(imp.Alias, modVal, false)
 	}
 	for _, fn := range prog.Functions {
 		ev.funcs[fn.Name] = fn
@@ -416,16 +449,32 @@ func EvalProgramWithInput(source string, in io.Reader, out io.Writer) (Value, er
 
 // EvalProgramWithTrace parses and executes `source` with custom stdin, stdout, and optional trace output.
 func EvalProgramWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, in, out, trace, false)
+	return evalProgramWithOptions(source, "", in, out, trace, false)
+}
+
+// EvalProgramWithTraceFromFile parses and executes `source` resolved relative to `filePath`.
+func EvalProgramWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
+	return evalProgramWithOptions(source, filePath, in, out, trace, false)
 }
 
 // EvalProgramHeadlessWithTrace parses and executes `source` with headless screen simulation.
 func EvalProgramHeadlessWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, in, out, trace, true)
+	return evalProgramWithOptions(source, "", in, out, trace, true)
 }
 
-func evalProgramWithOptions(source string, in io.Reader, out io.Writer, trace io.Writer, headless bool) (Value, error) {
-	prog, err := ParseProgram(source)
+// EvalProgramHeadlessWithTraceFromFile parses and executes `source` resolved relative to `filePath` with headless screen simulation.
+func EvalProgramHeadlessWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
+	return evalProgramWithOptions(source, filePath, in, out, trace, true)
+}
+
+func evalProgramWithOptions(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer, headless bool) (Value, error) {
+	var prog *Program
+	var err error
+	if filePath != "" {
+		prog, err = ParseProgramFromFile(source, filePath)
+	} else {
+		prog, err = ParseProgram(source)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +489,12 @@ func evalProgramWithOptions(source string, in io.Reader, out io.Writer, trace io
 
 // EvalProgram parses and executes `source`, writing `say` output to `out`.
 func EvalProgram(source string, out io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, os.Stdin, out, nil, false)
+	return evalProgramWithOptions(source, "", os.Stdin, out, nil, false)
+}
+
+// EvalProgramFromFile parses and executes `source` resolved relative to `filePath`, writing `say` output to `out`.
+func EvalProgramFromFile(source string, filePath string, out io.Writer) (Value, error) {
+	return evalProgramWithOptions(source, filePath, os.Stdin, out, nil, false)
 }
 
 // ExecTopLevel runs a sequence of top-level statements in the evaluator's global environment.
@@ -770,7 +824,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 	case *TypedListExpr:
 		if len(e.Rows) == 0 {
 			if e.ElemType != "number" && e.ElemType != "text" {
-				protoVal, ok := ev.global.Lookup(e.ElemType)
+				protoVal, ok := lookupTypeInEnv(ev.global, e.ElemType)
 				if !ok {
 					return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown type %q in 'list as %s'", e.ElemType, e.ElemType), "Define a record with 'def', a union, or use 'number' / 'text'.")
 				}
@@ -782,7 +836,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			return &ListValue{ElemType: e.ElemType}, nil
 		}
-		protoVal, ok := ev.global.Lookup(e.ElemType)
+		protoVal, ok := lookupTypeInEnv(ev.global, e.ElemType)
 		if !ok {
 			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown record type %q in 'list as %s with'", e.ElemType, e.ElemType), "Define it first with 'def "+e.ElemType+" ... end'.")
 		}
@@ -994,6 +1048,30 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if mv, ok := targetVal.(*ModuleValue); ok {
+			if _, isFunc := mv.Funcs[e.Field]; isFunc {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("Use ':' to call module functions, e.g. '%s:%s ...'", mv.Name, e.Field),
+					"Access module constants and blueprints with '.', and call module functions with ':'.",
+				)
+			}
+			val, exists := mv.Env.Lookup(e.Field)
+			if !exists {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("Module %q has no member %q", mv.Name, e.Field),
+					fmt.Sprintf("Check exported 'def' constants, records, or functions in module %q.", mv.Name),
+				)
+			}
+			return val, nil
+		}
 		if mv, ok := targetVal.(*MapValue); ok {
 			val, exists := mv.Fields[e.Field]
 			if !exists {
@@ -1039,6 +1117,16 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		}
 		if lv, isList := baseVal.(*ListValue); isList {
 			return ev.cloneRecordListWithUpdates(lv, e.Updates, env, e.Line, e.Col)
+		}
+		if modVal, isMod := baseVal.(*ModuleValue); isMod {
+			return nil, newError(
+				"RuntimeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'with' on module %q", modVal.Name),
+				fmt.Sprintf("Clone a blueprint inside the module, e.g.: %s.invoice with net = 100", modVal.Name),
+			)
 		}
 		rec, ok := baseVal.(*RecordValue)
 		if !ok {
@@ -1115,6 +1203,13 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			}
 			args[i] = v
 		}
+		if e.Module != "" {
+			modEv, ok := ev.modules[e.Module]
+			if !ok {
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown module %q", e.Module), "")
+			}
+			return modEv.callFunction(e.Callee, args, e.Line, e.Col)
+		}
 		return ev.callFunction(e.Callee, args, e.Line, e.Col)
 	}
 
@@ -1144,9 +1239,9 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 				"'with' on a list only supports lists of 'def' records.",
 			)
 		}
-		protoVal, ok := env.Lookup(lv.ElemType)
+		protoVal, ok := lookupTypeInEnv(env, lv.ElemType)
 		if !ok {
-			protoVal, ok = ev.global.Lookup(lv.ElemType)
+			protoVal, ok = lookupTypeInEnv(ev.global, lv.ElemType)
 		}
 		recProto, isRec := protoVal.(*RecordValue)
 		if !ok || !isRec {
@@ -1322,18 +1417,42 @@ func (ev *Evaluator) evalBinaryOp(op string, left, right Value, line, col int) (
 		if _, isRightList := right.(*ListValue); isRightList {
 			return ev.evalVectorArithmetic("+", left, right, line, col)
 		}
-		if _, lok := left.(string); lok {
-			return FormatValue(left) + FormatValue(right), nil
+		if ls, lok := left.(string); lok {
+			if rs, rok := right.(string); rok {
+				return norm.NFC.String(ls + rs), nil
+			}
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot add %s and %s with '+'", TypeName(left), TypeName(right)),
+				"Use string interpolation '\"{a}{b}\"' or explicit 'as text' conversion to combine text with other values.",
+			)
 		}
 		if _, rok := right.(string); rok {
-			return FormatValue(left) + FormatValue(right), nil
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot add %s and %s with '+'", TypeName(left), TypeName(right)),
+				"Use string interpolation '\"{a}{b}\"' or explicit 'as text' conversion to combine text with other values.",
+			)
 		}
 		ln, lok := left.(float64)
 		rn, rok := right.(float64)
 		if lok && rok {
 			return ln + rn, nil
 		}
-		return nil, newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot add %s and %s", TypeName(left), TypeName(right)), "Use numbers, numeric lists, or strings with '+'.")
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Cannot add %s and %s with '+'", TypeName(left), TypeName(right)),
+			"Use string interpolation '\"{a}{b}\"' or explicit 'as text' conversion to combine text with other values.",
+		)
 
 	case "-", "*", "/", "%":
 		if _, isLeftList := left.(*ListValue); isLeftList {

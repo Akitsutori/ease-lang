@@ -12,7 +12,12 @@ type Program struct {
 
 type ImportDecl struct {
 	posInfo
-	Name string
+	Name         string
+	Path         string
+	Alias        string
+	IsFileImport bool
+	ModuleProg   *Program
+	ModuleSource string
 }
 
 // Stmt is implemented by all Ease statement and check-item AST nodes.
@@ -325,6 +330,7 @@ func (*WhereExpr) exprNode() {}
 
 type CallExpr struct {
 	posInfo
+	Module string
 	Callee string
 	Args   []Expr
 }

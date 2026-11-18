@@ -79,57 +79,76 @@ func (rv resolvedUnionVariant) displayPlain() string {
 }
 
 func (v *typeValidator) resolveAndValidateUnions(prog *Program) error {
-	resolving := make(map[string]bool, len(prog.Unions))
+	resolving := make(map[string]bool, len(v.unions))
 	for _, u := range prog.Unions {
-		if _, err := v.resolveUnion(u, resolving); err != nil {
+		if _, err := v.resolveUnion(u.Name, u, resolving); err != nil {
+			return err
+		}
+	}
+	var names []string
+	for name := range v.unions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, done := v.resolvedUnions[name]; done {
+			continue
+		}
+		if _, err := v.resolveUnion(name, v.unions[name], resolving); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (v *typeValidator) resolveUnion(u *UnionDecl, resolving map[string]bool) ([]resolvedUnionVariant, error) {
-	if cached, ok := v.resolvedUnions[u.Name]; ok {
+func (v *typeValidator) resolveUnion(qualName string, u *UnionDecl, resolving map[string]bool) ([]resolvedUnionVariant, error) {
+	if cached, ok := v.resolvedUnions[qualName]; ok {
 		return cached, nil
 	}
-	if resolving[u.Name] {
+	if resolving[qualName] {
 		return nil, newError(
 			"TypeError",
 			u.Line,
 			u.Col,
 			v.source,
-			fmt.Sprintf("Cyclic reference in union %q", u.Name),
+			fmt.Sprintf("Cyclic reference in union %q", qualName),
 			"Remove recursive union references so each union is finite.",
 		)
 	}
-	resolving[u.Name] = true
-	defer delete(resolving, u.Name)
+	resolving[qualName] = true
+	defer delete(resolving, qualName)
+
+	isExternal := u.Imported || qualName != u.Name
+	modPrefix := ""
+	if pfx, _, hasDot := strings.Cut(qualName, "."); hasDot {
+		modPrefix = pfx
+	}
 
 	var flat []resolvedUnionVariant
 	for _, ve := range u.Variants {
-		if !u.Imported {
+		if !isExternal {
 			if err := v.checkExpr(ve); err != nil {
 				return nil, err
 			}
 		}
-		expanded, err := v.expandUnionVariantExpr(ve, u, resolving)
+		expanded, err := v.expandUnionVariantExpr(ve, u, modPrefix, resolving)
 		if err != nil {
 			return nil, err
 		}
 		flat = append(flat, expanded...)
 	}
 
-	if !u.Imported {
+	if !isExternal {
 		if err := v.validateFlattenedUnion(u, flat); err != nil {
 			return nil, err
 		}
 	}
 
-	v.resolvedUnions[u.Name] = flat
+	v.resolvedUnions[qualName] = flat
 	return flat, nil
 }
 
-func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, resolving map[string]bool) ([]resolvedUnionVariant, error) {
+func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, modPrefix string, resolving map[string]bool) ([]resolvedUnionVariant, error) {
 	line, col := expr.Pos()
 	switch e := expr.(type) {
 	case *StringExpr:
@@ -191,6 +210,31 @@ func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, reso
 			)
 		}
 
+		if modPrefix != "" {
+			qual := modPrefix + "." + e.Name
+			if subUnion, ok := v.unions[qual]; ok {
+				subVariants, err := v.resolveUnion(qual, subUnion, resolving)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]resolvedUnionVariant, len(subVariants))
+				for i, sv := range subVariants {
+					sv.line = line
+					sv.col = col
+					out[i] = sv
+				}
+				return out, nil
+			}
+			if v.defs[qual] != nil {
+				return []resolvedUnionVariant{{
+					kind:       variantRecord,
+					recordName: qual,
+					line:       line,
+					col:        col,
+				}}, nil
+			}
+		}
+
 		if subUnion, ok := v.unions[e.Name]; ok {
 			if !owner.Imported && !subUnion.Imported && line > 0 && subUnion.Line > line {
 				return nil, newError(
@@ -202,7 +246,7 @@ func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, reso
 					fmt.Sprintf("Move 'def %s' above line %d.", e.Name, line),
 				)
 			}
-			subVariants, err := v.resolveUnion(subUnion, resolving)
+			subVariants, err := v.resolveUnion(e.Name, subUnion, resolving)
 			if err != nil {
 				return nil, err
 			}
@@ -254,6 +298,34 @@ func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, reso
 				fmt.Sprintf("Unknown union member %q in %q", e.Name, owner.Name),
 				"Union members must be literals, 'text', 'number', a previously defined 'def' record, or another union.",
 			)
+		}
+
+	case *FieldExpr:
+		if id, ok := e.Target.(*IdentExpr); ok {
+			if _, isMod := v.modules[id.Name]; isMod {
+				qual := id.Name + "." + e.Field
+				if subUnion, ok := v.unions[qual]; ok {
+					subVariants, err := v.resolveUnion(qual, subUnion, resolving)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]resolvedUnionVariant, len(subVariants))
+					for i, sv := range subVariants {
+						sv.line = line
+						sv.col = col
+						out[i] = sv
+					}
+					return out, nil
+				}
+				if v.defs[qual] != nil {
+					return []resolvedUnionVariant{{
+						kind:       variantRecord,
+						recordName: qual,
+						line:       line,
+						col:        col,
+					}}, nil
+				}
+			}
 		}
 	}
 
@@ -374,7 +446,7 @@ func (v *typeValidator) validateDefFields(d *DefDecl) error {
 				if err := v.checkExpr(opt); err != nil {
 					return err
 				}
-				expanded, err := v.expandUnionVariantExpr(opt, tmpUnion, resolving)
+				expanded, err := v.expandUnionVariantExpr(opt, tmpUnion, "", resolving)
 				if err != nil {
 					return err
 				}
@@ -483,6 +555,20 @@ func (v *typeValidator) mergeExprIntoSchema(s *fieldSchema, expr Expr, defaultWi
 				s.records = make(map[string]bool)
 			}
 			s.records[id.Name] = true
+		} else if fe, ok := e.Base.(*FieldExpr); ok {
+			if modId, ok := fe.Target.(*IdentExpr); ok {
+				qual := modId.Name + "." + fe.Field
+				if v.defs[qual] != nil {
+					if s.records == nil {
+						s.records = make(map[string]bool)
+					}
+					s.records[qual] = true
+				} else {
+					s.isDynamic = true
+				}
+			} else {
+				s.isDynamic = true
+			}
 		} else {
 			s.isDynamic = true
 		}
@@ -857,7 +943,7 @@ func (v *typeValidator) fieldUnionVariants(recName, fieldName string) ([]resolve
 			resolving := make(map[string]bool)
 			var flat []resolvedUnionVariant
 			for _, opt := range f.Allowed {
-				expanded, err := v.expandUnionVariantExpr(opt, tmpUnion, resolving)
+				expanded, err := v.expandUnionVariantExpr(opt, tmpUnion, "", resolving)
 				if err != nil {
 					return nil, "", false
 				}

@@ -147,9 +147,9 @@ func cmdRun(args []string) int {
 	}
 	var errEval error
 	if runCheckFirst {
-		_, errEval = ease.EvalProgramHeadlessWithTrace(string(src), os.Stdin, os.Stdout, traceOut)
+		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, os.Stdin, os.Stdout, traceOut)
 	} else {
-		_, errEval = ease.EvalProgramWithTrace(string(src), os.Stdin, os.Stdout, traceOut)
+		_, errEval = ease.EvalProgramWithTraceFromFile(string(src), file, os.Stdin, os.Stdout, traceOut)
 	}
 	if errEval != nil {
 		fmt.Fprintln(os.Stderr, errEval)
@@ -194,9 +194,9 @@ func executeChecksWithOptions(source, label string, traceMode, verbose bool) int
 	var report *ease.CheckReport
 	var err error
 	if traceMode {
-		report, err = ease.RunChecksWithTrace(source, os.Stderr)
+		report, err = ease.RunChecksWithTraceFromFile(source, label, os.Stderr)
 	} else {
-		report, err = ease.RunChecks(source)
+		report, err = ease.RunChecksFromFile(source, label)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -261,7 +261,7 @@ func cmdAst(args []string) int {
 		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", args[0], err)
 		return 1
 	}
-	prog, err := ease.ParseProgram(string(src))
+	prog, err := ease.ParseProgramFromFile(string(src), args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

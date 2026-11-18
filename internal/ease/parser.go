@@ -2,6 +2,9 @@ package ease
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -10,15 +13,19 @@ const maxParseDepth = 256
 
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
-	tokens        []Token
-	source        string
-	pos           int
-	depth         int
-	disallowTopIs bool
-	stopChainedIs bool
-	disallowAs    bool
-	inTestBlock   bool
-	funcArities   map[string]int
+	tokens         []Token
+	source         string
+	sourcePath     string
+	pos            int
+	depth          int
+	disallowTopIs  bool
+	stopChainedIs  bool
+	disallowAs     bool
+	inTestBlock    bool
+	funcArities    map[string]int
+	moduleArities  map[string]map[string]int
+	fileImports    map[string]*Program
+	fileImportSrcs map[string]string
 }
 
 func (p *Parser) enterDepth() error {
@@ -43,25 +50,45 @@ func (p *Parser) exitDepth() {
 
 // ParseProgram lexes and parses `source` into a complete Program AST.
 func ParseProgram(source string) (*Program, error) {
-	return parseProgramWithSeenAndArities(source, map[string]bool{}, nil)
+	return ParseProgramFromFile(source, "")
+}
+
+// ParseProgramFromFile lexes and parses `source` resolving relative file imports against `filePath`.
+func ParseProgramFromFile(source, filePath string) (*Program, error) {
+	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil)
 }
 
 // ParseProgramWithArities lexes and parses `source` with pre-populated function arities (e.g. for REPL chunks).
 func ParseProgramWithArities(source string, extraArities map[string]int) (*Program, error) {
-	return parseProgramWithSeenAndArities(source, map[string]bool{}, extraArities)
+	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities)
 }
 
 func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error) {
-	return parseProgramWithSeenAndArities(source, seen, nil)
+	return parseProgramWithContext(source, "", seen, nil, nil)
 }
 
-func parseProgramWithSeenAndArities(source string, seen map[string]bool, extraArities map[string]int) (*Program, error) {
+func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int) (*Program, error) {
 	tokens, err := NewLexer(source).Tokenize()
 	if err != nil {
 		return nil, err
 	}
-	p := &Parser{tokens: tokens, source: source}
-	arities, err := p.collectSignatures(seen, extraArities)
+	if sourcePath != "" {
+		if abs, absErr := filepath.Abs(sourcePath); absErr == nil {
+			sourcePath = abs
+		}
+		if len(activeStack) == 0 {
+			activeStack = []string{sourcePath}
+		}
+	}
+	p := &Parser{
+		tokens:         tokens,
+		source:         source,
+		sourcePath:     sourcePath,
+		moduleArities:  make(map[string]map[string]int),
+		fileImports:    make(map[string]*Program),
+		fileImportSrcs: make(map[string]string),
+	}
+	arities, err := p.collectSignatures(seen, activeStack, extraArities)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +106,7 @@ func parseProgramWithSeenAndArities(source string, seen map[string]bool, extraAr
 	return prog, nil
 }
 
-func (p *Parser) collectSignatures(seen map[string]bool, extraArities map[string]int) (map[string]int, error) {
+func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, extraArities map[string]int) (map[string]int, error) {
 	arities := make(map[string]int, len(builtinArities)+len(extraArities))
 	for name, arity := range builtinArities {
 		arities[name] = arity
@@ -98,19 +125,67 @@ func (p *Parser) collectSignatures(seen map[string]bool, extraArities map[string
 		tok := p.tokens[i]
 		switch tok.Type {
 		case TOK_IMPORT:
-			if blockDepth == 0 && i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT {
-				modName := p.tokens[i+1].Lexeme
-				if !importSeen[modName] {
-					importSeen[modName] = true
-					if modSrc, err := loadStdModuleSource(modName); err == nil {
-						modProg, err := parseProgramWithSeen(modSrc, importSeen)
-						if err != nil {
-							return nil, err
-						}
-						for _, fn := range modProg.Functions {
-							arities[fn.Name] = len(fn.Params)
+			if blockDepth == 0 && i+1 < len(p.tokens) {
+				if p.tokens[i+1].Type == TOK_IDENT {
+					modName := p.tokens[i+1].Lexeme
+					if !importSeen[modName] {
+						importSeen[modName] = true
+						if modSrc, err := loadStdModuleSource(modName); err == nil {
+							modProg, err := parseProgramWithSeen(modSrc, importSeen)
+							if err != nil {
+								return nil, err
+							}
+							for _, fn := range modProg.Functions {
+								arities[fn.Name] = len(fn.Params)
+							}
 						}
 					}
+				} else if p.tokens[i+1].Type == TOK_STRING && i+3 < len(p.tokens) && p.tokens[i+2].Type == TOK_AS && p.tokens[i+3].Type == TOK_IDENT {
+					pathStr := p.tokens[i+1].Lexeme
+					alias := p.tokens[i+3].Lexeme
+					baseDir := "."
+					if p.sourcePath != "" {
+						baseDir = filepath.Dir(p.sourcePath)
+					}
+					joined := filepath.Clean(filepath.Join(baseDir, pathStr))
+					absPath, err := filepath.Abs(joined)
+					if err != nil {
+						absPath = joined
+					}
+					if slices.Contains(activeStack, absPath) {
+						return nil, newError(
+							"ImportError",
+							tok.Line,
+							tok.Col,
+							p.source,
+							fmt.Sprintf("Cyclic import detected: %s -> %s", filepath.Base(p.sourcePath), pathStr),
+							"Remove the circular import between these module files.",
+						)
+					}
+					rawBytes, readErr := os.ReadFile(absPath)
+					if readErr != nil {
+						return nil, newError(
+							"ImportError",
+							tok.Line,
+							tok.Col,
+							p.source,
+							fmt.Sprintf("Cannot import %q: %v", pathStr, readErr),
+							"Check that the imported file path exists relative to the current file.",
+						)
+					}
+					modSrc := string(rawBytes)
+					nextStack := append(slices.Clone(activeStack), absPath)
+					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil)
+					if modErr != nil {
+						return nil, modErr
+					}
+					modFns := make(map[string]int, len(modProg.Functions))
+					for _, fn := range modProg.Functions {
+						modFns[fn.Name] = len(fn.Params)
+					}
+					p.moduleArities[alias] = modFns
+					p.fileImports[alias] = modProg
+					p.fileImportSrcs[alias] = modSrc
 				}
 			}
 		case TOK_TO:
@@ -223,6 +298,34 @@ func (p *Parser) parseProgram() (*Program, error) {
 		switch p.current().Type {
 		case TOK_IMPORT:
 			impTok := p.advance()
+			if p.check(TOK_STRING) {
+				pathTok := p.advance()
+				if !p.match(TOK_AS) || !p.check(TOK_IDENT) {
+					tok := p.current()
+					return nil, newError(
+						"SyntaxError",
+						tok.Line,
+						tok.Col,
+						p.source,
+						"Expected 'as <alias>' after imported file path",
+						"Example: import \"./billing.ease\" as billing",
+					)
+				}
+				aliasTok := p.advance()
+				if err := p.expectStmtEnd("'import' statement"); err != nil {
+					return nil, err
+				}
+				prog.Imports = append(prog.Imports, &ImportDecl{
+					posInfo:      posInfo{Line: impTok.Line, Col: impTok.Col},
+					Name:         aliasTok.Lexeme,
+					Path:         pathTok.Lexeme,
+					Alias:        aliasTok.Lexeme,
+					IsFileImport: true,
+					ModuleProg:   p.fileImports[aliasTok.Lexeme],
+					ModuleSource: p.fileImportSrcs[aliasTok.Lexeme],
+				})
+				continue
+			}
 			if !p.check(TOK_IDENT) {
 				tok := p.current()
 				return nil, newError(
@@ -230,8 +333,8 @@ func (p *Parser) parseProgram() (*Program, error) {
 					tok.Line,
 					tok.Col,
 					p.source,
-					fmt.Sprintf("Expected module name after 'import', got %q", tok.Lexeme),
-					"Example: import network",
+					fmt.Sprintf("Expected module name or file path after 'import', got %q", tok.Lexeme),
+					"Example: import network or import \"./billing.ease\" as billing",
 				)
 			}
 			modTok := p.advance()
@@ -1451,60 +1554,72 @@ func (p *Parser) parsePostfix() (Expr, error) {
 		}
 
 		if !p.disallowAs && p.match(TOK_AS) {
-			if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
-				tok := p.current()
-				return nil, newError(
-					"SyntaxError",
-					tok.Line,
-					tok.Col,
-					p.source,
-					fmt.Sprintf("Expected target type ('number', 'text', or a 'def' type) after 'as', got %q", tok.Lexeme),
-					"Example: ask \"Age?\" as number or raw as api_user",
-				)
+			typeName, typeLine, typeCol, err := p.parseTypeTarget(
+				"Expected target type ('number', 'text', or a 'def' type) after 'as'",
+				"Example: ask \"Age?\" as number or raw as billing.invoice",
+			)
+			if err != nil {
+				return nil, err
 			}
-			typeTok := p.advance()
 			line, col := expr.Pos()
 			expr = &CastExpr{
 				posInfo:  posInfo{Line: line, Col: col},
 				Target:   expr,
-				TypeName: typeTok.Lexeme,
-				TypeLine: typeTok.Line,
-				TypeCol:  typeTok.Col,
+				TypeName: typeName,
+				TypeLine: typeLine,
+				TypeCol:  typeCol,
 			}
 			continue
 		}
 
 		if id, ok := expr.(*IdentExpr); ok {
+			if p.match(TOK_COLON) {
+				modFns, isMod := p.moduleArities[id.Name]
+				if !isMod {
+					return nil, newError(
+						"SyntaxError",
+						id.Line,
+						id.Col,
+						p.source,
+						fmt.Sprintf("Unknown module %q", id.Name),
+						fmt.Sprintf("Import the module first, e.g.: import \"./%s.ease\" as %s", id.Name, id.Name),
+					)
+				}
+				if !p.check(TOK_IDENT) {
+					cur := p.current()
+					return nil, newError(
+						"SyntaxError",
+						cur.Line,
+						cur.Col,
+						p.source,
+						fmt.Sprintf("Expected function name after '%s:', got %q", id.Name, cur.Lexeme),
+						fmt.Sprintf("Example: %s:fn arg1", id.Name),
+					)
+				}
+				fnTok := p.advance()
+				arity, exists := modFns[fnTok.Lexeme]
+				if !exists {
+					return nil, newError(
+						"SyntaxError",
+						fnTok.Line,
+						fnTok.Col,
+						p.source,
+						fmt.Sprintf("Module %q has no function %q", id.Name, fnTok.Lexeme),
+						fmt.Sprintf("Check the 'to' functions exported by module %q.", id.Name),
+					)
+				}
+				args, err := p.parseCallArgs(fmt.Sprintf("%s:%s", id.Name, fnTok.Lexeme), arity)
+				if err != nil {
+					return nil, err
+				}
+				line, col := id.Pos()
+				expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Module: id.Name, Callee: fnTok.Lexeme, Args: args}
+				continue
+			}
 			if arity, isFunc := p.funcArities[id.Name]; isFunc {
-				args := make([]Expr, 0, arity)
-				if arity > 0 {
-					prevDisallowAs := p.disallowAs
-					p.disallowAs = true
-					for i := 0; i < arity; i++ {
-						if p.isCallArgBoundary() {
-							p.disallowAs = prevDisallowAs
-							cur := p.current()
-							hint := fmt.Sprintf("Provide %d argument(s) for '%s', or wrap compound arguments in (...).", arity, id.Name)
-							if id.Name == "ask" {
-								hint = "Write: ask \"Prompt?\" or ask \"\""
-							}
-							return nil, newError(
-								"SyntaxError",
-								cur.Line,
-								cur.Col,
-								p.source,
-								fmt.Sprintf("Function '%s' expects %d argument(s), got %d", id.Name, arity, i),
-								hint,
-							)
-						}
-						arg, err := p.parseUnary()
-						if err != nil {
-							p.disallowAs = prevDisallowAs
-							return nil, err
-						}
-						args = append(args, arg)
-					}
-					p.disallowAs = prevDisallowAs
+				args, err := p.parseCallArgs(id.Name, arity)
+				if err != nil {
+					return nil, err
 				}
 				line, col := id.Pos()
 				expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name, Args: args}
@@ -1660,7 +1775,7 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 			return nil, err
 		}
 		offsetTokenPositions(subTokens, seg.Line, seg.Col)
-		subParser := &Parser{tokens: subTokens, source: p.source, depth: p.depth, funcArities: p.funcArities}
+		subParser := &Parser{tokens: subTokens, source: p.source, depth: p.depth, funcArities: p.funcArities, moduleArities: p.moduleArities}
 		expr, err := subParser.parseExpr()
 		if err != nil {
 			return nil, err
@@ -1684,24 +1799,19 @@ func (p *Parser) parseInterpString(tok Token) (Expr, error) {
 func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 	listTok := p.advance() // consume `list`
 	if p.match(TOK_AS) {
-		if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
-			tok := p.current()
-			return nil, newError(
-				"SyntaxError",
-				tok.Line,
-				tok.Col,
-				p.source,
-				fmt.Sprintf("Expected element type ('number', 'text', or a 'def' record) after 'list as', got %q", tok.Lexeme),
-				"Example: list as number, or list as particle",
-			)
+		typeName, typeLine, typeCol, err := p.parseTypeTarget(
+			"Expected element type ('number', 'text', or a 'def' record) after 'list as'",
+			"Example: list as number, or list as billing.invoice",
+		)
+		if err != nil {
+			return nil, err
 		}
-		typeTok := p.advance()
 		if !p.match(TOK_WITH) {
 			return &TypedListExpr{
 				posInfo:  posInfo{Line: listTok.Line, Col: listTok.Col},
-				ElemType: typeTok.Lexeme,
-				TypeLine: typeTok.Line,
-				TypeCol:  typeTok.Col,
+				ElemType: typeName,
+				TypeLine: typeLine,
+				TypeCol:  typeCol,
 			}, nil
 		}
 		if !p.match(TOK_NEWLINE) {
@@ -1748,9 +1858,9 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 		p.advance() // consume `end`
 		return &TypedListExpr{
 			posInfo:  posInfo{Line: listTok.Line, Col: listTok.Col},
-			ElemType: typeTok.Lexeme,
-			TypeLine: typeTok.Line,
-			TypeCol:  typeTok.Col,
+			ElemType: typeName,
+			TypeLine: typeLine,
+			TypeCol:  typeCol,
 			Rows:     rows,
 		}, nil
 	}
@@ -1771,4 +1881,70 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 		Elements:    elems,
 		Homogeneous: true,
 	}, nil
+}
+
+func (p *Parser) parseTypeTarget(errMsg, hint string) (string, int, int, error) {
+	if !p.check(TOK_TEXT) && !p.check(TOK_NUMBER_KW) && !p.check(TOK_IDENT) {
+		tok := p.current()
+		return "", 0, 0, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			fmt.Sprintf("%s, got %q", errMsg, tok.Lexeme),
+			hint,
+		)
+	}
+	typeTok := p.advance()
+	name := typeTok.Lexeme
+	if typeTok.Type == TOK_IDENT && p.match(TOK_DOT) {
+		if !p.check(TOK_IDENT) {
+			cur := p.current()
+			return "", 0, 0, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				fmt.Sprintf("Expected type name after '%s.', got %q", name, cur.Lexeme),
+				hint,
+			)
+		}
+		subTok := p.advance()
+		name = name + "." + subTok.Lexeme
+	}
+	return name, typeTok.Line, typeTok.Col, nil
+}
+
+func (p *Parser) parseCallArgs(callee string, arity int) ([]Expr, error) {
+	args := make([]Expr, 0, arity)
+	if arity == 0 {
+		return args, nil
+	}
+	prevDisallowAs := p.disallowAs
+	p.disallowAs = true
+	defer func() { p.disallowAs = prevDisallowAs }()
+
+	for i := 0; i < arity; i++ {
+		if p.isCallArgBoundary() {
+			cur := p.current()
+			hint := fmt.Sprintf("Provide %d argument(s) for '%s', or wrap compound arguments in (...).", arity, callee)
+			if callee == "ask" {
+				hint = "Write: ask \"Prompt?\" or ask \"\""
+			}
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				fmt.Sprintf("Function '%s' expects %d argument(s), got %d", callee, arity, i),
+				hint,
+			)
+		}
+		arg, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, arg)
+	}
+	return args, nil
 }

@@ -25,6 +25,14 @@ type MapValue struct {
 	FromCSV bool
 }
 
+// ModuleValue encapsulates an imported `.ease` module's isolated scope and functions.
+type ModuleValue struct {
+	Name   string
+	Env    *Env
+	Funcs  map[string]*FuncDecl
+	Source string
+}
+
 // UnionValue represents a union value-space defined with `def <name> = v1 | v2 | ...`.
 type UnionValue struct {
 	TypeName string
@@ -98,6 +106,8 @@ func FormatValue(v Value) string {
 		return fmt.Sprintf("map(%s)", strings.Join(parts, ", "))
 	case *UnionValue:
 		return fmt.Sprintf("%s(%s)", val.TypeName, strings.Join(formatUnionOptions(val.Values), " | "))
+	case *ModuleValue:
+		return fmt.Sprintf("<module %s>", val.Name)
 	case BaseTypeValue:
 		return string(val)
 	default:
@@ -148,6 +158,8 @@ func TypeName(v Value) string {
 		return "map"
 	case *UnionValue:
 		return val.TypeName
+	case *ModuleValue:
+		return "module"
 	case BaseTypeValue:
 		return string(val)
 	default:

@@ -40,6 +40,7 @@ const (
 	TOK_RPAREN TokenType = ")"
 	TOK_COMMA  TokenType = ","
 	TOK_DOT    TokenType = "."
+	TOK_COLON  TokenType = ":"
 	TOK_PIPE   TokenType = "|"
 	TOK_ASSIGN TokenType = "="
 

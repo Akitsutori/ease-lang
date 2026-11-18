@@ -168,6 +168,9 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		case ',':
 			l.advance()
 			tokens = append(tokens, Token{Type: TOK_COMMA, Lexeme: ",", Line: line, Col: col})
+		case ':':
+			l.advance()
+			tokens = append(tokens, Token{Type: TOK_COLON, Lexeme: ":", Line: line, Col: col})
 		case '.':
 			l.advance()
 			tokens = append(tokens, Token{Type: TOK_DOT, Lexeme: ".", Line: line, Col: col})

@@ -40,6 +40,9 @@ func resolveProgramImports(prog *Program, source string, seen map[string]bool) e
 	var mergedBody []Stmt
 
 	for _, imp := range prog.Imports {
+		if imp.IsFileImport {
+			continue
+		}
 		if seen[imp.Name] {
 			continue
 		}

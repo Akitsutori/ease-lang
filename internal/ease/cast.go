@@ -27,11 +27,26 @@ func valueInUnion(v Value, union *UnionValue) bool {
 	return false
 }
 
-func lookupUnion(env *Env, name string) (*UnionValue, bool) {
-	if env == nil {
+func lookupTypeInEnv(env *Env, name string) (Value, bool) {
+	if env == nil || name == "" {
 		return nil, false
 	}
-	v, ok := env.Lookup(name)
+	if modName, memberName, ok := strings.Cut(name, "."); ok {
+		modVal, exists := env.Lookup(modName)
+		if !exists {
+			return nil, false
+		}
+		mv, isMod := modVal.(*ModuleValue)
+		if !isMod || mv == nil || mv.Env == nil {
+			return nil, false
+		}
+		return mv.Env.Lookup(memberName)
+	}
+	return env.Lookup(name)
+}
+
+func lookupUnion(env *Env, name string) (*UnionValue, bool) {
+	v, ok := lookupTypeInEnv(env, name)
 	if !ok {
 		return nil, false
 	}
@@ -52,7 +67,15 @@ func matchesListElemType(v Value, elemType string, env *Env) bool {
 			return valueInUnion(v, union)
 		}
 		if rec, ok := v.(*RecordValue); ok {
-			return rec.TypeName == elemType
+			if rec.TypeName == elemType {
+				return true
+			}
+			if protoVal, found := lookupTypeInEnv(env, elemType); found {
+				if proto, isRec := protoVal.(*RecordValue); isRec && proto.IsPrototype {
+					return rec.TypeName == proto.TypeName
+				}
+			}
+			return false
 		}
 		return false
 	}
@@ -117,7 +140,7 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 		}
 		return out, nil
 	default:
-		protoVal, found := env.Lookup(elemType)
+		protoVal, found := lookupTypeInEnv(env, elemType)
 		if !found {
 			return nil, fmt.Errorf("Unknown type %q for '%s'", elemType, pathPrefix)
 		}
@@ -138,7 +161,7 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 		for idx, item := range elems {
 			elemPath := fmt.Sprintf("%s.%d", pathPrefix, idx)
 			if rec, ok := item.(*RecordValue); ok {
-				if rec.TypeName != elemType {
+				if rec.TypeName != proto.TypeName {
 					return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, idx, rec.TypeName)
 				}
 				out = append(out, rec)
@@ -185,7 +208,7 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 		return &ListValue{ElemType: targetType, Elements: elems}, nil
 
 	default:
-		protoVal, ok := env.Lookup(targetType)
+		protoVal, ok := lookupTypeInEnv(env, targetType)
 		if !ok {
 			return nil, newError(
 				"TypeError",
@@ -346,7 +369,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		}
 
 	default:
-		protoVal, ok := env.Lookup(e.TypeName)
+		protoVal, ok := lookupTypeInEnv(env, e.TypeName)
 		if !ok {
 			return nil, newError(
 				"TypeError",
