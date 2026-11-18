@@ -1131,10 +1131,32 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkExpr(ex.Right); err != nil {
 			return err
 		}
-		if ex.Op != "not" {
-			return v.checkNotCondition(ex.Right)
+		if ex.Op == "not" {
+			if !v.inErrorTestExpr && !isConditionExpr(ex.Right) {
+				rightSt := v.inferExprTypeState(ex.Right)
+				knownValue := rightSt.exactRecord != "" || rightSt.exactNonRecord || rightSt.unionName != "" || rightSt.listElemType != ""
+				switch rt := ex.Right.(type) {
+				case *NumberExpr, *StringExpr, *InterpStringExpr, *ListExpr, *TypedListExpr, *WithExpr:
+					knownValue = true
+				case *CallExpr:
+					if rt.Callee != "contains" {
+						knownValue = true
+					}
+				}
+				if knownValue {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						"'not' requires a condition",
+						"Example: not (x is 0) or not (contains txt \"a\")",
+					)
+				}
+			}
+			return nil
 		}
-		return nil
+		return v.checkNotCondition(ex.Right)
 
 	case *BinaryExpr:
 		if err := v.checkExpr(ex.Left); err != nil {

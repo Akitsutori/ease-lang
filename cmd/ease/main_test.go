@@ -172,3 +172,18 @@ func TestCmdTestAndAstJSON(t *testing.T) {
 		t.Fatalf("expected Defs key in AST JSON, got: %v", astMap)
 	}
 }
+
+func TestReplRejectsPrintingConditions(t *testing.T) {
+	input := "not 2 > 1\n3 > 2\nexit\n"
+	var out, errOut bytes.Buffer
+	code := runRepl(strings.NewReader(input), &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	if strings.Contains(out.String(), "false") || strings.Contains(out.String(), "true") {
+		t.Fatalf("REPL must not print raw boolean condition values, got stdout: %q", out.String())
+	}
+	if strings.Count(errOut.String(), "Conditions cannot be stored or printed") != 2 {
+		t.Fatalf("expected 2 condition TypeErrors on stderr, got: %q", errOut.String())
+	}
+}

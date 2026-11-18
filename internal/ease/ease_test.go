@@ -2611,3 +2611,44 @@ func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
 		t.Fatalf("expected loop-as-expression hint, got: %v", err)
 	}
 }
+
+func TestNotTypecheckAndCanonicalAsConversions(t *testing.T) {
+	// Static TypeError for `not <non-condition>`
+	for _, bad := range []string{
+		"check not 42 -> say 1\n",
+		"check not \"hi\" -> say 1\n",
+		"x = 1\ncheck not x -> say 1\n",
+		"check not (count (list 1, 2)) -> say 1\n",
+	} {
+		if _, err := ParseProgram(bad); err == nil || !strings.Contains(err.Error(), "'not' requires a condition") {
+			t.Fatalf("expected static TypeError for %q, got: %v", bad, err)
+		}
+	}
+
+	// Runtime error test inside `test` block + canonical `as text` / `as number`
+	src := `test "not condition check and canonical conversions"
+  (42 as text) is "42"
+  ("42" as number) is 42
+  ("abc" as number) is error
+  (not 42) is error
+  (not 42) ->
+    error.type is "TypeError"
+    error.message is "'not' requires a condition, got number"
+  end
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 6 {
+		t.Fatalf("expected 6 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// `str` and `num` built-ins are removed
+	for _, oldBuiltin := range []string{"say str 42\n", "say num \"42\"\n"} {
+		if _, err := EvalProgram(oldBuiltin, &bytes.Buffer{}); err == nil {
+			t.Fatalf("expected error for removed built-in in %q", oldBuiltin)
+		}
+	}
+}

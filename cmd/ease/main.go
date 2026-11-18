@@ -630,6 +630,12 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 				}
 				if val != nil {
 					if _, isSay := parsed.Body[len(parsed.Body)-1].(*ease.SayStmt); !isSay {
+						lastStmt := parsed.Body[len(parsed.Body)-1]
+						line, col := lastStmt.Pos()
+						if condErr := ease.CheckNotConditionValue(val, line, col, fullSrc); condErr != nil {
+							fmt.Fprintln(errOut, condErr)
+							return
+						}
 						fmt.Fprintln(out, ease.FormatValue(val))
 					}
 				}

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,8 +23,6 @@ const maxFileSize = 50 * 1024 * 1024
 var builtinArities = map[string]int{
 	"ask":            1,
 	"count":          1,
-	"str":            1,
-	"num":            1,
 	"type":           1,
 	"abs":            1,
 	"floor":          1,
@@ -98,29 +95,6 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			return float64(len([]rune(v))), true, nil
 		default:
 			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("count requires a list or text, got %s", TypeName(args[0])), "")
-		}
-
-	case "str":
-		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "str() takes 1 argument", "")
-		}
-		return FormatValue(args[0]), true, nil
-
-	case "num":
-		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "num() takes 1 argument", "")
-		}
-		switch v := args[0].(type) {
-		case float64:
-			return v, true, nil
-		case string:
-			n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-			if err != nil {
-				return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot convert %q to number", v), "")
-			}
-			return n, true, nil
-		default:
-			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot convert %s to number", TypeName(args[0])), "")
 		}
 
 	case "type":
@@ -873,18 +847,23 @@ func isTrueFalseUnion(opts []Value) bool {
 	return (s0 == "true" && s1 == "false") || (s0 == "false" && s1 == "true")
 }
 
-func (ev *Evaluator) checkNotConditionValue(v Value, line, col int) error {
+// CheckNotConditionValue rejects raw boolean condition values where a data value is expected.
+func CheckNotConditionValue(v Value, line, col int, source string) error {
 	if _, isCond := v.(bool); isCond {
 		return newError(
 			"TypeError",
 			line,
 			col,
-			ev.source,
+			source,
 			"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
 			"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
 		)
 	}
 	return nil
+}
+
+func (ev *Evaluator) checkNotConditionValue(v Value, line, col int) error {
+	return CheckNotConditionValue(v, line, col, ev.source)
 }
 
 func (ev *Evaluator) checkRuntimeUnionLiteral(lit string, opts []Value, label string, line, col int) error {

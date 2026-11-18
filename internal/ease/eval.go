@@ -935,7 +935,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		case "not":
 			b, ok := right.(bool)
 			if !ok {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("'not' requires a condition, got %s", TypeName(right)), "Example: not (x is 0)")
+				return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("'not' requires a condition, got %s", TypeName(right)), "Example: not (x is 0)")
 			}
 			return !b, nil
 		}

@@ -554,8 +554,6 @@ See [`examples/06_window.ease`](examples/06_window.ease).
 | `say expr` | Prints formatted value to `stdout` |
 | `ask prompt` | Reads a line of input from `stdin` (fixed arity 1; use `ask ""` for an empty prompt) |
 | `count xs` | Returns length of `text` (runes) or `list` |
-| `str val` | Converts a value to `text` |
-| `num val` | Converts `number` or `text` to `number` (raises `RuntimeError` on invalid input) |
 | `type val` | Returns the type name or `def` name as `text` |
 | `range start end` | Returns an inclusive list of numbers `[start .. end]` |
 | `append xs item_or_list` | Returns a new list with an item or another compatible list appended (enforces element type) |

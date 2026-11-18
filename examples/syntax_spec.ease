@@ -126,7 +126,7 @@ end
 # NEGATIVTESTS (Laufzeit-Fehlerabbrüche via `is error`)
 # ============================================================================
 test "Funktionen & Aufrufe: 10 Negativtests"
-    num "abc" is error
+    ("abc" as number) is error
     count 42 is error
     fail "boom" is error
     range 1 1000000000 is error
@@ -192,5 +192,5 @@ test "Listen, Schleifen & Built-ins: 10 Negativtests"
     xs.(1.5) is error
     10 / 0 is error
     5 % 0 is error
-    num "abc" is error
+    ("abc" as number) is error
 end
