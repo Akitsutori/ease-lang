@@ -104,7 +104,7 @@ type SayStmt struct {
 
 func (*SayStmt) stmtNode() {}
 
-// LoopStmt represents `loop <iterable> ... end` (binding `it` and `it.index`).
+// LoopStmt represents `loop [<iterable>] ... end` (binding `it.index`, and `it` when an iterable is given).
 type LoopStmt struct {
 	posInfo
 	Iterable Expr

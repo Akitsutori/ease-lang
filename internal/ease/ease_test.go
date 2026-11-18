@@ -2652,3 +2652,49 @@ end
 		}
 	}
 }
+
+func TestInfiniteLoopWithExitCondition(t *testing.T) {
+	// Happy path: command loop reading stdin with `it.index` and exiting on `"quit"`
+	cmdSrc := `loop
+  cmd = ask "> "
+  check cmd is "quit" -> end
+  say "{it.index}:{cmd}"
+end
+say "bye"
+`
+	var out bytes.Buffer
+	if _, err := EvalProgramWithInput(cmdSrc, strings.NewReader("look\nfight\nquit\n"), &out); err != nil {
+		t.Fatalf("EvalProgramWithInput failed: %v", err)
+	}
+	if out.String() != "> 0:look\n> 1:fight\n> bye\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+
+	// Infinite loop inside a `to` function tested from a `test` block (early return exit)
+	fnSrc := `to find_first_over limit
+  n = 1
+  loop
+    check n > limit -> n
+    n = n + it.index + 1
+  end
+end
+
+test "infinite loop inside function"
+  find_first_over 5 is 7
+end
+`
+	report, err := RunChecks(fnSrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 1 {
+		t.Fatalf("expected 1 passed / 0 failed checks, got %d passed / %d failed", report.Passed, report.Failed)
+	}
+
+	// Negative test: infinite loop with no exit condition
+	if _, err := ParseProgram("loop\n  say it.index\nend\n"); err == nil ||
+		!strings.Contains(err.Error(), "Infinite 'loop' has no exit condition") ||
+		!strings.Contains(err.Error(), "check <condition> -> end") {
+		t.Fatalf("expected infinite loop exit condition TypeError, got: %v", err)
+	}
+}

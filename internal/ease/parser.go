@@ -987,25 +987,27 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 
 	var iterExpr Expr
 	var err error
-	if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
-		rangeTok := p.advance()
-		var startExpr, endExpr Expr
-		startExpr, err = p.parseUnary()
-		if err == nil {
-			endExpr, err = p.parseUnary()
-		}
-		if err != nil {
-			return nil, err
-		}
-		iterExpr = &CallExpr{
-			posInfo: posInfo{Line: rangeTok.Line, Col: rangeTok.Col},
-			Callee:  "range",
-			Args:    []Expr{startExpr, endExpr},
-		}
-	} else {
-		iterExpr, err = p.parseExpr()
-		if err != nil {
-			return nil, err
+	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) {
+		if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
+			rangeTok := p.advance()
+			var startExpr, endExpr Expr
+			startExpr, err = p.parseUnary()
+			if err == nil {
+				endExpr, err = p.parseUnary()
+			}
+			if err != nil {
+				return nil, err
+			}
+			iterExpr = &CallExpr{
+				posInfo: posInfo{Line: rangeTok.Line, Col: rangeTok.Col},
+				Callee:  "range",
+				Args:    []Expr{startExpr, endExpr},
+			}
+		} else {
+			iterExpr, err = p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

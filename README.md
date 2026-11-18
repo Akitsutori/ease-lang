@@ -14,15 +14,15 @@
 ## Table of Contents
 
 1. [Installation & CLI](#installation--cli)
-2. [Language Tour](#language-tour)
-   - [1. Variables, Constants & Text](#1-variables-constants--text)
-   - [2. Functions (`to ... end`) & Arity Composition](#2-functions-to--end--arity-composition)
-   - [3. Data Blueprints (`def`), `with` & Unions (No `bool`)](#3-data-blueprints-def-with--unions-no-bool)
-   - [4. Guards (`check`), Type Narrowing & Exhaustiveness](#4-guards-check-type-narrowing--exhaustiveness)
-   - [5. Lists, `where`, Batch-`with` & `loop`](#5-lists-where-batch-with--loop)
-   - [6. Boundaries (`as`, JSON & File I/O / CSV)](#6-boundaries-as-json--file-io--csv)
-   - [7. Modules (`import` with `.` and `:`)](#7-modules-import-with--and-)
-   - [8. Built-in Tests (`test`)](#8-built-in-tests-test)
+2. [Tutorial: Build a Text Adventure in Ease](#tutorial-build-a-text-adventure-in-ease)
+   - [1. Entering the Tavern](#1-entering-the-tavern)
+   - [2. The Command Loop](#2-the-command-loop)
+   - [3. Choosing Your Move](#3-choosing-your-move)
+   - [4. Hero Stats, Damage & Combat Outcomes](#4-hero-stats-damage--combat-outcomes)
+   - [5. Cleaning Up the Game Loop](#5-cleaning-up-the-game-loop)
+   - [6. Ambush! Fighting a Pack of Monsters](#6-ambush-fighting-a-pack-of-monsters)
+   - [7. Loot Tables & Savegames](#7-loot-tables--savegames)
+   - [8. Expanding the World & Testing Combat Rules](#8-expanding-the-world--testing-combat-rules)
 3. [Why Ease Works Well for AI Agents](#why-ease-works-well-for-ai-agents)
 4. [Built-in Verbs](#built-in-verbs)
 5. [Formal Grammar (EBNF)](#formal-grammar-ebnf)
@@ -68,291 +68,313 @@ Shorthand: `ease <file.ease>` is equivalent to `ease run <file.ease>`.
 
 ---
 
-## Language Tour
+## Tutorial: Build a Text Adventure in Ease
 
-Each section builds strictly on the concepts introduced before it.
+In this tutorial, we build a playable **text adventure** from scratch. Each chapter advances the game and introduces only the Ease ideas needed for that scene.
 
-### 1. Variables, Constants & Text
+### 1. Entering the Tavern
 
-Variables use plain assignment (`=`), while immutable constants use `def <name> = <value>`. Numbers are 64-bit floats (`/` is real division: `7 / 2` is `3.5`, and `-2` directly before digits is an atomic negative literal; write `a - 2` with spaces for subtraction).
+Our adventure begins in a tavern. Before the hero sets off, the game asks for their name, buys a few supplies, calculates their starting gold, and prints a welcome banner.
+
+In Ease, variables are plain assignments (`=`) and constants use `def`. Text in double quotes (`"..."`) interpolates `{expr}` values and normalizes to Unicode NFC, while single-quoted text (`'...'`) is raw 1:1 literal text (handy for JSON strings). Numbers are 64-bit floats (`/` is real division, and `-2` directly before digits is a negative literal; write `a - 2` with spaces for subtraction). Parentheses `(...)` group arithmetic sub-expressions, `+` combines only `number + number` or `text + text`, and `ask` / `say` handle console input and output:
 
 ```ease
-def tax_rate = 0.19
+def starting_gold = 50
 
-subtotal = 100
-total = subtotal * (1 + tax_rate)
+hero_name = ask "What is your name, traveler?"
+gold = starting_gold - (2 * 5)
+sign_json = '{"tavern": "The Rusty Tankard"}'
 
-name = "Ada"
-greeting = "Hello {name}, total is {total}"
-raw_json = '{"currency": "EUR"}'
-
-say greeting
-say raw_json
+title = "Traveler " + hero_name
+say "Welcome, {title}! You start with {gold} gold."
+say "Tavern sign: {sign_json}"
 ```
-
-- **Interpolated vs. raw text:** `"..."` interpolates atomic `text`/`number` values inside `{expr}` and normalizes all text to Unicode NFC. `'...'` reads 1:1 with zero interpolation and zero backslash escapes.
-- **Strict `+`:** `+` accepts only `number + number` or `text + text` (never implicit `"41" + 1`). Combine text and numbers with interpolation (`"{label}: {count}"`) or explicit `as text`.
-- **Console input:** `answer = ask "Your name?"` reads one UTF-8-validated line from `stdin`.
 
 ---
 
-### 2. Functions (`to ... end`) & Arity Composition
+### 2. The Command Loop
 
-Functions are declared with `to <name> <params...>` (space-separated, no commas) and return the value of their last evaluated expression. Calls use prefix syntax with fixed arity — no parentheses around arguments, though `(...)` can group any compound argument.
+Now the hero steps into the dungeon and starts typing commands. The game needs a real command loop that keeps asking for input until the player types `"quit"`.
+
+Ease has a single loop construct: `loop ... end` (or `loop <list|range> ... end` when iterating over values). An unbounded `loop ... end` binds `it.index` (0, 1, 2, ...) and requires at least one exit guard: a single-line `check <cond> -> end` breaks out of the innermost loop immediately:
 
 ```ease
-to add a b
-    a + b
+loop
+    cmd = ask "> "
+    check cmd is "quit" -> end
+    say "Turn {it.index}: you typed '{cmd}'."
 end
 
-to square x
-    x * x
-end
-
-total_sum = add (1 + 2) 3
-hypotenuse_sq = add (square 3) (square 4)
-
-say "sum={total_sum}, c^2={hypotenuse_sq}"
+say "Farewell, adventurer!"
 ```
-
-- **`Assigned-in-Function = Local`:** Top-level variables and constants are readable inside `to` functions, while assignments inside a function always create or update local variables without mutating globals. Function parameters are immutable.
 
 ---
 
-### 3. Data Blueprints (`def`), `with` & Unions (No `bool`)
+### 3. Choosing Your Move
 
-Ease separates **noun blueprints** (`def`) from **action verbs** (`to`). Records are immutable; `with` returns an updated copy.
+Typing commands is only fun if the dungeon reacts. The player should be able to `"look"`, `"fight"`, or `"flee"` — and get a helpful message if they type anything else.
 
-Instead of `bool`, `true`/`false`, or `null`, Ease models outcomes explicitly with **union types** (`|`) built from literals, `text`, `number`, record blueprints, or other unions:
-
-```ease
-def status = "OK" | "FAILED"
-
-def ErrorMessage
-    code    = 500
-    message = "Unknown error"
-end
-
-def outcome = status | ErrorMessage
-
-def player
-    name  = "Guest"
-    score = 0
-    role  = "member" | "admin"
-end
-
-hero = player with name = "Aria", role = "admin"
-leveled_up = hero with score = hero.score + 50
-err = ErrorMessage with code = 404, message = "Not found"
-
-say "{leveled_up.name} ({leveled_up.role}): {leveled_up.score}"
-say "Error {err.code}: {err.message}"
-```
-
-- **Compile-time union guardrails:** Ease rejects redundant literals alongside `text`/`number`, duplicate union variants, and ambiguous record unions (records in the same union must differ structurally so casts stay unambiguous).
-
----
-
-### 4. Guards (`check`), Type Narrowing & Exhaustiveness
-
-Ease has no `if` keyword. Branching and early returns use `check`:
-
-- **Single-line guard:** `check <cond> -> <action>`. Inside `to`, `-> <expr>` returns immediately from the function, while `-> <stmt>` (`say`, assignment) executes and continues.
-- **Exhaustive `check ... end`:** Matches every variant of a closed union (or provides `else -> ...` / a post-`end` fallback). Inside `res is ErrorMessage -> ...`, `res` is statically narrowed to `ErrorMessage`.
+Ease has no `if` keyword and no `bool` (`true`/`false`) type. Instead, you model choices explicitly (for example as a closed union type `def move = "look" | "fight" | "flee"`) and dispatch with a multi-line `check ... else -> ... end` block:
 
 ```ease
-def ErrorMessage
-    code    = 500
-    message = "Unknown error"
-end
+def move = "look" | "fight" | "flee"
 
-def outcome = "OK" | ErrorMessage
+loop
+    cmd = ask "Choose (look, fight, flee, quit)> "
+    check cmd is "quit" -> end
 
-to describe_code code
-    check code < 400 -> "healthy"
-    "failing"
-end
-
-to process_response res
     check
-        res is "OK"         -> "Request succeeded"
-        res is ErrorMessage -> "Error {res.code} ({describe_code res.code}): {res.message}"
+        cmd is "look"  -> say "Torchlight flickers along damp stone walls."
+        cmd is "fight" -> say "You raise your sword!"
+        cmd is "flee"  -> say "You slip back into the shadows."
+        else -> say "Unknown move '{cmd}'. Try look, fight, or flee."
     end
 end
-
-say process_response "OK"
-say process_response (ErrorMessage with code = 503, message = "Unavailable")
 ```
-
-- **Conditions stay out of values:** Conditions (`>`, `<`, `>=`, `<=`, `is`, `is not`, `and`, `or`, `not`, `contains`) can only be evaluated inside `check`, `where`, and `test` — storing or printing a condition raises `TypeError`.
 
 ---
 
-### 5. Lists, `where`, Batch-`with` & `loop`
+### 4. Hero Stats, Damage & Combat Outcomes
 
-Lists are homogeneous (`list 1, 2, 3` or typed `list as <type>`). Elements are accessed with `.0` or computed `.(i)`:
+A real fight needs hero stats — `name`, `hp`, and `stamina` — and an attack outcome that is richer than a boolean: a swing might update the hero, end in `"fled"`, or fail with a `CombatError` when stamina is too low.
+
+Ease separates logic-free noun blueprints (`def`) from actions. Records are immutable: `with` creates an updated copy. Combining a record, a text literal, and an error record with `|` creates an explicit union (`turn_outcome`), and `check` narrows `res` inside `res is CombatError -> ...` so `res.code` and `res.message` are safe to read:
 
 ```ease
-prices = list 10, 20, 50
-shipping = 5
-gross = prices * 1.19 + shipping
+def CombatError
+    code    = 400
+    message = "Invalid action"
+end
 
-say "First gross: {gross.0}, total: {sum gross}, avg: {avg gross}"
+def hero
+    name    = "Aria"
+    hp      = 100
+    stamina = 10
+end
+
+def turn_outcome = hero | "fled" | CombatError
+
+aria = hero with name = "Aria", stamina = 4
+aria_after_hit = aria with hp = aria.hp - 15, stamina = aria.stamina - 2
+
+res = CombatError with code = 409, message = "Not enough stamina"
+check
+    res is hero        -> say "{res.name} now has {res.hp} HP."
+    res is "fled"      -> say "Hero escaped safely."
+    res is CombatError -> say "Blocked ({res.code}): {res.message}"
+end
+say "After skirmish: {aria_after_hit.name} HP={aria_after_hit.hp}"
 ```
 
-#### Declarative `where` filters and batch `with` (`it` & `it.index`)
+---
 
-Both `where` and batch `with` bind `it` to each element and `it.index` to its 0-based index:
+### 5. Cleaning Up the Game Loop
+
+As the dungeon grows, inline damage math and `check` blocks make the main loop noisy. Let's extract reusable combat rules like `calc_damage`, `heal`, and `attempt_strike`.
+
+Functions are declared with `to <name> <params...>` (space-separated, no commas) and return their last evaluated expression. Calls use prefix syntax without parentheses; `(...)` groups compound arguments (`heal aria.hp (calc_damage 14 3)`). Inside a `to` function, `check <cond> -> <value>` returns immediately from the function, and every assignment stays local (`Assigned-in-Function = Local`):
 
 ```ease
-def order
-    id     = ""
-    amount = 0
-    status = "open" | "paid" | "refunded"
+def base_crit = 1.5
+
+def CombatError
+    code    = 400
+    message = "Invalid action"
 end
 
-orders = list as order with
-    id = "A1", amount = 40,  status = "paid"
-    id = "A2", amount = 120, status = "paid"
-    id = "A3", amount = 80,  status = "open"
+def hero
+    name    = "Aria"
+    hp      = 100
+    stamina = 10
 end
 
-big_paid = orders where
-    it.status is "paid"
-    it.amount >= 50
+def turn_outcome = hero | "fled" | CombatError
+
+to calc_damage attack armor
+    (attack - armor) * base_crit
 end
 
-# Batch update across every record in a list
-discounted = big_paid with amount = it.amount * 0.9
-say "Selected: {count discounted}, first discounted: {discounted.0.amount}"
+to heal current bonus
+    next_hp = current + bonus
+    next_hp
+end
+
+to attempt_strike h cost
+    check h.hp <= 0 -> CombatError with code = 410, message = "Hero has fallen"
+    check h.stamina < cost -> CombatError with code = 409, message = "Not enough stamina"
+    h with stamina = h.stamina - cost
+end
+
+aria = hero with hp = 60, stamina = 5
+repaired_hp = heal aria.hp (calc_damage 14 3)
+res = attempt_strike (aria with hp = repaired_hp) 2
+
+check
+    res is hero        -> say "{res.name}: HP={res.hp}, stamina={res.stamina}"
+    res is "fled"      -> say "Retreated"
+    res is CombatError -> say "Blocked: {res.message}"
+end
 ```
 
-#### Imperative `loop ... end` and text processing
+---
 
-`loop ... end` is a statement (not an expression) and binds `it` and `it.index`. Use `check <cond> -> end` to break out of the innermost loop, and `append` to build new lists:
+### 6. Ambush! Fighting a Pack of Monsters
+
+Around the next corner, a whole pack of monsters ambushes our hero! We need to filter out defeated enemies, apply end-of-turn poison to every survivor at once, scale a list of damage rolls, and clean up the loot names dropped in the room.
+
+Lists are homogeneous (`list 1, 2, 3` or `list as <type>`) with `.0` / `.(i)` indexing and element-wise numeric arithmetic. Both `where` filters and batch `with` updates bind `it` and `it.index`; `append` builds new lists without mutating in place, and built-in text verbs (`trim`, `split`, `join`, `upper`, `slice`, `contains`) clean up text safely:
 
 ```ease
-raw = "  alpha, beta, gamma  "
-parts = split (trim raw) ", "
-say "Joined: {join parts " | "}"
-say "Upper slice: {upper (slice (parts.0) 0 3)}"
+def monster
+    name = ""
+    hp   = 0
+end
 
+pack = list as monster with
+    name = "Goblin", hp = 12
+    name = "Slime",  hp = 0
+    name = "Orc",    hp = 35
+end
+
+alive = pack where
+    it.hp > 0
+end
+poisoned = alive with hp = it.hp - 3
+say "Surviving monsters: {count poisoned}, first HP: {poisoned.0.hp}"
+
+rolls = list 4, 6, 8
+scaled = rolls * 1.5 + 2
+say "Scaled rolls total: {sum scaled}, avg: {avg scaled}, second: {scaled.(1)}"
+
+raw_loot = "  rusty key, iron shield, broken horn  "
+drops = split (trim raw_loot) ", "
 kept = list as text
-loop parts
-    check it is "gamma" -> end
-    check not (contains it "a") -> say "skip"
-    kept = append kept "{it.index}:{it}"
+
+loop drops
+    check it is "broken horn" -> end
+    check not (contains it "iron") -> say "Non-iron drop: {it}"
+    tag = upper (slice it 0 4)
+    kept = append kept "{it.index}:{tag}"
 end
-say "Kept count: {count kept}"
+say "Pack loot: {join kept " | "}"
 ```
 
 ---
 
-### 6. Boundaries (`as`, JSON & File I/O / CSV)
+### 7. Loot Tables & Savegames
 
-External data enters as untrusted `text`, `bytes`, or `map`s and is explicitly validated at the boundary with `as`:
+A full adventure needs external data: a CSV loot table for treasure chests and a JSON save file so the hero can resume later.
 
-- `decode_json txt` parses JSON (`true`/`false` become `"true"`/`"false"` text); `encode_json val` serializes records/maps/lists back to JSON.
-- `map as <def>` checks every declared field strictly (all `def` fields are mandatory; extra keys are tolerated).
-- `load path [as text|csv|bytes]` reads UTF-8/NFC text (50 MB limit, BOM stripped), uniform CSV rows (`list` of `map` with positional `it.0` and header `it.("Header")` access), or raw `0..255` byte lists. `save path data` writes text or bytes and returns written byte count.
+Ease keeps external data untrusted until you explicitly validate it with `as`. `load path [as text|csv|bytes]` reads UTF-8/NFC text (50 MB max, BOM stripped), uniform CSV rows (`list` of `map` with positional `it.0` and header `it.("Header")` access), or raw `0..255` bytes; `save path data` writes text or bytes and returns the byte count; `decode_json` / `encode_json` handle JSON conversion:
 
 ```ease
-def sale_status = "paid" | "pending"
+def rarity = "common" | "rare"
 
-def asian_sale
-    product = ""
-    price   = 0
-    status  = sale_status
+def loot_item
+    name  = ""
+    value = 0
+    tier  = rarity
 end
 
-rows = load "./datafiles/export_asia.csv" as csv
-entries = list as asian_sale
+def hero
+    name = "Aria"
+    hp   = 100
+end
 
+rows = load "./datafiles/loot.csv" as csv
+chest = list as loot_item
 loop rows
-    entry = asian_sale with
-        product = it.("Product Name")
-        price   = it.1 as number
-        status  = it.2 as sale_status
+    item = loot_item with
+        name  = it.("Item Name")
+        value = it.1 as number
+        tier  = it.2 as rarity
     end
-    entries = append entries entry
+    chest = append chest item
 end
+rare_chest = chest where it.tier is "rare"
+say "Rare items loaded: {count rare_chest}"
 
-paid = entries where it.status is "paid"
-say "Paid entries: {count paid}"
+saved = hero with name = "Aria", hp = 85
+bytes_written = save "./save.json" (encode_json saved)
+restored = (decode_json (load "./save.json" as text)) as hero
+raw_bytes = load "./save.json" as bytes
+say "Saved {bytes_written} bytes ({count raw_bytes} raw), restored HP: {restored.hp}"
 ```
 
 ---
 
-### 7. Modules (`import` with `.` and `:`)
+### 8. Expanding the World & Testing Combat Rules
 
-All modules — both file modules (`import "./file.ease" as mod`) and embedded standard modules (`import network`, `import screen`, optionally `as <alias>`) — are encapsulated namespaces:
+As our world grows, we split combat mechanics into `./combat.ease`, connect optional online highscores (`import network`) or a 2D dungeon map (`import screen`), and lock down our rules with built-in tests (`test ... end`).
 
-- Call module verbs with **`:`** (`mod:verb arg1 arg2`).
-- Access module blueprints, unions, and constants with **`.`** (`mod.blueprint`, `mod.const`).
+All modules — file modules (`import "./file.ease" as mod`) and embedded standard modules (`import network`, `import screen`, optionally `as <alias>`) — are encapsulated namespaces: call module verbs with **`:`** (`mod:verb`) and access module blueprints, unions, and constants with **`.`** (`mod.blueprint`, `mod.const`).
 
 ```ease
-# billing.ease
-def default_tax = 0.19
+# combat.ease
+def crit_multiplier = 1.5
 
-def invoice
-    id  = ""
-    net = 0
+def fighter
+    name = ""
+    hp   = 100
 end
 
-to total inv
-    inv.net * (1 + default_tax)
+to strike target power
+    target with hp = target.hp - (power * crit_multiplier)
 end
 ```
 
 ```ease
 # main.ease
-import "./billing.ease" as billing
+import "./combat.ease" as combat
 import network
+import screen
 
-inv = billing.invoice with id = "INV-1", net = 100
-say "Gross: {billing:total inv}"
+goblin = combat.fighter with name = "Goblin", hp = 30
+hit_goblin = combat:strike goblin 10
+say "{hit_goblin.name} HP left: {hit_goblin.hp} (crit x{combat.crit_multiplier})"
 
-api = network.network with url = "https://jsonplaceholder.typicode.com", timeout = 5
-raw = network:fetch api "/users/1"
+api = network.network with url = "https://scores.example.test", timeout = 5
+resp = network:send api "/runs" hit_goblin
+
+win = screen.screen with width = 640, height = 480, title = "Ease Dungeon"
+hud = screen.scene with background = "slate"
+raw_frame = screen:present win hud
+frame = decode_json raw_frame as screen.frame_state
 ```
 
-- **Standard modules:** `network` (`network.network`, `network.http_request`, `network.http_response`, `network:fetch`, `network:send`) and `screen` (`screen.screen`, `screen.circle`, `screen.box`, `screen.scene`, `screen.frame_state`, `screen:present` — run headless with `ease run <file> --check`). Local `./std/` overrides can be enabled with `EASE_STD=1`.
-
----
-
-### 8. Built-in Tests (`test`)
-
-Standalone `test ["label"] ... end` blocks run via `ease test <file.ease>` as soft assertions with full enclosing block breadcrumbs on failure.
+Finally, `test ["label"] ... end` blocks run via `ease test <file.ease>` as soft assertions with `is`, `is not`, `is error`, `-> error.type / error.message end`, and `loop` over test cases:
 
 ```ease
-to safe_div a b
-    check b is 0 -> fail "Division by zero"
-    a / b
+to safe_strike hp power
+    check power <= 0 -> fail "Power must be positive"
+    hp - power
 end
 
-def div_case
-    a = 0
-    b = 0
-    want = 0
+def strike_case
+    hp    = 0
+    power = 0
+    want  = 0
 end
 
-test "division table & error inspection"
-    cases = list as div_case with
-        a = 10, b = 2, want = 5
-        a = 9,  b = 3, want = 3
+test "dungeon combat assertions"
+    cases = list as strike_case with
+        hp = 50, power = 15, want = 35
+        hp = 20, power = 20, want = 0
     end
 
     loop cases
-        safe_div it.a it.b is it.want
+        safe_strike it.hp it.power is it.want
     end
 
-    (safe_div 10 0) is error
-    (safe_div 10 0) ->
+    (safe_strike 50 0) is error
+    (safe_strike 50 0) ->
         error.type is "RuntimeError"
-        error.message is "Division by zero"
+        error.message is "Power must be positive"
     end
 end
 ```
+
+- **Headless screen testing:** `ease run <file.ease> --check` runs `screen` loops deterministically without opening an OS window. Local `./std/` overrides can be enabled via `EASE_STD=1`.
 
 ---
 
@@ -456,7 +478,7 @@ stmt           ::= "say" expr stmt_end
                  | expr stmt_end
 
 assign_stmt    ::= IDENT "=" expr stmt_end
-loop_stmt      ::= "loop" ( "range" unary unary | expr ) [NL] { stmt [NL] } "end" stmt_end
+loop_stmt      ::= "loop" [ "range" unary unary | expr ] NL { stmt [NL] } "end" stmt_end
 
 check_action   ::= "end" stmt_end | stmt
 check_guard    ::= "check" expr "->" check_action

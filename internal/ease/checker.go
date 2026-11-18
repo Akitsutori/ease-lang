@@ -146,6 +146,10 @@ func (r *testRunner) runStmts(items []Stmt, env *Env) bool {
 			}
 
 		case *LoopStmt:
+			if c.Iterable == nil {
+				r.recordFail(c.Line, "", "Infinite 'loop' cannot run directly inside a 'test' block; call a 'to' function from 'test' instead.")
+				return false
+			}
 			iterVal, err := r.ev.EvalExpr(c.Iterable, env)
 			if err != nil {
 				r.recordFail(c.Line, errMessage(err), fmt.Sprintf("Loop iterable error: %v", err))

@@ -645,6 +645,25 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		return nil, &reportSignal{loopEnd: true}, nil
 
 	case *LoopStmt:
+		if s.Iterable == nil {
+			var last Value
+			for idx := 0; ; idx++ {
+				loopEnv := NewEnv(env)
+				loopEnv.SetLoopIndex(float64(idx))
+				val, sig, err := ev.execBlock(s.Body, loopEnv)
+				if err != nil {
+					return val, nil, err
+				}
+				if sig != nil {
+					if sig.loopEnd {
+						break
+					}
+					return val, sig, nil
+				}
+				last = val
+			}
+			return last, nil, nil
+		}
 		iterVal, err := ev.EvalExpr(s.Iterable, env)
 		if err != nil {
 			return nil, nil, err

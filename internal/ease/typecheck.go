@@ -490,6 +490,40 @@ func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 	return nil
 }
 
+func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case *LoopEndStmt:
+			if directLoop {
+				return true
+			}
+		case *CheckGuardStmt:
+			for _, r := range st.Rules {
+				if r.Action == nil {
+					continue
+				}
+				if _, isEnd := r.Action.(*LoopEndStmt); isEnd && directLoop {
+					return true
+				}
+				if _, isExpr := r.Action.(*ExprStmt); isExpr && inFunction {
+					return true
+				}
+				if hasLoopExit([]Stmt{r.Action}, inFunction, directLoop) {
+					return true
+				}
+			}
+			if hasLoopExit(st.ElseBody, inFunction, directLoop) {
+				return true
+			}
+		case *LoopStmt:
+			if inFunction && hasLoopExit(st.Body, inFunction, false) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 	switch st := s.(type) {
 	case *ConstDeclStmt:
@@ -547,37 +581,50 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		return nil
 
 	case *LoopStmt:
-		if err := v.checkExpr(st.Iterable); err != nil {
-			return err
-		}
-		if err := v.checkNotCondition(st.Iterable); err != nil {
-			return err
-		}
-		if !v.inErrorTestExpr {
-			switch lit := st.Iterable.(type) {
-			case *NumberExpr:
-				return newError(
-					"TypeError",
-					lit.Line,
-					lit.Col,
-					v.source,
-					fmt.Sprintf("'loop' requires a list or range, got number. Use 'loop range 1 %s' instead.", FormatValue(lit.Value)),
-					fmt.Sprintf("Write: loop range 1 %s ... end", FormatValue(lit.Value)),
-				)
-			case *StringExpr, *InterpStringExpr:
-				line, col := st.Iterable.Pos()
-				return newError(
-					"TypeError",
-					line,
-					col,
-					v.source,
-					"'loop' requires a list or range, got text",
-					"Iterate over a list like 'loop xs ... end' or a range like 'loop range 1 5 ... end'.",
-				)
+		if st.Iterable != nil {
+			if err := v.checkExpr(st.Iterable); err != nil {
+				return err
 			}
+			if err := v.checkNotCondition(st.Iterable); err != nil {
+				return err
+			}
+			if !v.inErrorTestExpr {
+				switch lit := st.Iterable.(type) {
+				case *NumberExpr:
+					return newError(
+						"TypeError",
+						lit.Line,
+						lit.Col,
+						v.source,
+						fmt.Sprintf("'loop' requires a list or range, got number. Use 'loop range 1 %s' instead.", FormatValue(lit.Value)),
+						fmt.Sprintf("Write: loop range 1 %s ... end", FormatValue(lit.Value)),
+					)
+				case *StringExpr, *InterpStringExpr:
+					line, col := st.Iterable.Pos()
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						"'loop' requires a list or range, got text",
+						"Iterate over a list like 'loop xs ... end' or a range like 'loop range 1 5 ... end'.",
+					)
+				}
+			}
+		} else if !v.inErrorTestExpr && !hasLoopExit(st.Body, inFunction, true) {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"Infinite 'loop' has no exit condition",
+				"Add a 'check <condition> -> end' guard inside the loop to exit cleanly.",
+			)
 		}
 		loopScope := v.pushScope()
-		loopScope.vars["it"] = v.inferIterableElemState(st.Iterable)
+		if st.Iterable != nil {
+			loopScope.vars["it"] = v.inferIterableElemState(st.Iterable)
+		}
 		v.loopDepth++
 		err := v.checkStmts(st.Body, inFunction)
 		v.loopDepth--
