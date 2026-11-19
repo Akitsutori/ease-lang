@@ -414,3 +414,12 @@ type MatchExpr struct {
 }
 
 func (*MatchExpr) exprNode() {}
+
+// SwarmLoopExpr represents parallel ordered iteration `swarm loop <iterable> ... end`.
+type SwarmLoopExpr struct {
+	posInfo
+	Iterable Expr
+	Body     []Stmt
+}
+
+func (*SwarmLoopExpr) exprNode() {}

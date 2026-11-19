@@ -54,8 +54,9 @@ func (s varTypeState) clone() varTypeState {
 }
 
 type typeScope struct {
-	parent *typeScope
-	vars   map[string]varTypeState
+	parent       *typeScope
+	vars         map[string]varTypeState
+	isWorkerRoot bool
 }
 
 func newTypeScope(parent *typeScope) *typeScope {
@@ -273,19 +274,23 @@ func validateProgramTypes(prog *Program, source string) error {
 }
 
 type typeValidator struct {
-	source          string
-	known           map[string]typeDefInfo
-	defs            map[string]*DefDecl
-	unions          map[string]*UnionDecl
-	consts          map[string]int
-	constExprs      map[string]Expr
-	funcNames       map[string]int
-	modules         map[string]modTypeInfo
-	resolvedUnions  map[string][]resolvedUnionVariant
-	scope           *typeScope
-	inErrorTestExpr bool
-	inErrorBlock    bool
-	loopDepth       int
+	source           string
+	known            map[string]typeDefInfo
+	defs             map[string]*DefDecl
+	unions           map[string]*UnionDecl
+	consts           map[string]int
+	constExprs       map[string]Expr
+	funcNames        map[string]int
+	modules          map[string]modTypeInfo
+	resolvedUnions   map[string][]resolvedUnionVariant
+	scope            *typeScope
+	inErrorTestExpr  bool
+	inErrorBlock     bool
+	loopDepth        int
+	swarmDepth       int
+	directInSwarm    bool
+	workerAssigned   map[string]bool
+	workerOuterScope *typeScope
 }
 
 func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind string) error {
@@ -347,6 +352,9 @@ func (v *typeValidator) setVarInCurrentOrExisting(name string, st varTypeState) 
 		if _, ok := cur.vars[name]; ok {
 			cur.vars[name] = st
 			return
+		}
+		if cur.isWorkerRoot {
+			break
 		}
 	}
 	v.scope.vars[name] = st
@@ -593,6 +601,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		return nil
 
 	case *LoopEndStmt:
+		if v.directInSwarm {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"'-> end' cannot be used inside 'swarm loop'",
+				"Use 'check <cond> -> <value>' to return early from a 'swarm loop' iteration.",
+			)
+		}
 		if v.loopDepth == 0 {
 			return newError(
 				"TypeError",
@@ -650,9 +668,12 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if st.Iterable != nil {
 			loopScope.vars["it"] = v.inferIterableElemState(st.Iterable)
 		}
+		prevDirectInSwarm := v.directInSwarm
+		v.directInSwarm = false
 		v.loopDepth++
 		err := v.checkStmts(st.Body, inFunction)
 		v.loopDepth--
+		v.directInSwarm = prevDirectInSwarm
 		v.popScope()
 		return err
 
@@ -1025,6 +1046,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		return v.inferExprTypeState(ex.Target)
 	case *MatchExpr:
 		return v.inferMatchExprTypeState(ex)
+	case *SwarmLoopExpr:
+		return v.inferSwarmLoopTypeState(ex)
 	case *FieldExpr:
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 			return varTypeState{exactNonRecord: true}
@@ -1576,7 +1599,46 @@ func (v *typeValidator) checkExpr(e Expr) error {
 	case *MatchExpr:
 		return v.checkMatchExpr(ex)
 
+	case *SwarmLoopExpr:
+		return v.checkSwarmLoopExpr(ex)
+
+	case *IdentExpr:
+		if v.swarmDepth > 0 && v.workerAssigned != nil && v.workerAssigned[ex.Name] {
+			assignedLocal := false
+			for cur := v.scope; cur != nil && cur != v.workerOuterScope; cur = cur.parent {
+				if _, ok := cur.vars[ex.Name]; ok {
+					assignedLocal = true
+					break
+				}
+			}
+			if !assignedLocal && v.workerOuterScope != nil {
+				for cur := v.workerOuterScope; cur != nil; cur = cur.parent {
+					if _, inOuter := cur.vars[ex.Name]; inOuter {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("Cannot modify outer variable %q inside 'swarm loop'", ex.Name),
+							fmt.Sprintf("Assign to a different local variable name instead of reusing outer %q.", ex.Name),
+						)
+					}
+				}
+			}
+		}
+		return nil
+
 	case *CallExpr:
+		if v.swarmDepth > 0 && ex.Module == "" && ex.Callee == "ask" && !v.inErrorTestExpr {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"'ask' cannot be used inside 'swarm loop'",
+				"Read interactive input before 'swarm loop', not inside parallel workers.",
+			)
+		}
 		if ex.Module != "" {
 			mod, isMod := v.modules[ex.Module]
 			if !isMod {
@@ -2223,6 +2285,206 @@ func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
 	}
 
 	return v.unifyScalarTypeStates(states)
+}
+
+func (v *typeValidator) collectSwarmReturnExprs(stmts []Stmt) []Expr {
+	if len(stmts) == 0 {
+		return nil
+	}
+	var out []Expr
+	for i, s := range stmts {
+		isLast := i == len(stmts)-1
+		switch st := s.(type) {
+		case *CheckGuardStmt:
+			for _, r := range st.Rules {
+				if r.Action != nil {
+					if es, ok := r.Action.(*ExprStmt); ok {
+						out = append(out, es.Expression)
+					}
+				}
+			}
+			if len(st.ElseBody) > 0 {
+				out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
+			}
+		case *MatchStmt:
+			for _, arm := range st.Arms {
+				if arm.Action != nil {
+					if es, ok := arm.Action.(*ExprStmt); ok {
+						out = append(out, es.Expression)
+					}
+				}
+			}
+			if len(st.ElseBody) > 0 {
+				out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
+			}
+		case *ExprStmt:
+			if isLast {
+				out = append(out, st.Expression)
+			}
+		}
+	}
+	return out
+}
+
+func (v *typeValidator) checkSwarmLoopExpr(ex *SwarmLoopExpr) error {
+	if err := v.checkExpr(ex.Iterable); err != nil {
+		return err
+	}
+	if err := v.checkNotCondition(ex.Iterable); err != nil {
+		return err
+	}
+	if !v.inErrorTestExpr {
+		switch lit := ex.Iterable.(type) {
+		case *NumberExpr:
+			return newError(
+				"TypeError",
+				lit.Line,
+				lit.Col,
+				v.source,
+				fmt.Sprintf("'swarm loop' requires a list or range, got number. Use 'swarm loop range 1 %s' instead.", FormatValue(lit.Value)),
+				fmt.Sprintf("Write: swarm loop range 1 %s ... end", FormatValue(lit.Value)),
+			)
+		case *StringExpr, *InterpStringExpr:
+			line, col := ex.Iterable.Pos()
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				"'swarm loop' requires a list or range, got text",
+				"Iterate over a list like 'swarm loop xs ... end' or a range like 'swarm loop range 1 5 ... end'.",
+			)
+		}
+	}
+
+	outerScope := v.scope
+	workerScope := v.pushScope()
+	workerScope.isWorkerRoot = true
+	workerScope.vars["it"] = v.inferIterableElemState(ex.Iterable)
+
+	prevLoopDepth := v.loopDepth
+	prevSwarmDepth := v.swarmDepth
+	prevDirectInSwarm := v.directInSwarm
+	prevWorkerAssigned := v.workerAssigned
+	prevWorkerOuterScope := v.workerOuterScope
+
+	v.loopDepth++
+	v.swarmDepth++
+	v.directInSwarm = true
+	v.workerAssigned = collectAssignedNames(ex.Body)
+	v.workerOuterScope = outerScope
+
+	defer func() {
+		v.loopDepth = prevLoopDepth
+		v.swarmDepth = prevSwarmDepth
+		v.directInSwarm = prevDirectInSwarm
+		v.workerAssigned = prevWorkerAssigned
+		v.workerOuterScope = prevWorkerOuterScope
+		v.popScope()
+	}()
+
+	if err := v.checkStmts(ex.Body, true); err != nil {
+		return err
+	}
+
+	if !v.inErrorTestExpr {
+		retExprs := v.collectSwarmReturnExprs(ex.Body)
+		expectedType := ""
+		for _, re := range retExprs {
+			if re == nil || isFailCallExpr(re) {
+				continue
+			}
+			if err := v.checkNotCondition(re); err != nil {
+				return err
+			}
+			ct := v.staticConcreteType(v.inferExprTypeState(re))
+			if ct == "" {
+				continue
+			}
+			if expectedType == "" {
+				expectedType = ct
+			} else if ct != expectedType {
+				bLine, bCol := re.Pos()
+				return newError(
+					"TypeError",
+					bLine,
+					bCol,
+					v.source,
+					fmt.Sprintf("Mixed result types in 'swarm loop': expected %s, got %s", expectedType, ct),
+					"All iterations of 'swarm loop' must return compatible types.",
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (v *typeValidator) inferSwarmLoopTypeState(ex *SwarmLoopExpr) varTypeState {
+	outerScope := v.scope
+	workerScope := v.pushScope()
+	workerScope.isWorkerRoot = true
+	workerScope.vars["it"] = v.inferIterableElemState(ex.Iterable)
+	prevLoopDepth := v.loopDepth
+	v.loopDepth++
+	defer func() {
+		v.loopDepth = prevLoopDepth
+		v.popScope()
+	}()
+
+	var states []varTypeState
+	var walkBody func(stmts []Stmt, inScope *typeScope)
+	walkBody = func(stmts []Stmt, inScope *typeScope) {
+		for i, s := range stmts {
+			isLast := i == len(stmts)-1
+			switch st := s.(type) {
+			case *AssignStmt:
+				inScope.vars[st.Name] = v.inferExprTypeState(st.Value)
+			case *CheckGuardStmt:
+				for _, r := range st.Rules {
+					if r.Action != nil {
+						if es, ok := r.Action.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
+							states = append(states, v.inferExprTypeState(es.Expression))
+						}
+					}
+				}
+				if len(st.ElseBody) > 0 {
+					walkBody(st.ElseBody, inScope)
+				}
+			case *MatchStmt:
+				for _, arm := range st.Arms {
+					if arm.Action != nil {
+						if es, ok := arm.Action.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
+							states = append(states, v.inferExprTypeState(es.Expression))
+						}
+					}
+				}
+				if len(st.ElseBody) > 0 {
+					walkBody(st.ElseBody, inScope)
+				}
+			case *ExprStmt:
+				if isLast && !isFailCallExpr(st.Expression) {
+					states = append(states, v.inferExprTypeState(st.Expression))
+				}
+			}
+		}
+	}
+	_ = outerScope
+	walkBody(ex.Body, workerScope)
+
+	if len(states) == 0 {
+		return varTypeState{listElemType: "any"}
+	}
+	unified := v.unifyScalarTypeStates(states)
+	switch {
+	case unified.exactRecord != "":
+		return varTypeState{listElemType: unified.exactRecord}
+	case unified.unionName != "":
+		return varTypeState{listElemType: unified.unionName}
+	case unified.exactBaseType != "":
+		return varTypeState{listElemType: unified.exactBaseType}
+	default:
+		return varTypeState{listElemType: "any"}
+	}
 }
 
 func (v *typeValidator) resolveFallbackLiteralVariant(e Expr) (resolvedUnionVariant, bool) {

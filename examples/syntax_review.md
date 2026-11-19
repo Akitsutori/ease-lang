@@ -161,3 +161,17 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   8. `load` with `or`: `load "./data.csv" as csv or 0`, `load "./a.txt" as text or ""` (`TypeError`)
   9. Forbidden target types: `raw as bool or 0`, `raw as string or ""`, `raw as unknown or 0` (`TypeError`)
   10. Runtime non-suppression: bare `"abc" as number`, bare `(list "a", "b") as number`, `(1 / 0) as number or 0` -> `is error` in `.ease`
+
+## 12. Data-Parallel Workers (`swarm loop`)
+- **Happy Path**: `xs = swarm loop range 1 5\n it * 2\nend`, `to f xs\n swarm loop xs\n check it < 0 -> 0\n it\n end\nend`, `(swarm loop range 1 5\n it * it\nend) where it > 10`, nested `swarm loop`s
+- **10 Negative Cases**:
+  1. Unbounded `swarm loop\n 1\nend` (`SyntaxError`)
+  2. Named variable `swarm loop x in xs ... end` (`SyntaxError`)
+  3. Bare function argument `sum swarm loop range 1 5\n it\nend` (`SyntaxError`)
+  4. `-> end` directly inside `swarm loop` (`TypeError`)
+  5. Mutating outer variable `total = total + it` inside `swarm loop` (`TypeError` / `RuntimeError`)
+  6. `ask "..."` inside `swarm loop` (`TypeError` / `RuntimeError`)
+  7. Non-list/non-range iterable `swarm loop 42 ... end` or `swarm loop "abc" ... end` (`TypeError`)
+  8. Condition returned from worker `swarm loop xs\n it > 1\nend` (`TypeError`)
+  9. Mixed result types across worker branches (`number` vs `text`, `TypeError`)
+  10. Downstream field typo `res where it.missing is 1` or `sum text_res` (`TypeError`)

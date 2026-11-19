@@ -26,6 +26,7 @@ const (
 	TOK_AS     TokenType = "as"
 	TOK_ELSE   TokenType = "else"
 	TOK_LOOP   TokenType = "loop"
+	TOK_SWARM  TokenType = "swarm"
 	TOK_MATCH  TokenType = "match"
 	TOK_AND    TokenType = "and"
 	TOK_OR     TokenType = "or"
@@ -71,6 +72,7 @@ var keywords = map[string]TokenType{
 	"as":     TOK_AS,
 	"else":   TOK_ELSE,
 	"loop":   TOK_LOOP,
+	"swarm":  TOK_SWARM,
 	"match":  TOK_MATCH,
 	"and":    TOK_AND,
 	"or":     TOK_OR,

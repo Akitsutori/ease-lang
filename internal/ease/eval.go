@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -24,6 +25,7 @@ type Env struct {
 	parent         *Env
 	vars           map[string]binding
 	isFuncRoot     bool
+	isWorkerRoot   bool
 	assignedLocals map[string]bool
 	loopIndex      float64
 	hasLoopIndex   bool
@@ -82,6 +84,15 @@ func NewFuncEnv(global *Env, assignedLocals map[string]bool) *Env {
 	}
 }
 
+func NewWorkerEnv(parent *Env, assignedLocals map[string]bool) *Env {
+	return &Env{
+		parent:         parent,
+		vars:           make(map[string]binding),
+		isWorkerRoot:   true,
+		assignedLocals: assignedLocals,
+	}
+}
+
 func (e *Env) Define(name string, val Value, mutable bool) {
 	e.vars[name] = binding{val: val, mutable: mutable}
 }
@@ -113,20 +124,28 @@ func (e *Env) Lookup(name string) (Value, bool) {
 }
 
 func (e *Env) LookupChecked(name string) (Value, bool, bool) {
+	val, ok, blockedKind := e.lookupCheckedKind(name)
+	return val, ok, blockedKind != 0
+}
+
+func (e *Env) lookupCheckedKind(name string) (Value, bool, int) {
 	for cur := e; cur != nil; cur = cur.parent {
 		if b, ok := cur.vars[name]; ok {
-			return b.val, true, false
+			return b.val, true, 0
 		}
-		if cur.isFuncRoot && cur.assignedLocals[name] {
+		if (cur.isFuncRoot || cur.isWorkerRoot) && cur.assignedLocals[name] {
 			if cur.parent != nil {
-				if _, isGlobal := cur.parent.Lookup(name); isGlobal {
-					return nil, false, true
+				if _, isOuter := cur.parent.Lookup(name); isOuter {
+					if cur.isWorkerRoot {
+						return nil, false, 2
+					}
+					return nil, false, 1
 				}
 			}
-			return nil, false, false
+			return nil, false, 0
 		}
 	}
-	return nil, false, false
+	return nil, false, 0
 }
 
 func (e *Env) DefineOrAssign(name string, val Value, line, col int, source string) error {
@@ -155,7 +174,7 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 			cur.vars[name] = binding{val: val, mutable: true}
 			return nil
 		}
-		if cur.isFuncRoot {
+		if cur.isFuncRoot || cur.isWorkerRoot {
 			break
 		}
 	}
@@ -212,11 +231,13 @@ type Evaluator struct {
 	source           string
 	out              io.Writer
 	trace            io.Writer
+	ioMu             *sync.Mutex
 	inReader         *bufio.Reader
 	funcs            map[string]*FuncDecl
 	modules          map[string]*Evaluator
 	global           *Env
 	callDepth        int
+	inSwarmWorker    bool
 	initErr          error
 	headlessScreen   bool
 	screenFrameCount int
@@ -256,8 +277,23 @@ func (ev *Evaluator) SetTrace(w io.Writer) {
 
 func (ev *Evaluator) logTrace(format string, args ...any) {
 	if ev.trace != nil {
+		if ev.ioMu != nil {
+			ev.ioMu.Lock()
+			defer ev.ioMu.Unlock()
+		}
 		fmt.Fprintf(ev.trace, "[trace] "+format+"\n", args...)
 	}
+}
+
+func (ev *Evaluator) writeOutString(s string) {
+	if s == "" {
+		return
+	}
+	if ev.ioMu != nil && !ev.inSwarmWorker {
+		ev.ioMu.Lock()
+		defer ev.ioMu.Unlock()
+	}
+	fmt.Fprint(ev.out, s)
 }
 
 // NewEvaluator creates an Evaluator for `prog` writing `say` output to `out` and reading `ask` from os.Stdin.
@@ -276,6 +312,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 	ev := &Evaluator{
 		source:     source,
 		out:        out,
+		ioMu:       &sync.Mutex{},
 		inReader:   bufio.NewReader(in),
 		funcs:      make(map[string]*FuncDecl),
 		modules:    make(map[string]*Evaluator),
@@ -306,6 +343,7 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 			continue
 		}
 		modEv := NewEvaluatorWithInput(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out)
+		modEv.ioMu = ev.ioMu
 		modEv.httpClient = ev.httpClient
 		modEv.SetHeadlessScreen(ev.headlessScreen)
 		modEv.SetTrace(ev.trace)
@@ -647,7 +685,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		if err := ev.checkNotConditionValue(val, s.Line, s.Col); err != nil {
 			return nil, nil, err
 		}
-		fmt.Fprintln(ev.out, FormatValue(val))
+		ev.writeOutString(FormatValue(val) + "\n")
 		return val, nil, nil
 
 	case *LoopEndStmt:
@@ -743,7 +781,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 						return val, sig, err
 					}
 					if _, isExpr := rule.Action.(*ExprStmt); isExpr {
-						if ev.callDepth > 0 {
+						if ev.callDepth > 0 || ev.inSwarmWorker {
 							return val, &reportSignal{val: val}, nil
 						}
 						if _, isCall := rule.Action.(*ExprStmt).Expression.(*CallExpr); !isCall {
@@ -768,7 +806,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 						return val, sig, err
 					}
 					lastStmt := s.ElseBody[len(s.ElseBody)-1]
-					if _, isExpr := lastStmt.(*ExprStmt); isExpr && ev.callDepth > 0 {
+					if _, isExpr := lastStmt.(*ExprStmt); isExpr && (ev.callDepth > 0 || ev.inSwarmWorker) {
 						return val, &reportSignal{val: val}, nil
 					}
 					return val, nil, nil
@@ -782,7 +820,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				return val, sig, err
 			}
 			lastStmt := s.ElseBody[len(s.ElseBody)-1]
-			if _, isExpr := lastStmt.(*ExprStmt); isExpr && ev.callDepth > 0 {
+			if _, isExpr := lastStmt.(*ExprStmt); isExpr && (ev.callDepth > 0 || ev.inSwarmWorker) {
 				return val, &reportSignal{val: val}, nil
 			}
 			return val, nil, nil
@@ -816,7 +854,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 					return val, sig, err
 				}
 				if es, isExpr := arm.Action.(*ExprStmt); isExpr {
-					if ev.callDepth > 0 {
+					if ev.callDepth > 0 || ev.inSwarmWorker {
 						return val, &reportSignal{val: val}, nil
 					}
 					if _, isCall := es.Expression.(*CallExpr); !isCall {
@@ -839,7 +877,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				}
 				lastStmt := s.ElseBody[len(s.ElseBody)-1]
 				if es, isExpr := lastStmt.(*ExprStmt); isExpr {
-					if ev.callDepth > 0 {
+					if ev.callDepth > 0 || ev.inSwarmWorker {
 						return val, &reportSignal{val: val}, nil
 					}
 					if _, isCall := es.Expression.(*CallExpr); !isCall {
@@ -859,7 +897,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			return nil, nil, nil
 
 		case *ListValue:
-			if ev.callDepth == 0 {
+			if ev.callDepth == 0 && !ev.inSwarmWorker {
 				return nil, nil, newError(
 					"RuntimeError",
 					s.Line,
@@ -964,9 +1002,19 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 	case *BoolExpr:
 		return e.Value, nil
 	case *IdentExpr:
-		val, ok, blockedGlobal := env.LookupChecked(e.Name)
+		val, ok, blockedKind := env.lookupCheckedKind(e.Name)
 		if !ok {
-			if blockedGlobal {
+			if blockedKind == 2 {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("Cannot modify outer variable %q inside 'swarm loop'", e.Name),
+					fmt.Sprintf("Assign to a different local variable name instead of reusing outer %q.", e.Name),
+				)
+			}
+			if blockedKind == 1 {
 				return nil, newError(
 					"RuntimeError",
 					e.Line,
@@ -1522,6 +1570,9 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				"Pass a text string or a list of text items to 'match'.",
 			)
 		}
+
+	case *SwarmLoopExpr:
+		return ev.evalSwarmLoop(e, env)
 	}
 
 	line, col := expr.Pos()

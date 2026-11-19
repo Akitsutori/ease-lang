@@ -427,6 +427,25 @@ cleaned = (list "10", "oops", "25") as number or 0
 say "{port}|{code}|{sum cleaned}"
 ```
 
+### Data-Parallel Workers (`swarm loop`)
+
+Use `swarm loop <iterable> ... end` (or `swarm loop range <start> <end> ... end`) to transform every element in parallel using isolated workers while preserving deterministic `0 .. N-1` order:
+
+- **Isolated & race-free:** Outer variables are strictly read-only, shared lists are frozen against concurrent mutation, `say` output is buffered per worker and flushed in `0 .. N-1` order, and `ask` is disallowed inside `swarm loop`.
+- **Worker guards & errors:** `check <cond> -> <expr>` and `match` return early from the current worker iteration (`-> end` is disallowed directly inside `swarm loop`). If multiple workers fail, the error with the smallest `it.index` is reported deterministically.
+- **Expression or statement:** Assign the homogeneous result list (`costs = swarm loop orders ... end`), return it implicitly at the end of a `to` function, wrap `(swarm loop ... end)` in parentheses for postfix `where`/calls, or use it as a statement for parallel side effects.
+
+```ease
+to squares_over_ten n
+    (swarm loop range 1 n
+        check it <= 3 -> 0
+        it * it
+    end) where it > 10
+end
+
+say squares_over_ten 5
+```
+
 ---
 
 ## Why Ease Works Well for AI Agents
@@ -491,7 +510,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```text
 Keywords:
   to  import  def  with  where  end  test  check  is
-  say  as  else  loop  match
+  say  as  else  loop  swarm  match
   and  or  not  text  number  list
 
 Operators & Punctuation:
@@ -524,6 +543,7 @@ top_test_blk   ::= "test" [STRING] ( NL | &"end" )
 stmt           ::= "say" expr stmt_end
                  | "end" stmt_end
                  | loop_stmt
+                 | swarm_loop stmt_end
                  | check_guard
                  | match_stmt
                  | assign_stmt
@@ -589,7 +609,8 @@ where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
 cast_type      ::= "text" | "number" | "csv" | "bytes" | IDENT [ "." IDENT ]
 call_args      ::= unary{k}
 
-primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | match_expr
+primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | match_expr | swarm_loop
+swarm_loop      ::= "swarm" "loop" ( "range" unary unary | expr ) NL { stmt [NL] } "end"
 match_expr      ::= "match" expr NL match_expr_arm { [NL] match_expr_arm } [ [NL] match_expr_else ] NL "end"
 match_expr_arm  ::= match_pattern "->" expr stmt_end
 match_expr_else ::= "else" ( "->" expr stmt_end | NL { stmt [NL] } expr stmt_end )
@@ -616,7 +637,7 @@ for f in tests/*.ease; do ./ease test "$f"; done
 cmd/ease/           CLI entrypoint
 internal/ease/      Lexer, Parser, AST, Typechecker, Evaluator, Screen, Bundle & Stdlib
 examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–10)
+tests/              Language feature test files (01–11)
 .github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
 ```
 

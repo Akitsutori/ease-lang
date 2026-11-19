@@ -83,7 +83,7 @@
       "patterns": [
         {
           "name": "keyword.control.ease",
-          "match": "\\b(to|end|else|loop|match|test|check|import)\\b"
+          "match": "\\b(to|end|else|loop|swarm|match|test|check|import)\\b"
         },
         {
           "name": "keyword.other.ease",

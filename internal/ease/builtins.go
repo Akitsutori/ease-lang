@@ -55,6 +55,16 @@ var builtinArities = map[string]int{
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
 	switch name {
 	case "ask":
+		if ev.inSwarmWorker {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"'ask' cannot be used inside 'swarm loop'",
+				"Read interactive input before 'swarm loop', not inside parallel workers.",
+			)
+		}
 		if len(args) != 1 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "ask requires 1 argument (prompt)", "Example: ask \"Name?\" or ask \"\"")
 		}

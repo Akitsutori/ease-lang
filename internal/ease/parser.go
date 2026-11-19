@@ -22,6 +22,7 @@ type Parser struct {
 	stopChainedIs  bool
 	disallowAs     bool
 	disallowWhere  bool
+	inCallArg      bool
 	inTestBlock    bool
 	funcArities    map[string]int
 	moduleArities  map[string]map[string]int
@@ -858,6 +859,9 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	if err := p.expectStmtEnd("test assertion"); err != nil {
 		return nil, err
 	}
+	if _, isSwarm := expr.(*SwarmLoopExpr); isSwarm {
+		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
+	}
 	return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: expr}, nil
 }
 
@@ -898,6 +902,8 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		return p.parseCheckGuardStmt()
 	case TOK_MATCH:
 		return p.parseMatchStmt()
+	case TOK_SWARM:
+		return p.parseSwarmLoopStmt()
 	case TOK_TO:
 		return nil, newError(
 			"SyntaxError",
@@ -1048,6 +1054,145 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 
 	return &LoopStmt{
 		posInfo:  posInfo{Line: loopTok.Line, Col: loopTok.Col},
+		Iterable: iterExpr,
+		Body:     body,
+	}, nil
+}
+
+func (p *Parser) parseSwarmLoopStmt() (Stmt, error) {
+	ex, err := p.parseSwarmLoopExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectStmtEnd("'swarm loop' block"); err != nil {
+		return nil, err
+	}
+	line, col := ex.Pos()
+	return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: ex}, nil
+}
+
+func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
+	swarmTok := p.advance() // consume `swarm`
+	if !p.match(TOK_LOOP) {
+		cur := p.current()
+		return nil, newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			fmt.Sprintf("Expected 'loop' after 'swarm', got %q", cur.Lexeme),
+			"Write: swarm loop <list_or_range> ... end",
+		)
+	}
+
+	if p.check(TOK_IDENT) && p.peekNext().Type == TOK_IDENT && p.peekNext().Lexeme == "in" {
+		return nil, newError(
+			"SyntaxError",
+			p.current().Line,
+			p.current().Col,
+			p.source,
+			fmt.Sprintf("Named loop variables like 'swarm loop %s in ...' are not supported", p.current().Lexeme),
+			"Write 'swarm loop <list> ... end' and access the current element via 'it' (or 'it.index').",
+		)
+	}
+
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			swarmTok.Line,
+			swarmTok.Col,
+			p.source,
+			"'swarm loop' requires a list or 'range start end'",
+			"Unbounded 'swarm loop' is not allowed. Write: swarm loop items ... end or swarm loop range 1 10 ... end.",
+		)
+	}
+
+	var iterExpr Expr
+	var err error
+	if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
+		rangeTok := p.advance()
+		var startExpr, endExpr Expr
+		startExpr, err = p.parseUnary()
+		if err == nil {
+			endExpr, err = p.parseUnary()
+		}
+		if err != nil {
+			return nil, err
+		}
+		iterExpr = &CallExpr{
+			posInfo: posInfo{Line: rangeTok.Line, Col: rangeTok.Col},
+			Callee:  "range",
+			Args:    []Expr{startExpr, endExpr},
+		}
+	} else {
+		iterExpr, err = p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if !p.match(TOK_NEWLINE) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected newline after 'swarm loop' iterable",
+			"Write 'swarm loop <list_or_range>' followed by body statements on new lines, closing with 'end'.",
+		)
+	}
+	p.skipNewlines()
+
+	prevDisallowAs := p.disallowAs
+	prevDisallowWhere := p.disallowWhere
+	prevDisallowTopIs := p.disallowTopIs
+	prevStopChainedIs := p.stopChainedIs
+	prevInCallArg := p.inCallArg
+	prevInTestBlock := p.inTestBlock
+	p.disallowAs = false
+	p.disallowWhere = false
+	p.disallowTopIs = false
+	p.stopChainedIs = false
+	p.inCallArg = false
+	p.inTestBlock = false
+	defer func() {
+		p.disallowAs = prevDisallowAs
+		p.disallowWhere = prevDisallowWhere
+		p.disallowTopIs = prevDisallowTopIs
+		p.stopChainedIs = prevStopChainedIs
+		p.inCallArg = prevInCallArg
+		p.inTestBlock = prevInTestBlock
+	}()
+
+	var body []Stmt
+	for !p.check(TOK_END) {
+		if p.check(TOK_EOF) {
+			return nil, newError(
+				"SyntaxError",
+				swarmTok.Line,
+				swarmTok.Col,
+				p.source,
+				"'swarm loop' is missing 'end'",
+				"Close every 'swarm loop' block with 'end'.",
+			)
+		}
+		s, err := p.parseStmt()
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, s)
+		p.skipNewlines()
+	}
+	p.advance() // consume `end`
+
+	return &SwarmLoopExpr{
+		posInfo:  posInfo{Line: swarmTok.Line, Col: swarmTok.Col},
 		Iterable: iterExpr,
 		Body:     body,
 	}, nil
@@ -1608,15 +1753,18 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 	prevDisallowWhere := p.disallowWhere
 	prevDisallowTopIs := p.disallowTopIs
 	prevStopChainedIs := p.stopChainedIs
+	prevInCallArg := p.inCallArg
 	p.disallowAs = false
 	p.disallowWhere = false
 	p.disallowTopIs = false
 	p.stopChainedIs = false
+	p.inCallArg = false
 	defer func() {
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
 		p.disallowTopIs = prevDisallowTopIs
 		p.stopChainedIs = prevStopChainedIs
+		p.inCallArg = prevInCallArg
 	}()
 
 	matchTok := p.advance() // consume `match`
@@ -2318,13 +2466,16 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		prevDisallowAs := p.disallowAs
 		prevDisallowWhere := p.disallowWhere
 		prevDisallowTopIs := p.disallowTopIs
+		prevInCallArg := p.inCallArg
 		p.disallowAs = false
 		p.disallowWhere = false
 		p.disallowTopIs = false
+		p.inCallArg = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
 		p.disallowTopIs = prevDisallowTopIs
+		p.inCallArg = prevInCallArg
 		if err != nil {
 			return nil, err
 		}
@@ -2337,6 +2488,18 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		return p.parseTypedOrInlineList()
 	case TOK_MATCH:
 		return p.parseMatchExpr()
+	case TOK_SWARM:
+		if p.inCallArg {
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Wrap 'swarm loop ... end' in parentheses or assign it to a variable first",
+				"Write e.g. 'sum (swarm loop ... end)' or 'items = swarm loop ... end'.",
+			)
+		}
+		return p.parseSwarmLoopExpr()
 	default:
 		return nil, newError(
 			"SyntaxError",
@@ -2539,8 +2702,13 @@ func (p *Parser) parseCallArgs(callee string, arity int) ([]Expr, error) {
 		return args, nil
 	}
 	prevDisallowAs := p.disallowAs
+	prevInCallArg := p.inCallArg
 	p.disallowAs = true
-	defer func() { p.disallowAs = prevDisallowAs }()
+	p.inCallArg = true
+	defer func() {
+		p.disallowAs = prevDisallowAs
+		p.inCallArg = prevInCallArg
+	}()
 
 	for i := 0; i < arity; i++ {
 		if p.isCallArgBoundary() {

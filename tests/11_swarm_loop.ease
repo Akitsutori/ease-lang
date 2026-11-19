@@ -1,0 +1,75 @@
+# Feature 11: Data-Parallel Ordered Workers (`swarm loop <iterable> ... end`)
+
+def Order
+  id     = 0
+  amount = 0
+end
+
+def Summary
+  id   = 0
+  cost = 0
+end
+
+to shipping_costs orders
+  swarm loop orders
+    check it.amount >= 50 -> Summary with id = it.id, cost = 0
+    Summary with id = it.id, cost = 5.90
+  end
+end
+
+to double_range n
+  swarm loop range 1 n
+    local = it * 2
+    local + 1
+  end
+end
+
+test "swarm loop transforms, guards, scoping, and downstream type inference"
+  orders = list as Order with
+    id = 10, amount = 20
+    id = 20, amount = 50
+    id = 30, amount = 85
+  end
+
+  summaries = shipping_costs orders
+  count summaries is 3
+  summaries.0.id is 10
+  summaries.0.cost is 5.9
+  summaries.1.id is 20
+  summaries.1.cost is 0
+  summaries.2.cost is 0
+
+  free = summaries where it.cost is 0
+  count free is 2
+
+  doubled = double_range 4
+  doubled is list 3, 5, 7, 9
+  sum doubled is 24
+
+  # Parenthesized swarm loop with postfix where & outer read-only variable
+  factor = 10
+  filtered = (swarm loop range 1 5
+    it * factor
+  end) where it >= 30
+  filtered is list 30, 40, 50
+
+  # Side-effect statement form & match guard inside swarm loop
+  swarm loop (list "a", "b")
+    say "ok:{it}"
+  end
+
+  tags = swarm loop (list "ERR:disk", "OK:boot")
+    match it
+      "ERR:{msg}" -> "fail:{msg}"
+      "OK:{msg}" -> "pass:{msg}"
+    end
+    "unknown"
+  end
+  tags is list "fail:disk", "pass:boot"
+
+  # Empty list fast path
+  empty = swarm loop (list as number)
+    it + 1
+  end
+  count empty is 0
+end
