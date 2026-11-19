@@ -73,6 +73,7 @@ go build -o ease ./cmd/ease
 
 for f in tests/*.ease; do ./ease test "$f"; done
 ./ease run examples/06_window.ease --check
+./ease run examples/07_http_server.ease --check
 ```
 
 **Windows (PowerShell):**
@@ -84,6 +85,7 @@ go build -o ease.exe .\cmd\ease
 
 Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 .\ease.exe run examples\06_window.ease --check
+.\ease.exe run examples\07_http_server.ease --check
 ```
 
 ---

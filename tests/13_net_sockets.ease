@@ -1,0 +1,46 @@
+import network
+
+def ping_reply
+    pong    = "ok"
+    service = "ease-tcp"
+end
+
+to handle_http req
+    match req.path
+        "/health" -> network:reply_json req 200 (ping_reply)
+        "/hello"  -> network:reply_text req 200 "Hello Ease"
+        else      -> network:reply_text req 404 "not found"
+    end
+end
+
+to http_worker requests
+    take requests
+        spawn handle_http it
+    end
+end
+
+test "concurrent HTTP server via inbox handles multiple routes"
+    requests = inbox as network.http_request
+    port = network:serve_http 0 requests
+    port > 0
+    spawn http_worker requests
+
+    api = network.network with url = "http://127.0.0.1:{port}"
+    paths = list "/health", "/hello", "/missing"
+    responses = swarm loop paths
+        network:fetch api it
+    end
+
+    responses.0 is (encode_json (ping_reply))
+    responses.1 is "Hello Ease"
+    responses.2 is ""
+
+    close requests
+end
+
+test "closing tcp_client lines inbox cleanly tears down serve_tcp"
+    clients = inbox as network.tcp_client
+    port = network:serve_tcp 0 clients
+    port > 0
+    close clients
+end

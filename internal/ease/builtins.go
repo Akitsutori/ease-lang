@@ -52,6 +52,11 @@ var builtinArities = map[string]int{
 	"screen_present": 2,
 	"replace":        3,
 	"slice":          3,
+	"net_serve_http": 2,
+	"net_reply_text": 3,
+	"net_reply_json": 3,
+	"net_serve_tcp":  2,
+	"net_send":       2,
 }
 
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
@@ -756,6 +761,26 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			ev.activeScreen = startScreenSession(w, h, title)
 		}
 		return ev.activeScreen.present(recordToScreenScene(sceneRec)), true, nil
+
+	case "net_serve_http":
+		v, err := ev.execNetServeHTTP(args, line, col)
+		return v, true, err
+
+	case "net_reply_text":
+		v, err := ev.execNetReplyText(args, line, col)
+		return v, true, err
+
+	case "net_reply_json":
+		v, err := ev.execNetReplyJSON(args, line, col)
+		return v, true, err
+
+	case "net_serve_tcp":
+		v, err := ev.execNetServeTCP(args, line, col)
+		return v, true, err
+
+	case "net_send":
+		v, err := ev.execNetSend(args, line, col)
+		return v, true, err
 	}
 
 	return nil, false, nil

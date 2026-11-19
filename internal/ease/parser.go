@@ -57,19 +57,19 @@ func ParseProgram(source string) (*Program, error) {
 
 // ParseProgramFromFile lexes and parses `source` resolving relative file imports against `filePath`.
 func ParseProgramFromFile(source, filePath string) (*Program, error) {
-	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil)
+	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil, false)
 }
 
 // ParseProgramWithArities lexes and parses `source` with pre-populated function arities (e.g. for REPL chunks).
 func ParseProgramWithArities(source string, extraArities map[string]int) (*Program, error) {
-	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities)
+	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities, false)
 }
 
 func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error) {
-	return parseProgramWithContext(source, "", seen, nil, nil)
+	return parseProgramWithContext(source, "", seen, nil, nil, false)
 }
 
-func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int) (*Program, error) {
+func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int, isModule bool) (*Program, error) {
 	tokens, err := NewLexer(source).Tokenize()
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 	if err := resolveProgramImports(prog, source, seen); err != nil {
 		return nil, err
 	}
-	if err := validateProgramTypes(prog, source); err != nil {
+	if err := validateProgramTypesWithMode(prog, source, isModule); err != nil {
 		return nil, err
 	}
 	return prog, nil
@@ -145,7 +145,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 							"Check available standard modules under std/, e.g. 'import network'.",
 						)
 					}
-					modProg, modErr := parseProgramWithContext(modSrc, "", map[string]bool{}, activeStack, nil)
+					modProg, modErr := parseProgramWithContext(modSrc, "", map[string]bool{}, activeStack, nil, true)
 					if modErr != nil {
 						return nil, modErr
 					}
@@ -191,7 +191,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 					}
 					modSrc := string(rawBytes)
 					nextStack := append(slices.Clone(activeStack), absPath)
-					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil)
+					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil, true)
 					if modErr != nil {
 						return nil, modErr
 					}

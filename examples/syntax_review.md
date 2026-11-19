@@ -189,3 +189,14 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   8. `take ch\n say it.missing\nend` (`TypeError` via inferred `ElemType`)
   9. `take ch` missing `end` (`SyntaxError`)
   10. `put closed_ch "late"` -> `RuntimeError` (`Cannot 'put' into a closed inbox`)
+
+## 14. `inbox`-Driven TCP & HTTP Servers (`std/network`, `tests/13_net_sockets.ease`, `examples/07_http_server.ease`)
+- **Happy Path**: `requests = inbox as network.http_request`, `port = network:serve_http 0 requests`, `network:reply_text req 200 "ok"`, `network:reply_json req 200 rec`, `clients = inbox as network.tcp_client`, `network:serve_tcp 0 clients`, `network:tcp_send client "msg\n"`, `close requests` / `close clients` / `close client.lines`
+- **Negative / Safety Cases**:
+  1. Port out of range (`-1`, `65536`) or non-integer port (`RuntimeError`)
+  2. Non-inbox passed to `serve_http` / `serve_tcp` (`TypeError`)
+  3. Invalid HTTP status code (`< 100` or `> 599`) in `reply_text` / `reply_json` (`RuntimeError`)
+  4. Sending to a closed `tcp_client` via `tcp_send` (`RuntimeError`)
+  5. `InboxValue.AddOnClose` runs callbacks once on `close` (and immediately if already closed)
+  6. Headless `--check` mode returns `0` from `serve_http` / `serve_tcp` without blocking
+  7. Runtime shutdown (`ev.Close()`) closes open listeners/connections and unblocks servers cleanly

@@ -475,6 +475,17 @@ take jobs
 end
 ```
 
+### TCP & HTTP Servers (`import network`, `inbox`-driven)
+
+`network` provides `inbox`-driven TCP and HTTP server primitives alongside `network:fetch` / `network:send`:
+
+- `network:serve_http port requests` (`port = 0` picks a free OS port; `--check` mode returns `0`; closing `requests` closes the listener)
+- `network:reply_text req status body` / `network:reply_json req status data` (writes HTTP/1.1 response with UTF-8 byte `Content-Length` and closes the request connection idempotently)
+- `network:serve_tcp port clients` (pushes `network.tcp_client` records with `id`, `remote`, and `lines: inbox as text`; closing `clients` closes the listener, closing `client.lines` closes the connection)
+- `network:tcp_send client msg` (writes raw text to an open `tcp_client`)
+
+See [`examples/07_http_server.ease`](examples/07_http_server.ease) for a full concurrent HTTP server using `inbox`, `spawn`, `match`, and `swarm loop`.
+
 ---
 
 ## Why Ease Works Well for AI Agents
@@ -668,14 +679,16 @@ go vet ./...
 go test -v ./...
 for f in tests/*.ease; do ./ease test "$f"; done
 ./ease test examples/05_network.ease
+./ease test examples/07_http_server.ease
 ./ease run examples/06_window.ease --check
+./ease run examples/07_http_server.ease --check
 ```
 
 ```text
 cmd/ease/           CLI entrypoint
 internal/ease/      Lexer, Parser, AST, Typechecker, Evaluator, Screen, Bundle & Stdlib
 examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–12)
+tests/              Language feature test files (01–13)
 .github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
 ```
 

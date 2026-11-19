@@ -72,6 +72,7 @@ func (ev *Evaluator) forkWorker(outBuf io.Writer) *Evaluator {
 		callDepth:      0,
 		inSwarmWorker:  true,
 		headlessScreen: ev.headlessScreen,
+		headlessNet:    ev.headlessNet,
 		httpClient:     ev.httpClient,
 	}
 	for alias, modEv := range ev.modules {

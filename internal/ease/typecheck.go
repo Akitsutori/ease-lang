@@ -70,6 +70,10 @@ func newTypeScope(parent *typeScope) *typeScope {
 // validateProgramTypes verifies type targets in `as`, union rules (4 building blocks
 // and 3 guardrails), union type narrowing on field accesses, and check exhaustiveness.
 func validateProgramTypes(prog *Program, source string) error {
+	return validateProgramTypesWithMode(prog, source, false)
+}
+
+func validateProgramTypesWithMode(prog *Program, source string, isModule bool) error {
 	known := make(map[string]typeDefInfo, len(prog.Defs)+len(prog.Unions))
 	defs := make(map[string]*DefDecl, len(prog.Defs))
 	unions := make(map[string]*UnionDecl, len(prog.Unions))
@@ -102,15 +106,17 @@ func validateProgramTypes(prog *Program, source string) error {
 
 	funcNames := make(map[string]int, len(prog.Functions))
 	for _, fn := range prog.Functions {
-		if _, isBuiltin := builtinArities[fn.Name]; isBuiltin {
-			return newError(
-				"TypeError",
-				fn.Line,
-				fn.Col,
-				source,
-				fmt.Sprintf("Cannot define function %q: it conflicts with a built-in function", fn.Name),
-				"Choose a different function name.",
-			)
+		if !isModule {
+			if _, isBuiltin := builtinArities[fn.Name]; isBuiltin {
+				return newError(
+					"TypeError",
+					fn.Line,
+					fn.Col,
+					source,
+					fmt.Sprintf("Cannot define function %q: it conflicts with a built-in function", fn.Name),
+					"Choose a different function name.",
+				)
+			}
 		}
 		if _, isType := known[fn.Name]; isType {
 			return newError(
@@ -184,7 +190,7 @@ func validateProgramTypes(prog *Program, source string) error {
 				"Each imported module must have a unique alias.",
 			)
 		}
-		if err := validateProgramTypes(imp.ModuleProg, imp.ModuleSource); err != nil {
+		if err := validateProgramTypesWithMode(imp.ModuleProg, imp.ModuleSource, true); err != nil {
 			return err
 		}
 		mi := modTypeInfo{
@@ -260,6 +266,9 @@ func validateProgramTypes(prog *Program, source string) error {
 		if err != nil {
 			return err
 		}
+		if err := v.checkFuncReturnConsistency(fn); err != nil {
+			return err
+		}
 	}
 
 	for _, chk := range prog.Checks {
@@ -271,6 +280,125 @@ func validateProgramTypes(prog *Program, source string) error {
 		}
 	}
 
+	return nil
+}
+
+func isVoidBuiltinCallStmt(s Stmt) bool {
+	es, ok := s.(*ExprStmt)
+	if !ok {
+		return false
+	}
+	ce, ok := es.Expression.(*CallExpr)
+	if !ok || ce.Module != "" {
+		return false
+	}
+	switch ce.Callee {
+	case "close", "put":
+		return true
+	default:
+		return false
+	}
+}
+
+func stmtEndsWithExpr(stmts []Stmt) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	last := stmts[len(stmts)-1]
+	switch st := last.(type) {
+	case *ExprStmt:
+		return !isVoidBuiltinCallStmt(st)
+	case *LoopStmt:
+		// An infinite `loop ... end` (no iterable) cannot fall through normally.
+		return st.Iterable == nil
+	case *MatchStmt:
+		if len(st.ElseBody) > 0 && stmtEndsWithExpr(st.ElseBody) {
+			return true
+		}
+		for _, arm := range st.Arms {
+			if arm.Action != nil && stmtEndsWithExpr([]Stmt{arm.Action}) {
+				return true
+			}
+		}
+		return false
+	case *CheckGuardStmt:
+		if len(st.ElseBody) > 0 {
+			return stmtEndsWithExpr(st.ElseBody)
+		}
+		// Exhaustive multi-branch `check ... end` where every rule returns an expression.
+		if len(st.Rules) >= 2 {
+			allExpr := true
+			for _, r := range st.Rules {
+				if r.Action == nil || !stmtEndsWithExpr([]Stmt{r.Action}) {
+					allExpr = false
+					break
+				}
+			}
+			return allExpr
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func findGuardReturn(stmts []Stmt) (int, int, bool) {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case *CheckGuardStmt:
+			for _, r := range st.Rules {
+				if r.Action != nil && !isVoidBuiltinCallStmt(r.Action) {
+					if _, isExpr := r.Action.(*ExprStmt); isExpr {
+						return r.Line, r.Col, true
+					}
+				}
+			}
+			if line, col, ok := findGuardReturn(st.ElseBody); ok {
+				return line, col, true
+			}
+		case *LoopStmt:
+			if line, col, ok := findGuardReturn(st.Body); ok {
+				return line, col, true
+			}
+		case *TakeStmt:
+			if line, col, ok := findGuardReturn(st.Body); ok {
+				return line, col, true
+			}
+		case *MatchStmt:
+			for _, arm := range st.Arms {
+				if arm.Action != nil {
+					if line, col, ok := findGuardReturn([]Stmt{arm.Action}); ok {
+						return line, col, true
+					}
+				}
+			}
+			if line, col, ok := findGuardReturn(st.ElseBody); ok {
+				return line, col, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// checkFuncReturnConsistency rejects functions that return a value on a guard branch
+// (`check ... -> <expr>`) but fall through without a final return expression.
+func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
+	if fn == nil {
+		return nil
+	}
+	if stmtEndsWithExpr(fn.Body) {
+		return nil
+	}
+	if line, col, hasGuard := findGuardReturn(fn.Body); hasGuard {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Function '%s' returns a value on a 'check' branch but falls through without a return value at the end", fn.Name),
+			"Use '-> end' to exit a loop or take block, or return a consistent value at the end of the function.",
+		)
+	}
 	return nil
 }
 

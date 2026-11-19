@@ -244,6 +244,7 @@ type Evaluator struct {
 	inSwarmWorker    bool
 	initErr          error
 	headlessScreen   bool
+	headlessNet      bool
 	screenFrameCount int
 	activeScreen     *screenSession
 	httpClient       *http.Client
@@ -254,6 +255,14 @@ func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	ev.headlessScreen = headless
 	for _, modEv := range ev.modules {
 		modEv.SetHeadlessScreen(headless)
+	}
+}
+
+// SetHeadlessNet toggles headless TCP listener simulation for `--check` mode.
+func (ev *Evaluator) SetHeadlessNet(headless bool) {
+	ev.headlessNet = headless
+	for _, modEv := range ev.modules {
+		modEv.SetHeadlessNet(headless)
 	}
 }
 
@@ -357,6 +366,7 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		modEv.isChild = true
 		modEv.httpClient = ev.httpClient
 		modEv.SetHeadlessScreen(ev.headlessScreen)
+		modEv.SetHeadlessNet(ev.headlessNet)
 		modEv.SetTrace(ev.trace)
 		if modEv.initErr != nil {
 			return modEv.initErr
@@ -587,6 +597,7 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	ev := NewEvaluatorWithInput(source, prog, in, out)
 	defer ev.Close()
 	ev.SetHeadlessScreen(headless)
+	ev.SetHeadlessNet(headless)
 	ev.SetTrace(trace)
 	ev.logTrace("parsed %d def(s), %d function(s), %d check block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
@@ -1526,7 +1537,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			if !ok {
 				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Unknown module %q", e.Module), "")
 			}
-			return modEv.callFunction(e.Callee, args, e.Line, e.Col)
+			return modEv.callModuleFunction(e.Callee, args, e.Line, e.Col)
 		}
 		return ev.callFunction(e.Callee, args, e.Line, e.Col)
 
@@ -2140,6 +2151,21 @@ func (ev *Evaluator) evalVectorArithmetic(op string, left, right Value, line, co
 	return &ListValue{ElemType: "number", Elements: out}, nil
 }
 
+func (ev *Evaluator) callModuleFunction(name string, args []Value, line, col int) (Value, error) {
+	fn, ok := ev.funcs[name]
+	if !ok {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Unknown module function %q", name),
+			fmt.Sprintf("Define it with 'to %s [...] ... end' in the module.", name),
+		)
+	}
+	return ev.callUserFunction(fn, args, line, col)
+}
+
 func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Value, error) {
 	if val, handled, err := ev.callBuiltin(name, args, line, col); handled {
 		return val, err
@@ -2160,6 +2186,11 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 			fnHint,
 		)
 	}
+	return ev.callUserFunction(fn, args, line, col)
+}
+
+func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int) (Value, error) {
+	name := fn.Name
 	if len(args) != len(fn.Params) {
 		return nil, newError(
 			"RuntimeError",

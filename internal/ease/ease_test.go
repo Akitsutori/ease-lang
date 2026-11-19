@@ -3120,3 +3120,60 @@ end
 		}
 	})
 }
+
+func TestHalfValueReturningFunctionRejected(t *testing.T) {
+	badLoop := `
+to find_even xs
+  loop xs
+    check it % 2 is 0 -> it
+    say it
+  end
+end
+`
+	_, err := ParseProgram(badLoop)
+	if err == nil {
+		t.Fatalf("expected TypeError for half-value-returning function, got nil")
+	}
+	if !strings.Contains(err.Error(), "returns a value on a 'check' branch but falls through without a return value at the end") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Use '-> end' to exit a loop or take block") {
+		t.Fatalf("expected hint about '-> end', got: %v", err)
+	}
+
+	badTake := `
+to drain_until_zero ch
+  take ch
+    check it is 0 -> it
+    say it
+  end
+end
+`
+	if _, err := ParseProgram(badTake); err == nil || !strings.Contains(err.Error(), "falls through without a return value at the end") {
+		t.Fatalf("expected TypeError for take fallthrough, got: %v", err)
+	}
+
+	okEndExit := `
+to print_until_zero xs
+  loop xs
+    check it is 0 -> end
+    say it
+  end
+end
+`
+	if _, err := ParseProgram(okEndExit); err != nil {
+		t.Fatalf("expected '-> end' loop exit to pass, got: %v", err)
+	}
+
+	okConsistentReturn := `
+to find_even_or_zero xs
+  loop xs
+    check it % 2 is 0 -> it
+  end
+  0
+end
+`
+	if _, err := ParseProgram(okConsistentReturn); err != nil {
+		t.Fatalf("expected consistent return at end to pass, got: %v", err)
+	}
+}

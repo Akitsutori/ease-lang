@@ -1,8 +1,10 @@
 package ease
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"sync"
 )
 
@@ -15,6 +17,7 @@ type InboxValue struct {
 	done     chan struct{}
 	mu       sync.Mutex
 	closed   bool
+	onClose  []func()
 }
 
 func newInboxValue(elemType string) *InboxValue {
@@ -25,17 +28,51 @@ func newInboxValue(elemType string) *InboxValue {
 	}
 }
 
+// AddOnClose registers a callback invoked once when the inbox is closed (or immediately if already closed).
+func (ib *InboxValue) AddOnClose(fn func()) {
+	if ib == nil || fn == nil {
+		return
+	}
+	ib.mu.Lock()
+	if ib.closed {
+		ib.mu.Unlock()
+		fn()
+		return
+	}
+	ib.onClose = append(ib.onClose, fn)
+	ib.mu.Unlock()
+}
+
+// IsClosed reports whether the inbox has been closed.
+func (ib *InboxValue) IsClosed() bool {
+	if ib == nil {
+		return true
+	}
+	ib.mu.Lock()
+	c := ib.closed
+	ib.mu.Unlock()
+	return c
+}
+
 // Close closes the inbox idempotently so pending readers drain buffered messages and exit cleanly.
 func (ib *InboxValue) Close() {
 	if ib == nil {
 		return
 	}
 	ib.mu.Lock()
+	var callbacks []func()
 	if !ib.closed {
 		ib.closed = true
 		close(ib.done)
+		callbacks = ib.onClose
+		ib.onClose = nil
 	}
 	ib.mu.Unlock()
+	for _, fn := range callbacks {
+		if fn != nil {
+			fn()
+		}
+	}
 }
 
 // Put sends `val` into the inbox, returning a RuntimeError if the inbox is already closed.
@@ -114,21 +151,91 @@ func (ib *InboxValue) Recv(ctx context.Context) (Value, bool, error) {
 	}
 }
 
+type netListenerHandle struct {
+	id     string
+	ln     net.Listener
+	mu     sync.Mutex
+	closed bool
+}
+
+func (h *netListenerHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	c := h.closed
+	h.mu.Unlock()
+	return c
+}
+
+func (h *netListenerHandle) close() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	already := h.closed
+	h.closed = true
+	ln := h.ln
+	h.mu.Unlock()
+	if !already && ln != nil {
+		_ = ln.Close()
+	}
+}
+
+type netConnHandle struct {
+	id      string
+	conn    net.Conn
+	reader  *bufio.Reader
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+	mu      sync.Mutex
+	closed  bool
+}
+
+func (h *netConnHandle) isClosed() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.Lock()
+	c := h.closed
+	h.mu.Unlock()
+	return c
+}
+
+func (h *netConnHandle) close() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	already := h.closed
+	h.closed = true
+	c := h.conn
+	h.mu.Unlock()
+	if !already && c != nil {
+		_ = c.Close()
+	}
+}
+
 type runtimeLifecycle struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	inboxes  []*InboxValue
-	firstErr error
-	closed   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	mu        sync.Mutex
+	inboxes   []*InboxValue
+	listeners map[string]*netListenerHandle
+	conns     map[string]*netConnHandle
+	netSeq    uint64
+	firstErr  error
+	closed    bool
 }
 
 func newRuntimeLifecycle() *runtimeLifecycle {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &runtimeLifecycle{
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:       ctx,
+		cancel:    cancel,
+		listeners: make(map[string]*netListenerHandle),
+		conns:     make(map[string]*netConnHandle),
 	}
 }
 
@@ -169,6 +276,112 @@ func (rt *runtimeLifecycle) recordError(err error) {
 	rt.abort()
 }
 
+func (rt *runtimeLifecycle) isAborted() bool {
+	if rt == nil {
+		return false
+	}
+	rt.mu.Lock()
+	c := rt.closed
+	rt.mu.Unlock()
+	return c
+}
+
+func (rt *runtimeLifecycle) registerListener(ln net.Listener) *netListenerHandle {
+	if rt == nil || ln == nil {
+		return nil
+	}
+	rt.mu.Lock()
+	if rt.closed {
+		rt.mu.Unlock()
+		_ = ln.Close()
+		return nil
+	}
+	rt.netSeq++
+	id := fmt.Sprintf("listener-%d", rt.netSeq)
+	h := &netListenerHandle{id: id, ln: ln}
+	if rt.listeners == nil {
+		rt.listeners = make(map[string]*netListenerHandle)
+	}
+	rt.listeners[id] = h
+	rt.mu.Unlock()
+	return h
+}
+
+func (rt *runtimeLifecycle) getListener(id string) (*netListenerHandle, bool) {
+	if rt == nil || id == "" {
+		return nil, false
+	}
+	rt.mu.Lock()
+	h, ok := rt.listeners[id]
+	rt.mu.Unlock()
+	return h, ok
+}
+
+func (rt *runtimeLifecycle) closeListener(id string) {
+	if rt == nil || id == "" {
+		return
+	}
+	rt.mu.Lock()
+	h, ok := rt.listeners[id]
+	if ok {
+		delete(rt.listeners, id)
+	}
+	rt.mu.Unlock()
+	if ok {
+		h.close()
+	}
+}
+
+func (rt *runtimeLifecycle) registerConn(conn net.Conn) *netConnHandle {
+	if rt == nil || conn == nil {
+		return nil
+	}
+	rt.mu.Lock()
+	if rt.closed {
+		rt.mu.Unlock()
+		_ = conn.Close()
+		return nil
+	}
+	rt.netSeq++
+	id := fmt.Sprintf("conn-%d", rt.netSeq)
+	h := &netConnHandle{
+		id:     id,
+		conn:   conn,
+		reader: bufio.NewReader(conn),
+	}
+	if rt.conns == nil {
+		rt.conns = make(map[string]*netConnHandle)
+	}
+	rt.conns[id] = h
+	rt.mu.Unlock()
+	return h
+}
+
+func (rt *runtimeLifecycle) getConn(id string) (*netConnHandle, bool) {
+	if rt == nil || id == "" {
+		return nil, false
+	}
+	rt.mu.Lock()
+	h, ok := rt.conns[id]
+	rt.mu.Unlock()
+	return h, ok
+}
+
+func (rt *runtimeLifecycle) closeConn(id string) {
+	if rt == nil || id == "" {
+		return
+	}
+	rt.mu.Lock()
+	h, ok := rt.conns[id]
+	if ok {
+		delete(rt.conns, id)
+	}
+	rt.mu.Unlock()
+	if ok {
+		h.close()
+	}
+}
+
 func (rt *runtimeLifecycle) abort() {
 	if rt == nil {
 		return
@@ -177,11 +390,27 @@ func (rt *runtimeLifecycle) abort() {
 	rt.closed = true
 	inboxes := make([]*InboxValue, len(rt.inboxes))
 	copy(inboxes, rt.inboxes)
+	listeners := make([]*netListenerHandle, 0, len(rt.listeners))
+	for _, h := range rt.listeners {
+		listeners = append(listeners, h)
+	}
+	rt.listeners = make(map[string]*netListenerHandle)
+	conns := make([]*netConnHandle, 0, len(rt.conns))
+	for _, h := range rt.conns {
+		conns = append(conns, h)
+	}
+	rt.conns = make(map[string]*netConnHandle)
 	rt.mu.Unlock()
 
 	rt.cancel()
 	for _, ib := range inboxes {
 		ib.Close()
+	}
+	for _, h := range listeners {
+		h.close()
+	}
+	for _, h := range conns {
+		h.close()
 	}
 }
 

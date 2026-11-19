@@ -66,6 +66,7 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 	ev := NewEvaluatorWithInput(source, prog, strings.NewReader(""), io.Discard)
 	defer ev.Close()
 	ev.SetHeadlessScreen(true)
+	ev.SetHeadlessNet(true)
 	ev.SetTrace(trace)
 	ev.logTrace("parsed %d def(s), %d function(s), %d test block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
@@ -75,6 +76,7 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 			return nil, err
 		}
 	}
+	ev.SetHeadlessNet(false)
 
 	report := &CheckReport{TestBlocks: len(prog.Checks)}
 	srcLines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
