@@ -37,6 +37,7 @@ type varTypeState struct {
 	exactNonRecord      bool
 	exactBaseType       string
 	listElemType        string
+	inboxElemType       string
 	excludedRecords     map[string]bool
 	inlineUnionLabel    string
 	inlineUnionVariants []resolvedUnionVariant
@@ -416,6 +417,8 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 				collectFromStmts(st.ElseBody)
 			case *LoopStmt:
 				collectFromStmts(st.Body)
+			case *TakeStmt:
+				collectFromStmts(st.Body)
 			case *MatchStmt:
 				for _, arm := range st.Arms {
 					if arm.Action != nil {
@@ -531,6 +534,10 @@ func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 				return true
 			}
 		case *LoopStmt:
+			if inFunction && hasLoopExit(st.Body, inFunction, false) {
+				return true
+			}
+		case *TakeStmt:
 			if inFunction && hasLoopExit(st.Body, inFunction, false) {
 				return true
 			}
@@ -682,6 +689,42 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 
 	case *MatchStmt:
 		return v.checkMatchStmt(st, inFunction)
+
+	case *SpawnStmt:
+		return v.checkExpr(st.Call)
+
+	case *TakeStmt:
+		if err := v.checkExpr(st.Inbox); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(st.Inbox); err != nil {
+			return err
+		}
+		inSt := v.inferExprTypeState(st.Inbox)
+		if !v.inErrorTestExpr && inSt.inboxElemType == "" {
+			if inSt.exactRecord != "" || inSt.exactNonRecord || inSt.unionName != "" || inSt.listElemType != "" || inSt.exactBaseType != "" {
+				return newError(
+					"TypeError",
+					st.Line,
+					st.Col,
+					v.source,
+					"'take' requires an inbox",
+					"Create an inbox with 'ch = inbox as <type>' and pass it to 'take ch ... end'.",
+				)
+			}
+		}
+		takeScope := v.pushScope()
+		if inSt.inboxElemType != "" {
+			takeScope.vars["it"] = v.typeStateFromName(inSt.inboxElemType)
+		}
+		prevDirectInSwarm := v.directInSwarm
+		v.directInSwarm = false
+		v.loopDepth++
+		err := v.checkStmts(st.Body, inFunction)
+		v.loopDepth--
+		v.directInSwarm = prevDirectInSwarm
+		v.popScope()
+		return err
 
 	case *CheckIsStmt:
 		if err := v.checkExpr(st.Actual); err != nil {
@@ -964,6 +1007,12 @@ func (v *typeValidator) staticAddOperandType(st varTypeState) string {
 	if st.listElemType != "" {
 		return "list"
 	}
+	if st.inboxElemType != "" {
+		return "inbox"
+	}
+	if st.inboxElemType != "" {
+		return "inbox"
+	}
 	var variants []resolvedUnionVariant
 	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
 		variants = st.inlineUnionVariants
@@ -1048,6 +1097,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		return v.inferMatchExprTypeState(ex)
 	case *SwarmLoopExpr:
 		return v.inferSwarmLoopTypeState(ex)
+	case *InboxExpr:
+		return varTypeState{inboxElemType: ex.ElemType}
 	case *FieldExpr:
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 			return varTypeState{exactNonRecord: true}
@@ -1602,6 +1653,19 @@ func (v *typeValidator) checkExpr(e Expr) error {
 	case *SwarmLoopExpr:
 		return v.checkSwarmLoopExpr(ex)
 
+	case *InboxExpr:
+		if ex.ElemType == "csv" || ex.ElemType == "bytes" {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				fmt.Sprintf("Type %q cannot be used with 'inbox as'", ex.ElemType),
+				"Use 'text', 'number', a 'def' record, or a union type.",
+			)
+		}
+		return v.validateTypeTarget(ex.ElemType, ex.TypeLine, ex.TypeCol, "inbox as", false)
+
 	case *IdentExpr:
 		if v.swarmDepth > 0 && v.workerAssigned != nil && v.workerAssigned[ex.Name] {
 			assignedLocal := false
@@ -1675,6 +1739,38 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				)
 			}
 		}
+		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "put" && len(ex.Args) == 2 {
+			inSt := v.inferExprTypeState(ex.Args[0])
+			if inSt.inboxElemType == "" {
+				if inSt.exactRecord != "" || inSt.exactNonRecord || inSt.unionName != "" || inSt.listElemType != "" || inSt.exactBaseType != "" {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						"'put' requires an inbox as first argument",
+						"Create an inbox with 'ch = inbox as <type>' and write 'put ch val'.",
+					)
+				}
+			} else if err := v.checkInboxElementType(inSt.inboxElemType, ex.Args[1]); err != nil {
+				return err
+			}
+		}
+		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "close" && len(ex.Args) == 1 {
+			inSt := v.inferExprTypeState(ex.Args[0])
+			if inSt.inboxElemType == "" {
+				if inSt.exactRecord != "" || inSt.exactNonRecord || inSt.unionName != "" || inSt.listElemType != "" || inSt.exactBaseType != "" {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						"'close' requires an inbox",
+						"Pass an inbox created with 'inbox as <type>' to 'close'.",
+					)
+				}
+			}
+		}
 		for _, arg := range ex.Args {
 			if err := v.checkExpr(arg); err != nil {
 				return err
@@ -1733,6 +1829,12 @@ func (v *typeValidator) staticConcreteType(st varTypeState) string {
 	}
 	if st.listElemType != "" {
 		return "list"
+	}
+	if st.inboxElemType != "" {
+		return "inbox"
+	}
+	if st.inboxElemType != "" {
+		return "inbox"
 	}
 	var variants []resolvedUnionVariant
 	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
@@ -2742,6 +2844,70 @@ func (v *typeValidator) checkCastFallback(ex *CastExpr) error {
 
 	return nil
 }
+func (v *typeValidator) checkInboxElementType(elemType string, valExpr Expr) error {
+	valSt := v.inferExprTypeState(valExpr)
+	vLine, vCol := valExpr.Pos()
+	if valSt.inboxElemType != "" {
+		return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' inbox into inbox of %s", elemType), fmt.Sprintf("Provide a value of type %q.", elemType))
+	}
+	if valSt.listElemType != "" {
+		return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' list of %s into inbox of %s", valSt.listElemType, elemType), fmt.Sprintf("Provide a value of type %q.", elemType))
+	}
+	if elemType == "number" || elemType == "text" {
+		if valSt.exactRecord != "" {
+			return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' %s into inbox of %s", valSt.exactRecord, elemType), fmt.Sprintf("Provide a %s value.", elemType))
+		}
+		if valSt.exactBaseType != "" && valSt.exactBaseType != elemType {
+			return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' %s into inbox of %s", valSt.exactBaseType, elemType), fmt.Sprintf("Provide a %s value.", elemType))
+		}
+		if uVars := v.unionVariantsForTypeState(valSt); len(uVars) > 0 && !v.unionContainsOnlyBaseType(uVars, elemType) {
+			return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' union value into inbox of %s", elemType), fmt.Sprintf("Provide a %s value.", elemType))
+		}
+		return nil
+	}
+	if v.defs[elemType] != nil {
+		if valSt.exactBaseType != "" || valSt.exactNonRecord || valSt.unionName != "" || (valSt.exactRecord != "" && valSt.exactRecord != elemType) {
+			got := v.staticConcreteType(valSt)
+			if got == "" {
+				got = "incompatible value"
+			}
+			return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Cannot 'put' %s into inbox of %s", got, elemType), fmt.Sprintf("Pass a %s record instance created with '%s with ...'.", elemType, elemType))
+		}
+		return nil
+	}
+	if uVariants, isUnion := v.resolvedUnions[elemType]; isUnion {
+		if litVar, isLit := v.resolveFallbackLiteralVariant(valExpr); isLit {
+			if !v.variantCoveredByUnion(litVar, uVariants) {
+				return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Value %s is not valid for inbox union %q", litVar.display(), elemType), fmt.Sprintf("Provide a valid member of union %s.", elemType))
+			}
+			return nil
+		}
+		if valSt.exactRecord != "" {
+			recVar := resolvedUnionVariant{kind: variantRecord, recordName: valSt.exactRecord}
+			if !v.variantCoveredByUnion(recVar, uVariants) {
+				return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Record %q is not a member of inbox union %q", valSt.exactRecord, elemType), fmt.Sprintf("Provide a valid member of union %s.", elemType))
+			}
+			return nil
+		}
+		if valUnion := v.unionVariantsForTypeState(valSt); len(valUnion) > 0 {
+			for _, vr := range valUnion {
+				if !v.variantCoveredByUnion(vr, uVariants) {
+					return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Variant %s is not covered by inbox union %q", vr.display(), elemType), fmt.Sprintf("Provide a valid member of union %s.", elemType))
+				}
+			}
+			return nil
+		}
+		if valSt.exactBaseType != "" {
+			baseVar := resolvedUnionVariant{kind: variantBaseType, baseType: valSt.exactBaseType}
+			if !v.variantCoveredByUnion(baseVar, uVariants) {
+				return newError("TypeError", vLine, vCol, v.source, fmt.Sprintf("Value of type %s is not guaranteed to belong to inbox union %q", valSt.exactBaseType, elemType), fmt.Sprintf("Provide a valid member of union %s.", elemType))
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx string, requireRecord bool) error {
 	switch typeName {
 	case "text", "number":

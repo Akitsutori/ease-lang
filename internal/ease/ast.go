@@ -423,3 +423,30 @@ type SwarmLoopExpr struct {
 }
 
 func (*SwarmLoopExpr) exprNode() {}
+
+// InboxExpr represents `inbox as <type>` creating a typed concurrent FIFO inbox.
+type InboxExpr struct {
+	posInfo
+	ElemType string
+	TypeLine int
+	TypeCol  int
+}
+
+func (*InboxExpr) exprNode() {}
+
+// SpawnStmt represents `spawn <call>` launching a background worker goroutine.
+type SpawnStmt struct {
+	posInfo
+	Call *CallExpr
+}
+
+func (*SpawnStmt) stmtNode() {}
+
+// TakeStmt represents `take <inbox> ... end` consuming messages until closed and drained.
+type TakeStmt struct {
+	posInfo
+	Inbox Expr
+	Body  []Stmt
+}
+
+func (*TakeStmt) stmtNode() {}

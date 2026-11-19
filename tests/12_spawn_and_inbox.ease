@@ -1,0 +1,84 @@
+# Feature 12: Background Workers & Typed Inboxes (`spawn`, `inbox as <type>`, `put`, `take`, `close`)
+
+def Event
+  kind = "ping" | "data" | "quit"
+  val  = 0
+end
+
+to emit_events ch
+  put ch (Event with kind = "ping", val = 1)
+  put ch (Event with kind = "data", val = 41)
+  close ch
+end
+
+to worker_add jobs results done
+  take jobs
+    put results (it * 10)
+  end
+  put done 1
+end
+
+to close_results done results n
+  finished = 0
+  take done
+    finished = finished + it
+    check finished >= n -> end
+  end
+  close results
+end
+
+test "spawn, typed inbox, put, take, and close"
+  ch = inbox as Event
+  type ch is "inbox"
+  spawn emit_events ch
+
+  total = 0
+  seen = 0
+  take ch
+    check it.kind is "data" -> total = total + it.val
+    check it.kind is "ping" -> total = total + it.val
+    seen = seen + 1
+  end
+  seen is 2
+  total is 42
+
+  # Pipeline with multiple background workers
+  jobs = inbox as number
+  results = inbox as number
+  done = inbox as number
+
+  spawn worker_add jobs results done
+  spawn worker_add jobs results done
+  spawn close_results done results 2
+
+  put jobs 1
+  put jobs 2
+  put jobs 3
+  close jobs
+  close jobs
+
+  res_sum = 0
+  take results
+    res_sum = res_sum + it
+  end
+  close done
+  res_sum is 60
+
+  # Early exit from take via check -> end
+  nums = inbox as number
+  put nums 5
+  put nums 10
+  put nums 99
+  close nums
+  acc = 0
+  take nums
+    check it > 50 -> end
+    acc = acc + it
+  end
+  acc is 15
+
+  # Putting into a closed inbox raises RuntimeError cleanly
+  closed_box = inbox as text
+  close closed_box
+  put closed_box "late" is error
+end

@@ -218,7 +218,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 				}
 			}
 			blockDepth++
-		case TOK_LOOP, TOK_MATCH, TOK_TEST:
+		case TOK_LOOP, TOK_MATCH, TOK_TEST, TOK_TAKE:
 			blockDepth++
 		case TOK_DEF:
 			if i+2 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT && p.tokens[i+2].Type == TOK_NEWLINE {
@@ -737,7 +737,7 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 
 func (p *Parser) parseTestItem() (Stmt, error) {
 	switch p.current().Type {
-	case TOK_LOOP, TOK_SAY:
+	case TOK_LOOP, TOK_SAY, TOK_SPAWN, TOK_TAKE:
 		return p.parseStmt()
 	case TOK_CHECK:
 		tok := p.current()
@@ -862,6 +862,9 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	if _, isSwarm := expr.(*SwarmLoopExpr); isSwarm {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
+	if call, isCall := expr.(*CallExpr); isCall && call.Module == "" && (call.Callee == "put" || call.Callee == "close") {
+		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
+	}
 	return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: expr}, nil
 }
 
@@ -904,6 +907,10 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		return p.parseMatchStmt()
 	case TOK_SWARM:
 		return p.parseSwarmLoopStmt()
+	case TOK_SPAWN:
+		return p.parseSpawnStmt()
+	case TOK_TAKE:
+		return p.parseTakeStmt()
 	case TOK_TO:
 		return nil, newError(
 			"SyntaxError",
@@ -1195,6 +1202,140 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 		posInfo:  posInfo{Line: swarmTok.Line, Col: swarmTok.Col},
 		Iterable: iterExpr,
 		Body:     body,
+	}, nil
+}
+
+func (p *Parser) parseSpawnStmt() (Stmt, error) {
+	spawnTok := p.advance() // consume `spawn`
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			spawnTok.Line,
+			spawnTok.Col,
+			p.source,
+			"'spawn' requires a function call, e.g. 'spawn handle_client conn'",
+			"Write: spawn <fn> [arg1 arg2 ...] or spawn <mod>:<fn> [arg1 ...]",
+		)
+	}
+	expr, err := p.parseExpr()
+	if err != nil {
+		return nil, newError(
+			"SyntaxError",
+			spawnTok.Line,
+			spawnTok.Col,
+			p.source,
+			"'spawn' requires a function call, e.g. 'spawn handle_client conn'",
+			err.Error(),
+		)
+	}
+	call, ok := expr.(*CallExpr)
+	if !ok {
+		return nil, newError(
+			"SyntaxError",
+			spawnTok.Line,
+			spawnTok.Col,
+			p.source,
+			"'spawn' requires a function call, e.g. 'spawn handle_client conn'",
+			"Define a 'to' function and launch it with 'spawn fn arg1 arg2'.",
+		)
+	}
+	if err := p.expectStmtEnd("'spawn' statement"); err != nil {
+		return nil, err
+	}
+	return &SpawnStmt{
+		posInfo: posInfo{Line: spawnTok.Line, Col: spawnTok.Col},
+		Call:    call,
+	}, nil
+}
+
+func (p *Parser) parseTakeStmt() (Stmt, error) {
+	takeTok := p.advance() // consume `take`
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			takeTok.Line,
+			takeTok.Col,
+			p.source,
+			"'take' requires an inbox expression",
+			"Write: take <inbox> ... end",
+		)
+	}
+	inboxExpr, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if !p.match(TOK_NEWLINE) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected newline after 'take' inbox expression",
+			"Write 'take <inbox>' followed by body statements on new lines, closing with 'end'.",
+		)
+	}
+	p.skipNewlines()
+
+	prevInTestBlock := p.inTestBlock
+	p.inTestBlock = false
+	defer func() { p.inTestBlock = prevInTestBlock }()
+
+	var body []Stmt
+	for !p.check(TOK_END) {
+		if p.check(TOK_EOF) {
+			return nil, newError(
+				"SyntaxError",
+				takeTok.Line,
+				takeTok.Col,
+				p.source,
+				"'take' block is missing 'end'",
+				"Close every 'take' block with 'end'.",
+			)
+		}
+		s, err := p.parseStmt()
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, s)
+		p.skipNewlines()
+	}
+	p.advance() // consume `end`
+	if err := p.expectStmtEnd("'take' block"); err != nil {
+		return nil, err
+	}
+	return &TakeStmt{
+		posInfo: posInfo{Line: takeTok.Line, Col: takeTok.Col},
+		Inbox:   inboxExpr,
+		Body:    body,
+	}, nil
+}
+
+func (p *Parser) parseInboxExpr() (Expr, error) {
+	inboxTok := p.advance() // consume `inbox`
+	if !p.match(TOK_AS) {
+		cur := p.current()
+		return nil, newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			fmt.Sprintf("Expected 'as <type>' after 'inbox', got %q", cur.Lexeme),
+			"Example: jobs = inbox as text or chat = inbox as ClientEvent",
+		)
+	}
+	typeName, typeLine, typeCol, err := p.parseTypeTarget(
+		"Expected element type ('text', 'number', a 'def' record, or union) after 'inbox as'",
+		"Example: inbox as number or inbox as ClientEvent",
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &InboxExpr{
+		posInfo:  posInfo{Line: inboxTok.Line, Col: inboxTok.Col},
+		ElemType: typeName,
+		TypeLine: typeLine,
+		TypeCol:  typeCol,
 	}, nil
 }
 
@@ -2486,6 +2627,26 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		return inner, nil
 	case TOK_LIST_KW:
 		return p.parseTypedOrInlineList()
+	case TOK_INBOX:
+		return p.parseInboxExpr()
+	case TOK_SPAWN:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'spawn' is a statement, not an expression",
+			"Launch background workers on their own line: spawn fn arg1 arg2",
+		)
+	case TOK_TAKE:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'take' is a statement, not an expression",
+			"Read messages with: take <inbox> ... end",
+		)
 	case TOK_MATCH:
 		return p.parseMatchExpr()
 	case TOK_SWARM:

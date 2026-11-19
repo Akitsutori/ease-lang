@@ -194,6 +194,8 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 				assigned[s.Name] = true
 			case *LoopStmt:
 				walk(s.Body)
+			case *TakeStmt:
+				walk(s.Body)
 			case *CheckGuardStmt:
 				for _, r := range s.Rules {
 					if r.Action != nil {
@@ -232,6 +234,8 @@ type Evaluator struct {
 	out              io.Writer
 	trace            io.Writer
 	ioMu             *sync.Mutex
+	rt               *runtimeLifecycle
+	isChild          bool
 	inReader         *bufio.Reader
 	funcs            map[string]*FuncDecl
 	modules          map[string]*Evaluator
@@ -253,8 +257,12 @@ func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	}
 }
 
-// Close releases any active OS resources (such as an open screen window and idle HTTP connections).
+// Close releases any active OS resources (such as an open screen window, idle HTTP connections, and background workers).
 func (ev *Evaluator) Close() {
+	if !ev.isChild && ev.rt != nil {
+		ev.rt.abort()
+		ev.rt.wg.Wait()
+	}
 	if ev.activeScreen != nil {
 		ev.activeScreen.close()
 		ev.activeScreen = nil
@@ -313,6 +321,7 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		source:     source,
 		out:        out,
 		ioMu:       &sync.Mutex{},
+		rt:         newRuntimeLifecycle(),
 		inReader:   bufio.NewReader(in),
 		funcs:      make(map[string]*FuncDecl),
 		modules:    make(map[string]*Evaluator),
@@ -344,6 +353,8 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		}
 		modEv := NewEvaluatorWithInput(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out)
 		modEv.ioMu = ev.ioMu
+		modEv.rt = ev.rt
+		modEv.isChild = true
 		modEv.httpClient = ev.httpClient
 		modEv.SetHeadlessScreen(ev.headlessScreen)
 		modEv.SetTrace(ev.trace)
@@ -579,7 +590,15 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	ev.SetTrace(trace)
 	ev.logTrace("parsed %d def(s), %d function(s), %d check block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
-	return ev.ExecStatements(prog.Body, ev.global)
+	res, execErr := ev.ExecStatements(prog.Body, ev.global)
+	if execErr != nil {
+		ev.Close()
+		return nil, execErr
+	}
+	if wErr := ev.WaitWorkers(); wErr != nil {
+		return nil, wErr
+	}
+	return res, nil
 }
 
 // EvalProgram parses and executes `source`, writing `say` output to `out`.
@@ -649,6 +668,10 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: match (%d arm(s))", line, len(s.Arms))
 	case *LoopStmt:
 		ev.logTrace("line %d: loop ...", line)
+	case *TakeStmt:
+		ev.logTrace("line %d: take ...", line)
+	case *SpawnStmt:
+		ev.logTrace("line %d: spawn ...", line)
 	case *LoopEndStmt:
 		ev.logTrace("line %d: -> end", line)
 	}
@@ -690,6 +713,12 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 
 	case *LoopEndStmt:
 		return nil, &reportSignal{loopEnd: true}, nil
+
+	case *SpawnStmt:
+		return ev.execSpawnStmt(s, env)
+
+	case *TakeStmt:
+		return ev.execTakeStmt(s, env)
 
 	case *LoopStmt:
 		if s.Iterable == nil {
@@ -1573,6 +1602,8 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 
 	case *SwarmLoopExpr:
 		return ev.evalSwarmLoop(e, env)
+	case *InboxExpr:
+		return ev.evalInboxExpr(e)
 	}
 
 	line, col := expr.Pos()

@@ -94,6 +94,10 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 		runner.runStmts(blk.Body, scopeEnv)
 	}
 
+	if err := ev.WaitWorkers(); err != nil {
+		return nil, err
+	}
+
 	return report, nil
 }
 
@@ -138,7 +142,7 @@ func (r *testRunner) recordFail(line int, varsDetail, msg string) {
 func (r *testRunner) runStmts(items []Stmt, env *Env) bool {
 	for _, item := range items {
 		switch c := item.(type) {
-		case *ConstDeclStmt, *AssignStmt, *SayStmt:
+		case *ConstDeclStmt, *AssignStmt, *SayStmt, *ExprStmt, *SpawnStmt, *TakeStmt:
 			if _, _, err := r.ev.execStmt(c, env); err != nil {
 				line, _ := c.Pos()
 				r.recordFail(line, errMessage(err), fmt.Sprintf("Setup error: %v", err))

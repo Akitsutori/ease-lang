@@ -82,6 +82,8 @@ func FormatValue(v Value) string {
 			}
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
+	case *InboxValue:
+		return fmt.Sprintf("<inbox as %s>", val.ElemType)
 	case *RecordValue:
 		parts := make([]string, 0, len(val.Order))
 		for _, k := range val.Order {
@@ -152,6 +154,8 @@ func TypeName(v Value) string {
 		return "text"
 	case *ListValue:
 		return "list"
+	case *InboxValue:
+		return "inbox"
 	case *RecordValue:
 		return val.TypeName
 	case *MapValue:

@@ -27,6 +27,9 @@ const (
 	TOK_ELSE   TokenType = "else"
 	TOK_LOOP   TokenType = "loop"
 	TOK_SWARM  TokenType = "swarm"
+	TOK_SPAWN  TokenType = "spawn"
+	TOK_INBOX  TokenType = "inbox"
+	TOK_TAKE   TokenType = "take"
 	TOK_MATCH  TokenType = "match"
 	TOK_AND    TokenType = "and"
 	TOK_OR     TokenType = "or"
@@ -73,6 +76,9 @@ var keywords = map[string]TokenType{
 	"else":   TOK_ELSE,
 	"loop":   TOK_LOOP,
 	"swarm":  TOK_SWARM,
+	"spawn":  TOK_SPAWN,
+	"inbox":  TOK_INBOX,
+	"take":   TOK_TAKE,
 	"match":  TOK_MATCH,
 	"and":    TOK_AND,
 	"or":     TOK_OR,

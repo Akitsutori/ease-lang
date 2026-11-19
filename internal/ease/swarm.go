@@ -3,6 +3,7 @@ package ease
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -56,12 +57,14 @@ func freezeEnvForParallel(env *Env, seen map[any]bool) {
 	}
 }
 
-func (ev *Evaluator) forkWorker(outBuf *bytes.Buffer) *Evaluator {
+func (ev *Evaluator) forkWorker(outBuf io.Writer) *Evaluator {
 	w := &Evaluator{
 		source:         ev.source,
 		out:            outBuf,
 		trace:          ev.trace,
 		ioMu:           ev.ioMu,
+		rt:             ev.rt,
+		isChild:        true,
 		inReader:       nil,
 		funcs:          ev.funcs,
 		modules:        make(map[string]*Evaluator, len(ev.modules)),

@@ -45,6 +45,8 @@ var builtinArities = map[string]int{
 	"join":           2,
 	"contains":       2,
 	"save":           2,
+	"put":            2,
+	"close":          1,
 	"min":            2,
 	"max":            2,
 	"screen_present": 2,
@@ -248,6 +250,41 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			next[len(listVal.Elements)] = args[1]
 		}
 		return &ListValue{ElemType: elemType, Elements: next}, true, nil
+
+	case "put":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "put takes 2 arguments", "Write: put <inbox> <value>")
+		}
+		ib, ok := args[0].(*InboxValue)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("'put' requires an inbox as first argument, got %s", TypeName(args[0])), "Create an inbox with 'ch = inbox as <type>' first.")
+		}
+		if !matchesListElemType(args[1], ib.ElemType, ev.global) {
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot 'put' %s into inbox of %s", structuredTypeName(args[1]), ib.ElemType),
+				fmt.Sprintf("This inbox only accepts values of type %q.", ib.ElemType),
+			)
+		}
+		freezeValueForParallel(args[1], make(map[any]bool))
+		if err := ib.Put(ev.ctx(), args[1], line, col, ev.source); err != nil {
+			return nil, true, err
+		}
+		return nil, true, nil
+
+	case "close":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "close takes 1 argument", "Write: close <inbox>")
+		}
+		ib, ok := args[0].(*InboxValue)
+		if !ok {
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("'close' requires an inbox, got %s", TypeName(args[0])), "Pass an inbox created with 'inbox as <type>'.")
+		}
+		ib.Close()
+		return nil, true, nil
 
 	case "sum":
 		if len(args) != 1 {

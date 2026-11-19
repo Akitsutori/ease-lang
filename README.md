@@ -446,6 +446,35 @@ end
 say squares_over_ten 5
 ```
 
+### Background Workers & Typed Inboxes (`spawn`, `inbox`, `put`, `take`, `close`)
+
+For event-driven and streaming tasks, launch synchronous `to` functions concurrently in the background with `spawn` and communicate exclusively through typed FIFO `inbox`es (no shared mutable state):
+
+- `ch = inbox as <type>` creates a buffered typed inbox (`text`, `number`, `def` record, or union).
+- `spawn fn arg1 arg2` (or `spawn mod:fn arg1`) starts the call in a background worker (`forkWorker`, frozen arguments, read-only globals). The main program waits for all spawned workers on exit (`WaitWorkers`) and aborts blocked inboxes cleanly if a worker fails or `Close()` runs.
+- `put ch val` freezes `val` and sends it into `ch` (putting into a closed inbox raises `RuntimeError`).
+- `take ch ... end` receives messages in FIFO order into `it` (with full static record/union inference) and `it.index`, exiting automatically once `ch` is closed and drained (or early via `check <cond> -> end`).
+- `close ch` closes an inbox idempotently.
+
+```ease
+def Job
+    id = 0
+end
+
+to produce jobs
+    put jobs (Job with id = 1)
+    put jobs (Job with id = 2)
+    close jobs
+end
+
+jobs = inbox as Job
+spawn produce jobs
+
+take jobs
+    say "job #{it.index}: {it.id}"
+end
+```
+
 ---
 
 ## Why Ease Works Well for AI Agents
@@ -479,6 +508,8 @@ Ease pairs a tiny, unambiguous grammar with [`llms.txt`](llms.txt) so models can
 | `decode_json txt` / `encode_json val` | Parses JSON `text` / encodes values to JSON `text` |
 | `load path [as text\|csv\|bytes]` | Reads UTF-8/NFC `text`, uniform `csv` `map` list, or `0..255` byte list |
 | `save path data` | Writes UTF-8 `text` or `0..255` byte list, returning written byte count |
+| `put box val` | Sends a typed, isolated value into an `inbox` |
+| `close box` | Closes an `inbox` idempotently so `take` exits once drained |
 | `fail msg` | Raises an explicit `RuntimeError` |
 
 ---
@@ -510,7 +541,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```text
 Keywords:
   to  import  def  with  where  end  test  check  is
-  say  as  else  loop  swarm  match
+  say  as  else  loop  swarm  spawn  inbox  take  match
   and  or  not  text  number  list
 
 Operators & Punctuation:
@@ -544,6 +575,8 @@ stmt           ::= "say" expr stmt_end
                  | "end" stmt_end
                  | loop_stmt
                  | swarm_loop stmt_end
+                 | spawn_stmt
+                 | take_stmt
                  | check_guard
                  | match_stmt
                  | assign_stmt
@@ -551,6 +584,8 @@ stmt           ::= "say" expr stmt_end
 
 assign_stmt    ::= IDENT "=" expr stmt_end
 loop_stmt      ::= "loop" [ "range" unary unary | expr ] NL { stmt [NL] } "end" stmt_end
+spawn_stmt     ::= "spawn" call_expr stmt_end
+take_stmt      ::= "take" expr NL { stmt [NL] } "end" stmt_end
 
 check_action   ::= "end" stmt_end | stmt
 check_guard    ::= "check" expr "->" check_action
@@ -562,6 +597,8 @@ match_stmt_arm  ::= match_pattern "->" check_action
 match_stmt_else ::= "else" ( "->" check_action | NL { stmt [NL] } )
 
 test_item      ::= loop_stmt
+                 | spawn_stmt
+                 | take_stmt
                  | "say" expr stmt_end
                  | assign_stmt
                  | expr "->" [NL] { test_item [NL] } "end" stmt_end
@@ -609,7 +646,8 @@ where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
 cast_type      ::= "text" | "number" | "csv" | "bytes" | IDENT [ "." IDENT ]
 call_args      ::= unary{k}
 
-primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | match_expr | swarm_loop
+primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | inbox_expr | match_expr | swarm_loop
+inbox_expr      ::= "inbox" "as" list_elem_type
 swarm_loop      ::= "swarm" "loop" ( "range" unary unary | expr ) NL { stmt [NL] } "end"
 match_expr      ::= "match" expr NL match_expr_arm { [NL] match_expr_arm } [ [NL] match_expr_else ] NL "end"
 match_expr_arm  ::= match_pattern "->" expr stmt_end
@@ -637,7 +675,7 @@ for f in tests/*.ease; do ./ease test "$f"; done
 cmd/ease/           CLI entrypoint
 internal/ease/      Lexer, Parser, AST, Typechecker, Evaluator, Screen, Bundle & Stdlib
 examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–11)
+tests/              Language feature test files (01–12)
 .github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
 ```
 

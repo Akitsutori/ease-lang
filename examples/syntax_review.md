@@ -175,3 +175,17 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   8. Condition returned from worker `swarm loop xs\n it > 1\nend` (`TypeError`)
   9. Mixed result types across worker branches (`number` vs `text`, `TypeError`)
   10. Downstream field typo `res where it.missing is 1` or `sum text_res` (`TypeError`)
+
+## 13. Background Workers & Typed Inboxes (`spawn`, `inbox`, `put`, `take`, `close`)
+- **Happy Path**: `ch = inbox as ClientEvent`, `spawn produce ch`, `spawn mod:emit ch 10`, `put ch val`, `take ch\n say it.kind\n check it.val > 10 -> end\nend`, `close ch` (idempotent)
+- **10 Negative Cases**:
+  1. `spawn 1 + 2` / `spawn say "hi"` (non-call `SyntaxError`)
+  2. `ch = inbox number` (missing `as`, `SyntaxError`)
+  3. `ch = inbox as bool` / `inbox as csv` / `inbox as unknown` (`TypeError`)
+  4. `put ch "bad"` on `inbox as number` (`TypeError`)
+  5. `put ch "TYPO"` on union inbox (`TypeError`)
+  6. `put xs 1` on non-inbox (`TypeError`)
+  7. `close x` / `take xs ... end` on non-inbox (`TypeError`)
+  8. `take ch\n say it.missing\nend` (`TypeError` via inferred `ElemType`)
+  9. `take ch` missing `end` (`SyntaxError`)
+  10. `put closed_ch "late"` -> `RuntimeError` (`Cannot 'put' into a closed inbox`)
