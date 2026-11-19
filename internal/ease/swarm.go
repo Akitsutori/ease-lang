@@ -51,8 +51,14 @@ func freezeValueForParallel(v Value, seen map[any]bool) {
 
 func freezeEnvForParallel(env *Env, seen map[any]bool) {
 	for cur := env; cur != nil; cur = cur.parent {
+		cur.mu.RLock()
+		vals := make([]Value, 0, len(cur.vars))
 		for _, b := range cur.vars {
-			freezeValueForParallel(b.val, seen)
+			vals = append(vals, b.val)
+		}
+		cur.mu.RUnlock()
+		for _, v := range vals {
+			freezeValueForParallel(v, seen)
 		}
 	}
 }

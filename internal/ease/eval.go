@@ -22,6 +22,7 @@ type binding struct {
 
 // Env implements lexical scopes with mutability tracking (immutable `def` constants/params vs mutable bindings).
 type Env struct {
+	mu             sync.RWMutex
 	parent         *Env
 	vars           map[string]binding
 	isFuncRoot     bool
@@ -35,12 +36,14 @@ func (env *Env) collectVisibleNames() []string {
 	seen := make(map[string]bool)
 	var names []string
 	for cur := env; cur != nil; cur = cur.parent {
+		cur.mu.RLock()
 		for k := range cur.vars {
 			if !seen[k] {
 				seen[k] = true
 				names = append(names, k)
 			}
 		}
+		cur.mu.RUnlock()
 	}
 	return names
 }
@@ -94,11 +97,15 @@ func NewWorkerEnv(parent *Env, assignedLocals map[string]bool) *Env {
 }
 
 func (e *Env) Define(name string, val Value, mutable bool) {
+	e.mu.Lock()
 	e.vars[name] = binding{val: val, mutable: mutable}
+	e.mu.Unlock()
 }
 
 func (e *Env) DefineParam(name string, val Value) {
+	e.mu.Lock()
 	e.vars[name] = binding{val: val, mutable: false, isParam: true}
+	e.mu.Unlock()
 }
 
 func (e *Env) SetLoopIndex(idx float64) {
@@ -130,7 +137,10 @@ func (e *Env) LookupChecked(name string) (Value, bool, bool) {
 
 func (e *Env) lookupCheckedKind(name string) (Value, bool, int) {
 	for cur := e; cur != nil; cur = cur.parent {
-		if b, ok := cur.vars[name]; ok {
+		cur.mu.RLock()
+		b, ok := cur.vars[name]
+		cur.mu.RUnlock()
+		if ok {
 			return b.val, true, 0
 		}
 		if (cur.isFuncRoot || cur.isWorkerRoot) && cur.assignedLocals[name] {
@@ -150,8 +160,11 @@ func (e *Env) lookupCheckedKind(name string) (Value, bool, int) {
 
 func (e *Env) DefineOrAssign(name string, val Value, line, col int, source string) error {
 	for cur := e; cur != nil; cur = cur.parent {
-		if b, ok := cur.vars[name]; ok {
+		cur.mu.Lock()
+		b, ok := cur.vars[name]
+		if ok {
 			if !b.mutable {
+				cur.mu.Unlock()
 				if b.isParam {
 					return newError(
 						"RuntimeError",
@@ -172,13 +185,17 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 				)
 			}
 			cur.vars[name] = binding{val: val, mutable: true}
+			cur.mu.Unlock()
 			return nil
 		}
+		cur.mu.Unlock()
 		if cur.isFuncRoot || cur.isWorkerRoot {
 			break
 		}
 	}
+	e.mu.Lock()
 	e.vars[name] = binding{val: val, mutable: true}
+	e.mu.Unlock()
 	return nil
 }
 
