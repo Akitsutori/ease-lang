@@ -1,0 +1,59 @@
+# Feature 10: Cast Fallbacks (`<expr> as <type> or <fallback>`)
+
+def LogLevel = "INFO" | "WARN" | "ERROR"
+def HttpCode = 200 | 404 | 500
+def DefaultLevel = "INFO"
+
+to fallback_port
+  8080
+end
+
+to check_precedence raw flag
+  check raw as number or 0 > 10 -> "high"
+  check raw as number or 0 > 0 or flag is "force" -> "active"
+  "none"
+end
+
+test "scalar, union, and numeric union cast fallbacks"
+  ("42" as number or 0) is 42
+  (" -3.5 " as number or 0) is -3.5
+  ("abc" as number or 0) is 0
+  ("" as number or -1) is -1
+  ("1_000" as number or -1) is -1
+  ("NaN" as number or -1) is -1
+
+  ("bad" as number or fallback_port) is 8080
+  ("bad" as number or 0) + 15 is 15
+  "bad" as number or 10 + 5 is 15
+  "4" as number or 10 + 5 is 9
+
+  ("WARN" as LogLevel or DefaultLevel) is "WARN"
+  ("TRACE" as LogLevel or DefaultLevel) is "INFO"
+  ("404" as HttpCode or 200) is 404
+  ("418" as HttpCode or 200) is 200
+
+  check_precedence "20" "off" is "high"
+  check_precedence "bad" "force" is "active"
+  check_precedence "bad" "off" is "none"
+
+  ("bad" as number or "12" as number or 0) is 12
+end
+
+test "batch list fallback conversions and downstream pipelines"
+  raw_nums = list "10", "bad", "25", "nope"
+  nums = raw_nums as number or 0
+  nums is list 10, 0, 25, 0
+  sum nums is 35
+  positive_nums = (list "-5", "10", "bad", "30") as number or 0 where it > 0
+  positive_nums is list 10, 30
+
+  raw_lvls = list "INFO", "DEBUG", "ERROR"
+  lvls = raw_lvls as LogLevel or "WARN"
+  lvls is list "INFO", "WARN", "ERROR"
+
+  # Bare casts without `or` remain strict runtime/type errors
+  "abc" as number is error
+  "TRACE" as LogLevel is error
+  (list "10", "bad") as number is error
+  (1 / 0) as number or 0 is error
+end

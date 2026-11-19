@@ -759,3 +759,565 @@ bad = items where it.code >= 500
 		t.Fatalf("expected union narrowing error in where, got: %v", err)
 	}
 }
+
+func TestMatchStaticTypecheckingAndInference(t *testing.T) {
+	errorCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name: "adjacent variable captures",
+			src: `
+s = "ab"
+match s
+  "{a}{b}" -> say a
+end
+`,
+			wantSub: "Adjacent variable-length placeholders",
+		},
+		{
+			name: "adjacent wildcard and capture",
+			src: `
+s = "ab"
+match s
+  "{...}{b}" -> say b
+end
+`,
+			wantSub: "Adjacent variable-length placeholders",
+		},
+		{
+			name: "adjacent capture and wildcard",
+			src: `
+s = "ab"
+match s
+  "{a}{...}" -> say a
+end
+`,
+			wantSub: "Adjacent variable-length placeholders",
+		},
+		{
+			name: "adjacent wildcards",
+			src: `
+s = "ab"
+match s
+  "{...}{...}" -> say "x"
+end
+`,
+			wantSub: "Adjacent variable-length placeholders",
+		},
+		{
+			name: "zero fixed width rejected",
+			src: `
+s = "ab"
+match s
+  "{a: 0}{b}" -> say a
+end
+`,
+			wantSub: "positive integer (>= 1)",
+		},
+		{
+			name: "fractional fixed width rejected",
+			src: `
+s = "ab"
+match s
+  "{a: 1.5}{b}" -> say a
+end
+`,
+			wantSub: "positive integer (>= 1)",
+		},
+		{
+			name: "reserved capture name it rejected",
+			src: `
+s = "ab"
+match s
+  "{it}" -> say it
+end
+`,
+			wantSub: "reserved name 'it'",
+		},
+		{
+			name: "empty match rejected",
+			src: `
+s = "ab"
+match s
+end
+`,
+			wantSub: "requires at least one pattern branch",
+		},
+		{
+			name: "missing else on text match expression",
+			src: `
+s = "hello"
+r = match s
+  "hello" -> "hi"
+end
+`,
+			wantSub: "'match' expression on text requires an 'else' branch",
+		},
+		{
+			name: "top level match returning value rejected",
+			src: `
+s = "hello"
+match s
+  "hello" -> 42
+end
+`,
+			wantSub: "Cannot return a value from 'match' at top level",
+		},
+		{
+			name: "top level list match statement without assignment rejected",
+			src: `
+xs = list "a", "b"
+match xs
+  "{v}" -> v
+end
+`,
+			wantSub: "Cannot use list 'match' without assigning its result at top level",
+		},
+		{
+			name: "list match statement with non-expression action rejected",
+			src: `
+to f
+  xs = list "a", "b"
+  match xs
+    "{v}" -> say v
+  end
+end
+`,
+			wantSub: "transforms items with expressions and cannot execute statements",
+		},
+		{
+			name: "numeric target rejected statically",
+			src: `
+n = 10
+match n
+  "10" -> say "ten"
+end
+`,
+			wantSub: "'match' requires text or a list of text, got number",
+		},
+		{
+			name: "list of number target rejected statically",
+			src: `
+nums = list 1, 2
+res = match nums
+  "{v}" -> v
+end
+`,
+			wantSub: "'match' requires text or a list of text, got list of number",
+		},
+		{
+			name: "unknown type string suggests text",
+			src: `
+s = "hi"
+match s
+  "{v as string}" -> say v
+end
+`,
+			wantSub: "Did you mean 'text'?",
+		},
+		{
+			name: "bool capture type rejected",
+			src: `
+s = "true"
+match s
+  "{v as bool}" -> say v
+end
+`,
+			wantSub: `Boolean ("bool") is not a built-in type`,
+		},
+		{
+			name: "record capture type rejected",
+			src: `
+def Item
+  name = ""
+end
+s = "hi"
+match s
+  "{v as Item}" -> say "ok"
+end
+`,
+			wantSub: `Record type "Item" cannot be used directly in match capture`,
+		},
+		{
+			name: "record-only union capture rejected",
+			src: `
+def A
+  x = 0
+end
+def B
+  y = 0
+end
+def RecOnly = A | B
+s = "hi"
+match s
+  "{v as RecOnly}" -> say "ok"
+end
+`,
+			wantSub: `Union "RecOnly" contains only record variants`,
+		},
+		{
+			name: "conflicting repeated capture number vs text",
+			src: `
+s = "1-1"
+match s
+  "{n as number}-{n as text}" -> say n
+end
+`,
+			wantSub: `Conflicting types for repeated capture "n"`,
+		},
+		{
+			name: "conflicting repeated capture implicit text vs number",
+			src: `
+s = "1-1"
+match s
+  "{n}-{n as number}" -> say n
+end
+`,
+			wantSub: `Conflicting types for repeated capture "n"`,
+		},
+		{
+			name: "capture variable shadowing function rejected",
+			src: `
+to helper x
+  x
+end
+s = "abc"
+match s
+  "{helper}" -> say "ok"
+end
+`,
+			wantSub: `Cannot name capture variable "helper" the same as a 'to' function`,
+		},
+		{
+			name: "condition returned in match expression rejected",
+			src: `
+s = "abc"
+r = match s
+  "abc" -> 10 > 5
+  else -> 10 < 5
+end
+`,
+			wantSub: "Conditions cannot be stored or printed",
+		},
+		{
+			name: "statically mixed list branch types rejected",
+			src: `
+xs = list "1", "a"
+res = match xs
+  "{n as number}" -> n
+  "{t}" -> t
+end
+`,
+			wantSub: "Mixed result types in list 'match': expected number, got text",
+		},
+		{
+			name: "statically incompatible list downstream field error",
+			src: `
+def Entry
+  name = ""
+end
+lines = list "NAME:ada"
+entries = match lines
+  "NAME:{n}" -> Entry with name = n
+end
+bad = entries where it.missing is "x"
+`,
+			wantSub: `Entry has no field "missing"`,
+		},
+		{
+			name: "statically inferred list of text fails sum",
+			src: `
+lines = list "a", "b"
+texts = match lines
+  "{m}" -> m
+end
+total = sum texts
+`,
+			wantSub: "sum requires a list of numbers",
+		},
+	}
+
+	for _, tc := range errorCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got:\n%v", tc.wantSub, err)
+			}
+		})
+	}
+
+	validSrc := `
+def Level = "INFO" | "WARN"
+def Entry
+  lvl = "INFO" | "WARN"
+  msg = ""
+end
+
+to loop_with_match_exit cmds
+  i = 0
+  loop
+    check i >= count cmds -> end
+    match cmds.(i)
+      "quit" -> end
+      else -> i = i + 1
+    end
+  end
+  i
+end
+
+lines = list "INFO: ok", "10"
+nums = match lines
+  "{n as number}" -> n
+end
+total = sum nums
+
+entries = match lines
+  "{l as Level}: {m}" -> Entry with lvl = l, msg = m
+  else -> Entry with lvl = "WARN", msg = it
+end
+filtered = entries where it.lvl is "INFO"
+
+strict_entries = match (list "INFO: ok")
+  "{l as Level}: {m}" -> Entry with lvl = l, msg = m
+  else -> fail "bad"
+end
+
+labels = match lines
+  "{l as Level}: {m}" -> l
+  else -> "UNKNOWN"
+end
+
+args_loop = loop_with_match_exit (list "go", "quit")
+say "{total}|{count filtered}|{count strict_entries}|{count labels}|{args_loop}"
+`
+	if _, err := ParseProgram(validSrc); err != nil {
+		t.Fatalf("expected valid typed match program to pass typecheck, got:\n%v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(validSrc, &out); err != nil {
+		t.Fatalf("expected EvalProgram on validSrc to succeed, got: %v", err)
+	}
+	if out.String() != "10|1|1|2|1\n" {
+		t.Fatalf("unexpected output: got %q, want %q", out.String(), "10|1|1|2|1\n")
+	}
+}
+
+func TestCastFallbackStaticTypecheckAndInference(t *testing.T) {
+	errorCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "number fallback given text literal",
+			src:     "raw = \"42\"\nx = raw as number or \"abc\"\n",
+			wantSub: "Fallback for 'as number' must be number, got text",
+		},
+		{
+			name:    "number fallback given list",
+			src:     "lines = list \"1\", \"2\"\nx = lines as number or (list 0)\n",
+			wantSub: "Fallback for 'as number' must be number, got list of number",
+		},
+		{
+			name:    "scalar number fallback given list",
+			src:     "raw = \"1\"\nx = raw as number or (list 0)\n",
+			wantSub: "Fallback for 'as number' must be number, got list of number",
+		},
+		{
+			name:    "text fallback given number",
+			src:     "raw = decode_json 'null'\nx = raw as text or 42\n",
+			wantSub: "Fallback for 'as text' must be text, got number",
+		},
+		{
+			name: "union fallback given invalid literal with typo hint",
+			src: `
+def Level = "INFO" | "WARN" | "ERROR"
+raw = "x"
+lvl = raw as Level or "EROR"
+`,
+			wantSub: `Did you mean "ERROR"?`,
+		},
+		{
+			name: "union fallback given wrong primitive literal",
+			src: `
+def Level = "INFO" | "WARN"
+raw = "x"
+lvl = raw as Level or 123
+`,
+			wantSub: `Fallback 123 is not a valid value of union "Level"`,
+		},
+		{
+			name: "numeric union fallback given unlisted number",
+			src: `
+def HttpCode = 200 | 404
+raw = "x"
+c = raw as HttpCode or 999
+`,
+			wantSub: `Fallback 999 is not a valid value of union "HttpCode"`,
+		},
+		{
+			name: "union fallback given invalid def constant",
+			src: `
+def Level = "INFO" | "WARN"
+def bad_lvl = "TYPO"
+raw = "x"
+lvl = raw as Level or bad_lvl
+`,
+			wantSub: `Fallback "TYPO" is not a valid value of union "Level"`,
+		},
+		{
+			name: "strict AOT rejects plain text variable as closed union fallback",
+			src: `
+def Level = "INFO" | "WARN"
+fb = "INFO"
+raw = "x"
+lvl = raw as Level or fb
+`,
+			wantSub: `Fallback of type text is not statically guaranteed to belong to union "Level"`,
+		},
+		{
+			name: "union fallback given incompatible sub-union",
+			src: `
+def Level = "INFO" | "WARN"
+def Other = "INFO" | "DEBUG"
+sub = "DEBUG" as Other
+raw = "x"
+lvl = raw as Level or sub
+`,
+			wantSub: `Fallback variant "DEBUG" is not covered by union "Level"`,
+		},
+		{
+			name:    "condition rejected as cast fallback",
+			src:     "raw = \"1\"\nx = raw as number or (1 > 0)\n",
+			wantSub: "Conditions cannot be stored or printed",
+		},
+		{
+			name:    "bool target still rejected with or",
+			src:     "raw = \"true\"\nx = raw as bool or 0\n",
+			wantSub: `Boolean ("bool") is not a built-in type`,
+		},
+		{
+			name:    "string alias target still rejected with or",
+			src:     "raw = \"hi\"\nx = raw as string or \"\"\n",
+			wantSub: "Unknown type 'string' after 'as'",
+		},
+		{
+			name:    "unknown target still rejected with or",
+			src:     "raw = \"x\"\nx = raw as nope or 0\n",
+			wantSub: `Unknown type "nope" after 'as'`,
+		},
+		{
+			name: "record contract cannot use or fallback",
+			src: `
+def user
+  id = 0
+end
+raw = decode_json '{"id": 1}'
+d = user with id = 2
+u = raw as user or d
+`,
+			wantSub: `'or' fallback cannot be used with record type "user"`,
+		},
+		{
+			name: "record-only union cannot use or fallback",
+			src: `
+def A
+  x = 0
+end
+def B
+  y = 1
+end
+def Both = A | B
+raw = decode_json '{"x": 1}'
+res = raw as Both or (A with x = 2)
+`,
+			wantSub: `'or' fallback cannot be used with record-only union "Both"`,
+		},
+		{
+			name:    "load csv with or fallback rejected",
+			src:     "rows = load \"./f.csv\" as csv or 0\n",
+			wantSub: "'or' fallback cannot be used with 'load ... as csv'",
+		},
+		{
+			name:    "load text with or fallback rejected",
+			src:     "txt = load \"./f.txt\" as text or \"\"\n",
+			wantSub: "'or' fallback cannot be used with 'load ... as text'",
+		},
+		{
+			name: "record target cannot cast to scalar with or fallback",
+			src: `
+def Item
+  x = 0
+end
+it_rec = Item with x = 1
+n = it_rec as number or 0
+`,
+			wantSub: "Cannot convert Item with 'as number or ...' fallback",
+		},
+		{
+			name: "downstream union list inferred from list cast fallback rejects sum",
+			src: `
+def Level = "INFO" | "WARN"
+lines = list "INFO", "bad"
+lvls = lines as Level or "INFO"
+total = sum lvls
+`,
+			wantSub: "sum requires a list of numbers",
+		},
+		{
+			name: "downstream where on inferred union list rejects invalid literal",
+			src: `
+def Level = "INFO" | "WARN"
+lines = list "INFO", "bad"
+lvls = lines as Level or "INFO"
+bad = lvls where it is "TYPO"
+`,
+			wantSub: `"TYPO" is not a value of Level`,
+		},
+	}
+
+	for _, tc := range errorCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got:\n%v", tc.wantSub, err)
+			}
+		})
+	}
+
+	validSrc := `
+def Level = "INFO" | "WARN" | "ERROR"
+def DefaultLevel = "INFO"
+def Flex = number | text
+
+lines = list "10", "bad", "20"
+nums = lines as number or 0
+total = sum nums
+filtered = (lines as number or 0) where it > 5
+
+raw = "BAD"
+fb_plain = "ok"
+l1 = raw as Level or DefaultLevel
+l2 = (decode_json 'null') as Flex or fb_plain
+l3 = lines as Level or "WARN"
+say "{total}|{count filtered}|{l1}|{l2}|{count l3}"
+`
+	if _, err := ParseProgram(validSrc); err != nil {
+		t.Fatalf("expected valid cast fallback program to pass typecheck, got:\n%v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(validSrc, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	if out.String() != "30|2|INFO|ok|3\n" {
+		t.Fatalf("unexpected output: got %q, want %q", out.String(), "30|2|INFO|ok|3\n")
+	}
+}

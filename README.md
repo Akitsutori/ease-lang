@@ -23,10 +23,11 @@
    - [6. Ambush! Fighting a Pack of Monsters](#6-ambush-fighting-a-pack-of-monsters)
    - [7. Loot Tables & Savegames](#7-loot-tables--savegames)
    - [8. Expanding the World & Testing Combat Rules](#8-expanding-the-world--testing-combat-rules)
-3. [Why Ease Works Well for AI Agents](#why-ease-works-well-for-ai-agents)
-4. [Built-in Verbs](#built-in-verbs)
-5. [Formal Grammar (EBNF)](#formal-grammar-ebnf)
-6. [Running Tests & Project Layout](#running-tests--project-layout)
+3. [Pattern Matching & Structured Extraction (`match`)](#pattern-matching--structured-extraction-match)
+4. [Why Ease Works Well for AI Agents](#why-ease-works-well-for-ai-agents)
+5. [Built-in Verbs](#built-in-verbs)
+6. [Formal Grammar (EBNF)](#formal-grammar-ebnf)
+7. [Running Tests & Project Layout](#running-tests--project-layout)
 
 ---
 
@@ -381,6 +382,53 @@ end
 
 ---
 
+## Pattern Matching & Structured Extraction (`match`)
+
+Use `match <target> ... end` for full-string pattern matching and typed data extraction on `text` or lists of `text` — without regular-expression backtracking noise:
+
+- **Statement form (`match <text> ... end`)**: Runs the first matching arm from top to bottom. Inside `to` functions, `-> <expr>` returns immediately (just like `check`), while `-> <stmt>` executes (`say`, variable updates, or `-> end` inside `loop`). `else` is optional.
+- **Expression form (`res = match <text> ... end`)**: Produces a value; an `else` branch (`else -> <expr>` or `else\n  ...\n  <expr>\nend`) is mandatory on `text`.
+- **List sieve & transform (`res = match <lines> ... end` or trailing `match <lines> ... end` in `to`)**: Iterates all `text` items (`it` and `it.index`), applies the first matching arm, and produces a homogeneous result `list`. `else` is optional (unmatched lines are skipped).
+- **Placeholders & rules**: `{name}` (`0+` runes, minimal left-to-right match), `{...}` wildcard, `{name: N}` fixed rune width (`N >= 1`), `{name as number|<Union>}` typed capture (falls through on mismatch), and single-quoted `'...'` for 1:1 literal matching with zero placeholder parsing. Repeated names (`"<{tag}>{body}</{tag}>"`, `"{n as number}:{n}"`) enforce structural equality and inherit the first type. Adjacent variable-length placeholders without a delimiter or `: N` are a compile error.
+
+```ease
+def LogLevel = "INFO" | "WARN" | "ERR"
+
+def LogEntry
+    line_no = 0
+    level   = "INFO" | "WARN" | "ERR"
+    msg     = ""
+end
+
+to parse_entries lines
+    match lines
+        "[{lvl as LogLevel}] {msg} ({...})" -> LogEntry with line_no = it.index + 1, level = lvl, msg = msg
+    end
+end
+
+entries = parse_entries (list "[INFO] booted (2ms)", "debug noise", "[ERR] disk full (9ms)")
+```
+
+### Safe Type Conversion Fallbacks (`as <type> or <fallback>`)
+
+For untrusted scalar inputs or lists, add an optional `or <fallback>` right after `as number`, `as text`, or `as <union>`:
+
+- Bare `raw as number` and `raw as <union>` remain strict and raise `RuntimeError` on invalid input.
+- With `or <fallback>`, valid conversions keep their value, while invalid scalars return the **lazily evaluated** `<fallback>` (`ask "Port?" as number or 8080`, `raw as level or "INFO"`).
+- Batch list casts (`lines as number or 0`, `lines as level or "INFO"`) convert each valid element and substitute the memoized fallback for failing elements — without masking `TypeError`s in `<fallback>` (verified statically to match the target type/union).
+- Record contracts (`as <def>`), record-only unions, `load ... as <mode>`, `bool`, `csv`, and `bytes` reject `or` fallbacks statically.
+
+```ease
+def HttpCode = 200 | 404 | 500
+
+port = "bad" as number or 8080
+code = "404" as HttpCode or 200
+cleaned = (list "10", "oops", "25") as number or 0
+say "{port}|{code}|{sum cleaned}"
+```
+
+---
+
 ## Why Ease Works Well for AI Agents
 
 Ease pairs a tiny, unambiguous grammar with [`llms.txt`](llms.txt) so models can hold the entire language specification in context:
@@ -443,7 +491,7 @@ ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
 ```text
 Keywords:
   to  import  def  with  where  end  test  check  is
-  say  as  else  loop
+  say  as  else  loop  match
   and  or  not  text  number  list
 
 Operators & Punctuation:
@@ -477,6 +525,7 @@ stmt           ::= "say" expr stmt_end
                  | "end" stmt_end
                  | loop_stmt
                  | check_guard
+                 | match_stmt
                  | assign_stmt
                  | expr stmt_end
 
@@ -487,6 +536,10 @@ check_action   ::= "end" stmt_end | stmt
 check_guard    ::= "check" expr "->" check_action
                  | "check" NL { check_rule [NL] } [ "else" ( "->" check_action | NL { stmt [NL] } ) ] "end" stmt_end
 check_rule     ::= expr ( "->" check_action | stmt_end )
+
+match_stmt      ::= "match" expr NL match_stmt_arm { [NL] match_stmt_arm } [ [NL] match_stmt_else ] NL "end" stmt_end
+match_stmt_arm  ::= match_pattern "->" check_action
+match_stmt_else ::= "else" ( "->" check_action | NL { stmt [NL] } )
 
 test_item      ::= loop_stmt
                  | "say" expr stmt_end
@@ -523,7 +576,7 @@ postfix        ::= primary { "." IDENT
                            | ":" IDENT call_args
                            | with_clause
                            | where_clause
-                           | "as" cast_type
+                           | "as" cast_type [ "or" unary ]
                            | call_args }
 
 with_clause    ::= "with" NL { with_field stmt_end [NL] } "end"
@@ -536,7 +589,12 @@ where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
 cast_type      ::= "text" | "number" | "csv" | "bytes" | IDENT [ "." IDENT ]
 call_args      ::= unary{k}
 
-primary        ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr
+primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | match_expr
+match_expr      ::= "match" expr NL match_expr_arm { [NL] match_expr_arm } [ [NL] match_expr_else ] NL "end"
+match_expr_arm  ::= match_pattern "->" expr stmt_end
+match_expr_else ::= "else" ( "->" expr stmt_end | NL { stmt [NL] } expr stmt_end )
+match_pattern   ::= STRING | RAW_STRING | INTERP_STRING
+                    (* INTERP_STRING placeholders: {...} | {IDENT [":" INT] ["as" type]} *)
 list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," with_field } stmt_end [NL] } "end" ]
                  | "list" expr { "," expr }
 list_elem_type ::= "text" | "number" | IDENT [ "." IDENT ]
@@ -558,7 +616,7 @@ for f in tests/*.ease; do ./ease test "$f"; done
 cmd/ease/           CLI entrypoint
 internal/ease/      Lexer, Parser, AST, Typechecker, Evaluator, Screen, Bundle & Stdlib
 examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–08)
+tests/              Language feature test files (01–10)
 .github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
 ```
 

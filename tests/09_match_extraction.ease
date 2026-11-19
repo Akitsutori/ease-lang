@@ -1,0 +1,124 @@
+# Feature 09: Text Pattern Matching & Structured Extraction (`match ... end`)
+
+def LogLevel = "INFO" | "WARN" | "ERROR"
+def StatusCode = 200 | 404 | 500
+
+def LogRecord
+  line_no = 0
+  level   = "INFO" | "WARN" | "ERROR"
+  message = ""
+end
+
+to route_command cmd
+  match cmd
+    "PING" -> "PONG"
+    "ECHO: {text_arg}" -> text_arg
+  end
+  "IGNORED"
+end
+
+to classify_code raw
+  match raw
+    "HTTP {code as StatusCode} {msg}" -> "{code}:{msg}"
+    else -> "UNKNOWN"
+  end
+end
+
+to parse_logs lines
+  match lines
+    "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with line_no = it.index + 1, level = lvl, message = msg
+  end
+end
+
+test "match statements and text expressions"
+  route_command "PING" is "PONG"
+  route_command "ECHO: hello: world" is "hello: world"
+  route_command "OTHER" is "IGNORED"
+
+  classify_code "HTTP 200 OK" is "200:OK"
+  classify_code "HTTP 404 Not Found" is "404:Not Found"
+  classify_code "HTTP 418 Teapot" is "UNKNOWN"
+
+  parsed_num = match "PORT=8080"
+    "PORT={port as number}" -> port + 1
+    else -> 0
+  end
+  parsed_num is 8081
+
+  raw_match = match '{"ok": true}'
+    '{"ok": true}' -> "literal-ok"
+    else -> "nope"
+  end
+  raw_match is "literal-ok"
+end
+
+test "list extraction, sieve semantics, rune widths, and backreferences"
+  lines = list "[INFO] server started (0ms)", "skip debug line", "[ERROR] disk full (99ms)", "[WARN] high load (12ms)"
+  records = parse_logs lines
+  count records is 3
+  records.0.line_no is 1
+  records.0.level is "INFO"
+  records.1.line_no is 3
+  records.1.level is "ERROR"
+  records.1.message is "disk full"
+
+  urgent = records where it.level is "ERROR"
+  count urgent is 1
+  urgent.0.message is "disk full"
+
+  # Fixed rune width (UTF-8 runes) and 0+ minimum capture length
+  (match "2026-11-19"
+    "{year: 4}-{month: 2}-{day: 2}" -> "{year}/{month}/{day}"
+    else -> "bad"
+  end) is "2026/11/19"
+  (match "äöü"
+    "{head: 2}{tail}" -> "{head}+{tail}"
+    else -> "bad"
+  end) is "äö+ü"
+  (match "TOKEN="
+    "TOKEN={val}" -> "empty={val}"
+    else -> "bad"
+  end) is "empty="
+
+  # Backreferences enforce equality and inherit capture types
+  (match "<h1>Title</h1>"
+    "<{tag}>{body}</{tag}>" -> "{tag}:{body}"
+    else -> "mismatch"
+  end) is "h1:Title"
+  (match "<h1>Title</h2>"
+    "<{tag}>{body}</{tag}>" -> "{tag}:{body}"
+    else -> "mismatch"
+  end) is "mismatch"
+  (match "07=7"
+    "{n as number}={n}" -> n * 10
+    else -> -1
+  end) is 70
+end
+
+to require_id txt
+  match txt
+    "ID={id as number}" -> id
+    else -> fail "missing numeric id"
+  end
+end
+
+to count_until_quit cmds
+  steps = 0
+  idx = 0
+  loop
+    check idx >= count cmds -> end
+    match cmds.(idx)
+      "quit" -> end
+      "step" -> steps = steps + 1
+    end
+    idx = idx + 1
+  end
+  steps
+end
+
+test "match inside infinite loop exit and runtime error handling"
+  count_until_quit (list "step", "step", "quit", "step") is 2
+
+  require_id "ID=42" is 42
+  require_id "ID=abc" is error
+end

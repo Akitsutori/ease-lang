@@ -21,6 +21,7 @@ type Parser struct {
 	disallowTopIs  bool
 	stopChainedIs  bool
 	disallowAs     bool
+	disallowWhere  bool
 	inTestBlock    bool
 	funcArities    map[string]int
 	moduleArities  map[string]map[string]int
@@ -216,7 +217,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 				}
 			}
 			blockDepth++
-		case TOK_LOOP, TOK_TEST:
+		case TOK_LOOP, TOK_MATCH, TOK_TEST:
 			blockDepth++
 		case TOK_DEF:
 			if i+2 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT && p.tokens[i+2].Type == TOK_NEWLINE {
@@ -895,6 +896,8 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		return p.parseLoopStmt()
 	case TOK_CHECK:
 		return p.parseCheckGuardStmt()
+	case TOK_MATCH:
+		return p.parseMatchStmt()
 	case TOK_TO:
 		return nil, newError(
 			"SyntaxError",
@@ -1204,6 +1207,604 @@ func (p *Parser) parseCheckArrowAction() (Stmt, error) {
 	return p.parseStmt()
 }
 
+func isMatchVarLengthSeg(seg MatchSegment) bool {
+	return seg.Kind == MatchSegWildcard || (seg.Kind == MatchSegCapture && seg.FixedWidth == 0)
+}
+
+func (p *Parser) parseMatchPattern() (MatchPattern, error) {
+	tok := p.current()
+	switch tok.Type {
+	case TOK_STRING:
+		p.advance()
+		var segs []MatchSegment
+		if tok.Lexeme != "" {
+			segs = append(segs, MatchSegment{
+				Kind:    MatchSegLiteral,
+				Literal: tok.Lexeme,
+				Line:    tok.Line,
+				Col:     tok.Col,
+			})
+		}
+		return MatchPattern{
+			posInfo:  posInfo{Line: tok.Line, Col: tok.Col},
+			Raw:      tok.Lexeme,
+			Segments: segs,
+		}, nil
+
+	case TOK_INTERP_STRING:
+		p.advance()
+		segments := make([]MatchSegment, 0, len(tok.Segments))
+		var rawBuilder strings.Builder
+		for _, seg := range tok.Segments {
+			if !seg.IsExpr {
+				rawBuilder.WriteString(seg.Text)
+				if seg.Text == "" {
+					continue
+				}
+				segments = append(segments, MatchSegment{
+					Kind:    MatchSegLiteral,
+					Literal: seg.Text,
+					Line:    seg.Line,
+					Col:     seg.Col,
+				})
+				continue
+			}
+
+			rawBuilder.WriteByte('{')
+			rawBuilder.WriteString(seg.Text)
+			rawBuilder.WriteByte('}')
+
+			subTokens, err := NewLexer(seg.Text).Tokenize()
+			if err != nil {
+				if eErr, ok := err.(*EaseError); ok {
+					errLine, errCol := offsetSourcePos(eErr.Line, eErr.Col, seg.Line, seg.Col)
+					return MatchPattern{}, newError("SyntaxError", errLine, errCol, p.source, eErr.Message, eErr.Hint)
+				}
+				return MatchPattern{}, err
+			}
+			offsetTokenPositions(subTokens, seg.Line, seg.Col)
+			subParser := &Parser{
+				tokens:        subTokens,
+				source:        p.source,
+				depth:         p.depth,
+				funcArities:   p.funcArities,
+				moduleArities: p.moduleArities,
+			}
+
+			if subParser.check(TOK_DOT) {
+				subParser.advance()
+				if !subParser.match(TOK_DOT) || !subParser.match(TOK_DOT) || !subParser.check(TOK_EOF) {
+					cur := subParser.current()
+					return MatchPattern{}, newError(
+						"SyntaxError",
+						cur.Line,
+						cur.Col,
+						p.source,
+						"Invalid wildcard syntax in match pattern",
+						"Use '{...}' to discard unmatched text, e.g. \"ERROR: {msg} ({...})\".",
+					)
+				}
+				segments = append(segments, MatchSegment{
+					Kind: MatchSegWildcard,
+					Line: seg.Line,
+					Col:  seg.Col,
+				})
+				continue
+			}
+
+			if !subParser.check(TOK_IDENT) {
+				cur := subParser.current()
+				return MatchPattern{}, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					fmt.Sprintf("Expected capture variable name inside '{...}' in match pattern, got %q", cur.Lexeme),
+					"Use '{name}', '{name as number}', '{name: 2}', or '{...}'.",
+				)
+			}
+			nameTok := subParser.advance()
+			if nameTok.Lexeme == "it" {
+				return MatchPattern{}, newError(
+					"SyntaxError",
+					nameTok.Line,
+					nameTok.Col,
+					p.source,
+					"Cannot use reserved name 'it' as a capture variable in 'match'",
+					"Choose a descriptive variable name such as '{item}' or '{val}'.",
+				)
+			}
+
+			var fixedWidth int
+			if subParser.match(TOK_COLON) {
+				numTok := subParser.current()
+				if numTok.Type != TOK_NUMBER {
+					return MatchPattern{}, newError(
+						"SyntaxError",
+						numTok.Line,
+						numTok.Col,
+						p.source,
+						fmt.Sprintf("Expected positive integer width after ':' in match capture, got %q", numTok.Lexeme),
+						fmt.Sprintf("Write '{%s: N}' with a whole number >= 1, e.g. '{%s: 2}'.", nameTok.Lexeme, nameTok.Lexeme),
+					)
+				}
+				subParser.advance()
+				n, convErr := strconv.Atoi(numTok.Lexeme)
+				if convErr != nil || n < 1 {
+					return MatchPattern{}, newError(
+						"SyntaxError",
+						numTok.Line,
+						numTok.Col,
+						p.source,
+						fmt.Sprintf("Match capture width after ':' must be a positive integer (>= 1), got %q", numTok.Lexeme),
+						fmt.Sprintf("Write '{%s: N}' with a whole number >= 1, e.g. '{%s: 2}'.", nameTok.Lexeme, nameTok.Lexeme),
+					)
+				}
+				fixedWidth = n
+			}
+
+			var castType string
+			var explicitCast bool
+			var typeLine, typeCol int
+			if subParser.match(TOK_AS) {
+				explicitCast = true
+				castType, typeLine, typeCol, err = subParser.parseTypeTarget(
+					"Expected type ('number', 'text', or a union) after 'as' in match capture",
+					fmt.Sprintf("Write '{%s as number}' or '{%s as <UnionType>}'.", nameTok.Lexeme, nameTok.Lexeme),
+				)
+				if err != nil {
+					return MatchPattern{}, err
+				}
+			}
+
+			if !subParser.check(TOK_EOF) {
+				extra := subParser.current()
+				return MatchPattern{}, newError(
+					"SyntaxError",
+					extra.Line,
+					extra.Col,
+					p.source,
+					fmt.Sprintf("Unexpected %q in match pattern placeholder", extra.Lexeme),
+					"Supported forms: '{name}', '{name: N}', '{name as type}', '{name: N as type}', or '{...}'.",
+				)
+			}
+
+			segments = append(segments, MatchSegment{
+				Kind:         MatchSegCapture,
+				VarName:      nameTok.Lexeme,
+				FixedWidth:   fixedWidth,
+				CastType:     castType,
+				ExplicitCast: explicitCast,
+				TypeLine:     typeLine,
+				TypeCol:      typeCol,
+				Line:         seg.Line,
+				Col:          seg.Col,
+			})
+		}
+
+		for i := 0; i+1 < len(segments); i++ {
+			if isMatchVarLengthSeg(segments[i]) && isMatchVarLengthSeg(segments[i+1]) {
+				return MatchPattern{}, newError(
+					"SyntaxError",
+					segments[i+1].Line,
+					segments[i+1].Col,
+					p.source,
+					"Adjacent variable-length placeholders in match pattern must be separated by literal text or a fixed width ': N'",
+					"Add delimiter characters between placeholders (e.g. \"{a}-{b}\") or set a fixed rune width (e.g. \"{a: 2}{b}\").",
+				)
+			}
+		}
+
+		// Propagate the first capture's CastType onto repeated untyped backreference captures.
+		firstCast := make(map[string]string)
+		for i := range segments {
+			if segments[i].Kind != MatchSegCapture {
+				continue
+			}
+			prev, seen := firstCast[segments[i].VarName]
+			if !seen {
+				firstCast[segments[i].VarName] = segments[i].CastType
+			} else if !segments[i].ExplicitCast && prev != "" {
+				segments[i].CastType = prev
+			}
+		}
+
+		return MatchPattern{
+			posInfo:  posInfo{Line: tok.Line, Col: tok.Col},
+			Raw:      rawBuilder.String(),
+			Segments: segsOrSlice(segments),
+		}, nil
+
+	default:
+		return MatchPattern{}, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			fmt.Sprintf("Expected pattern string in 'match' branch, got %q", tok.Lexeme),
+			"Start each 'match' branch with a quoted pattern string, e.g. \"KEY={val}\" -> val.",
+		)
+	}
+}
+
+func segsOrSlice(s []MatchSegment) []MatchSegment {
+	if s == nil {
+		return []MatchSegment{}
+	}
+	return s
+}
+
+func (p *Parser) parseMatchStmt() (Stmt, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
+	matchTok := p.advance() // consume `match`
+	target, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if !p.match(TOK_NEWLINE) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected newline after 'match' target",
+			"Write 'match <expression>' followed by pattern branches on new lines, closing with 'end'.",
+		)
+	}
+	p.skipNewlines()
+
+	var arms []MatchArmStmt
+	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
+		if p.check(TOK_EOF) {
+			return nil, newError(
+				"SyntaxError",
+				matchTok.Line,
+				matchTok.Col,
+				p.source,
+				"'match' block is missing 'end'",
+				"Close every 'match' block with 'end'.",
+			)
+		}
+		armTok := p.current()
+		pat, err := p.parseMatchPattern()
+		if err != nil {
+			return nil, err
+		}
+		if !p.match(TOK_ARROW) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				fmt.Sprintf("Expected '->' after match pattern, got %q", cur.Lexeme),
+				"Write '\"pattern\" -> action' on each branch.",
+			)
+		}
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				"'match' branch '-> <action>' cannot be empty",
+				"Put the action on the same line as '->' (e.g. '\"PING\" -> \"PONG\"').",
+			)
+		}
+		action, err := p.parseCheckArrowAction()
+		if err != nil {
+			return nil, err
+		}
+		arms = append(arms, MatchArmStmt{
+			Line:    armTok.Line,
+			Col:     armTok.Col,
+			Pattern: pat,
+			Action:  action,
+		})
+		p.skipNewlines()
+	}
+
+	if len(arms) == 0 {
+		return nil, newError(
+			"SyntaxError",
+			matchTok.Line,
+			matchTok.Col,
+			p.source,
+			"'match' block requires at least one pattern branch",
+			"Add at least one '\"pattern\" -> action' branch before 'end'.",
+		)
+	}
+
+	var elseBody []Stmt
+	if p.match(TOK_ELSE) {
+		if p.match(TOK_ARROW) {
+			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					"'match' 'else -> <action>' branch cannot be empty",
+					"Write 'else -> <action>' on one line or use a multi-line 'else ... end' block.",
+				)
+			}
+			action, err := p.parseCheckArrowAction()
+			if err != nil {
+				return nil, err
+			}
+			elseBody = append(elseBody, action)
+			p.skipNewlines()
+		} else {
+			if !p.match(TOK_NEWLINE) {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					fmt.Sprintf("Expected '->' or newline after 'else' in 'match', got %q", cur.Lexeme),
+					"Write 'else -> <action>' or start a block on the next line.",
+				)
+			}
+			p.skipNewlines()
+			for !p.check(TOK_END) {
+				if p.check(TOK_EOF) {
+					return nil, newError(
+						"SyntaxError",
+						matchTok.Line,
+						matchTok.Col,
+						p.source,
+						"'match ... else' block is missing 'end'",
+						"Close every 'match ... else' block with 'end'.",
+					)
+				}
+				s, err := p.parseStmt()
+				if err != nil {
+					return nil, err
+				}
+				elseBody = append(elseBody, s)
+				p.skipNewlines()
+			}
+		}
+	}
+
+	if !p.match(TOK_END) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected 'end' to close 'match' block",
+			"Close every 'match' block with 'end'.",
+		)
+	}
+	if err := p.expectStmtEnd("'match' block"); err != nil {
+		return nil, err
+	}
+
+	return &MatchStmt{
+		posInfo:  posInfo{Line: matchTok.Line, Col: matchTok.Col},
+		Target:   target,
+		Arms:     arms,
+		ElseBody: elseBody,
+	}, nil
+}
+
+func (p *Parser) parseMatchExpr() (Expr, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
+	prevDisallowAs := p.disallowAs
+	prevDisallowWhere := p.disallowWhere
+	prevDisallowTopIs := p.disallowTopIs
+	prevStopChainedIs := p.stopChainedIs
+	p.disallowAs = false
+	p.disallowWhere = false
+	p.disallowTopIs = false
+	p.stopChainedIs = false
+	defer func() {
+		p.disallowAs = prevDisallowAs
+		p.disallowWhere = prevDisallowWhere
+		p.disallowTopIs = prevDisallowTopIs
+		p.stopChainedIs = prevStopChainedIs
+	}()
+
+	matchTok := p.advance() // consume `match`
+	target, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if !p.match(TOK_NEWLINE) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected newline after 'match' target",
+			"Write 'match <expression>' followed by pattern branches on new lines, closing with 'end'.",
+		)
+	}
+	p.skipNewlines()
+
+	var arms []MatchArmExpr
+	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
+		if p.check(TOK_EOF) {
+			return nil, newError(
+				"SyntaxError",
+				matchTok.Line,
+				matchTok.Col,
+				p.source,
+				"'match' block is missing 'end'",
+				"Close every 'match' block with 'end'.",
+			)
+		}
+		armTok := p.current()
+		pat, err := p.parseMatchPattern()
+		if err != nil {
+			return nil, err
+		}
+		if !p.match(TOK_ARROW) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				fmt.Sprintf("Expected '->' after match pattern, got %q", cur.Lexeme),
+				"Write '\"pattern\" -> <expression>' on each branch.",
+			)
+		}
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				"'match' expression branch '-> <value>' cannot be empty",
+				"Write '\"pattern\" -> <expression>' on the same line.",
+			)
+		}
+		valExpr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectStmtEnd("'match' branch"); err != nil {
+			return nil, err
+		}
+		arms = append(arms, MatchArmExpr{
+			Line:    armTok.Line,
+			Col:     armTok.Col,
+			Pattern: pat,
+			Value:   valExpr,
+		})
+		p.skipNewlines()
+	}
+
+	if len(arms) == 0 {
+		return nil, newError(
+			"SyntaxError",
+			matchTok.Line,
+			matchTok.Col,
+			p.source,
+			"'match' block requires at least one pattern branch",
+			"Add at least one '\"pattern\" -> <expression>' branch before 'end'.",
+		)
+	}
+
+	var hasElse bool
+	var elseBody []Stmt
+	if p.match(TOK_ELSE) {
+		hasElse = true
+		if p.match(TOK_ARROW) {
+			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					"'match' 'else -> <value>' branch cannot be empty",
+					"Write 'else -> <expression>' on the same line.",
+				)
+			}
+			elseExpr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if err := p.expectStmtEnd("'match' else branch"); err != nil {
+				return nil, err
+			}
+			elLine, elCol := elseExpr.Pos()
+			elseBody = append(elseBody, &ExprStmt{posInfo: posInfo{Line: elLine, Col: elCol}, Expression: elseExpr})
+			p.skipNewlines()
+		} else {
+			if !p.match(TOK_NEWLINE) {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					fmt.Sprintf("Expected '->' or newline after 'else' in 'match', got %q", cur.Lexeme),
+					"Write 'else -> <expression>' or start a block on the next line.",
+				)
+			}
+			p.skipNewlines()
+			for !p.check(TOK_END) {
+				if p.check(TOK_EOF) {
+					return nil, newError(
+						"SyntaxError",
+						matchTok.Line,
+						matchTok.Col,
+						p.source,
+						"'match ... else' block is missing 'end'",
+						"Close every 'match ... else' block with 'end'.",
+					)
+				}
+				s, err := p.parseStmt()
+				if err != nil {
+					return nil, err
+				}
+				elseBody = append(elseBody, s)
+				p.skipNewlines()
+			}
+			if len(elseBody) == 0 {
+				return nil, newError(
+					"SyntaxError",
+					matchTok.Line,
+					matchTok.Col,
+					p.source,
+					"'match' expression 'else' block must end with an expression",
+					"Add a fallback expression before 'end', or write 'else -> <expression>'.",
+				)
+			}
+			if _, ok := elseBody[len(elseBody)-1].(*ExprStmt); !ok {
+				elLine, elCol := elseBody[len(elseBody)-1].Pos()
+				return nil, newError(
+					"SyntaxError",
+					elLine,
+					elCol,
+					p.source,
+					"'match' expression 'else' block must end with an expression",
+					"End the 'else' block with the fallback value expression.",
+				)
+			}
+		}
+	}
+
+	if !p.match(TOK_END) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected 'end' to close 'match' block",
+			"Close every 'match' block with 'end'.",
+		)
+	}
+
+	return &MatchExpr{
+		posInfo:  posInfo{Line: matchTok.Line, Col: matchTok.Col},
+		Target:   target,
+		Arms:     arms,
+		HasElse:  hasElse,
+		ElseBody: elseBody,
+	}, nil
+}
+
 // Expressions (precedence climbing)
 
 func (p *Parser) parseExpr() (Expr, error) {
@@ -1477,7 +2078,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			continue
 		}
 
-		if p.match(TOK_WHERE) {
+		if !p.disallowWhere && p.match(TOK_WHERE) {
 			line, col := expr.Pos()
 			prevDisallowTopIs := p.disallowTopIs
 			prevStopChainedIs := p.stopChainedIs
@@ -1554,6 +2155,19 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			var fallback Expr
+			var orLine, orCol int
+			if p.match(TOK_OR) {
+				orTok := p.tokens[p.pos-1]
+				orLine, orCol = orTok.Line, orTok.Col
+				prevDisallowWhere := p.disallowWhere
+				p.disallowWhere = true
+				fallback, err = p.parseUnary()
+				p.disallowWhere = prevDisallowWhere
+				if err != nil {
+					return nil, err
+				}
+			}
 			line, col := expr.Pos()
 			expr = &CastExpr{
 				posInfo:  posInfo{Line: line, Col: col},
@@ -1561,6 +2175,9 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				TypeName: typeName,
 				TypeLine: typeLine,
 				TypeCol:  typeCol,
+				Fallback: fallback,
+				OrLine:   orLine,
+				OrCol:    orCol,
 			}
 			continue
 		}
@@ -1699,11 +2316,14 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	case TOK_LPAREN:
 		p.advance()
 		prevDisallowAs := p.disallowAs
+		prevDisallowWhere := p.disallowWhere
 		prevDisallowTopIs := p.disallowTopIs
 		p.disallowAs = false
+		p.disallowWhere = false
 		p.disallowTopIs = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
+		p.disallowWhere = prevDisallowWhere
 		p.disallowTopIs = prevDisallowTopIs
 		if err != nil {
 			return nil, err
@@ -1715,6 +2335,8 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		return inner, nil
 	case TOK_LIST_KW:
 		return p.parseTypedOrInlineList()
+	case TOK_MATCH:
+		return p.parseMatchExpr()
 	default:
 		return nil, newError(
 			"SyntaxError",

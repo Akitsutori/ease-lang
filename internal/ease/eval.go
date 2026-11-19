@@ -182,6 +182,13 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 					}
 				}
 				walk(s.ElseBody)
+			case *MatchStmt:
+				for _, arm := range s.Arms {
+					if arm.Action != nil {
+						walk([]Stmt{arm.Action})
+					}
+				}
+				walk(s.ElseBody)
 			}
 		}
 	}
@@ -600,6 +607,8 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: say ...", line)
 	case *CheckGuardStmt:
 		ev.logTrace("line %d: check guard (%d rule(s))", line, len(s.Rules))
+	case *MatchStmt:
+		ev.logTrace("line %d: match (%d arm(s))", line, len(s.Arms))
 	case *LoopStmt:
 		ev.logTrace("line %d: loop ...", line)
 	case *LoopEndStmt:
@@ -779,6 +788,137 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			return val, nil, nil
 		}
 		return nil, nil, nil
+
+	case *MatchStmt:
+		targetVal, err := ev.EvalExpr(s.Target, env)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := ev.checkNotConditionValue(targetVal, s.Line, s.Col); err != nil {
+			return nil, nil, err
+		}
+		switch tv := targetVal.(type) {
+		case string:
+			for _, arm := range s.Arms {
+				bindings, matched, err := matchPatternRunes(tv, arm.Pattern, env, ev.source)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !matched {
+					continue
+				}
+				armEnv := NewEnv(env)
+				for k, v := range bindings {
+					armEnv.Define(k, v, false)
+				}
+				val, sig, err := ev.execStmt(arm.Action, armEnv)
+				if err != nil || sig != nil {
+					return val, sig, err
+				}
+				if es, isExpr := arm.Action.(*ExprStmt); isExpr {
+					if ev.callDepth > 0 {
+						return val, &reportSignal{val: val}, nil
+					}
+					if _, isCall := es.Expression.(*CallExpr); !isCall {
+						return nil, nil, newError(
+							"RuntimeError",
+							arm.Line,
+							arm.Col,
+							ev.source,
+							"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
+							"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
+						)
+					}
+				}
+				return val, nil, nil
+			}
+			if len(s.ElseBody) > 0 {
+				val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
+				if err != nil || sig != nil {
+					return val, sig, err
+				}
+				lastStmt := s.ElseBody[len(s.ElseBody)-1]
+				if es, isExpr := lastStmt.(*ExprStmt); isExpr {
+					if ev.callDepth > 0 {
+						return val, &reportSignal{val: val}, nil
+					}
+					if _, isCall := es.Expression.(*CallExpr); !isCall {
+						elLine, elCol := lastStmt.Pos()
+						return nil, nil, newError(
+							"RuntimeError",
+							elLine,
+							elCol,
+							ev.source,
+							"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
+							"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
+						)
+					}
+				}
+				return val, nil, nil
+			}
+			return nil, nil, nil
+
+		case *ListValue:
+			if ev.callDepth == 0 {
+				return nil, nil, newError(
+					"RuntimeError",
+					s.Line,
+					s.Col,
+					ev.source,
+					"Cannot use list 'match' without assigning its result at top level",
+					"Assign the result (e.g. 'result = match items ... end') or return it from a 'to' function.",
+				)
+			}
+			exprArms := make([]MatchArmExpr, 0, len(s.Arms))
+			for _, arm := range s.Arms {
+				es, isExpr := arm.Action.(*ExprStmt)
+				if !isExpr {
+					return nil, nil, newError(
+						"RuntimeError",
+						arm.Line,
+						arm.Col,
+						ev.source,
+						"List 'match' transforms items with expressions and cannot execute statements",
+						"Use 'loop items ... end' with 'match it ... end' to run statements for each item.",
+					)
+				}
+				exprArms = append(exprArms, MatchArmExpr{
+					Line:    arm.Line,
+					Col:     arm.Col,
+					Pattern: arm.Pattern,
+					Value:   es.Expression,
+				})
+			}
+			hasElse := len(s.ElseBody) > 0
+			if hasElse {
+				if _, isExpr := s.ElseBody[len(s.ElseBody)-1].(*ExprStmt); !isExpr {
+					elLine, elCol := s.ElseBody[len(s.ElseBody)-1].Pos()
+					return nil, nil, newError(
+						"RuntimeError",
+						elLine,
+						elCol,
+						ev.source,
+						"List 'match' 'else' branch must end with an expression",
+						"End 'else' with a result expression (or write 'else -> <expr>').",
+					)
+				}
+			}
+			listVal, err := ev.evalMatchList(tv, exprArms, hasElse, s.ElseBody, env, s.Line, s.Col)
+			if err != nil {
+				return nil, nil, err
+			}
+			return listVal, nil, nil
+
+		default:
+			return nil, nil, newError(
+				"RuntimeError",
+				s.Line,
+				s.Col,
+				ev.source,
+				fmt.Sprintf("'match' requires text or a list of text, got %s", TypeName(targetVal)),
+				"Pass a text string or a list of text items to 'match'.",
+			)
+		}
 
 	default:
 		line, col := stmt.Pos()
@@ -1106,16 +1246,28 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		return matched, nil
 
 	case *CastExpr:
-		if call, isCall := e.Target.(*CallExpr); isCall && call.Callee == "load" && len(call.Args) == 1 && (e.TypeName == "csv" || e.TypeName == "bytes" || e.TypeName == "text") {
-			pathVal, err := ev.EvalExpr(call.Args[0], env)
-			if err != nil {
-				return nil, err
+		if call, isCall := e.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" && (e.TypeName == "csv" || e.TypeName == "bytes" || e.TypeName == "text") {
+			if e.Fallback != nil {
+				return nil, newError(
+					"TypeError",
+					e.OrLine,
+					e.OrCol,
+					ev.source,
+					fmt.Sprintf("'or' fallback cannot be used with 'load ... as %s'", e.TypeName),
+					"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
+				)
 			}
-			pathStr, ok := pathVal.(string)
-			if !ok {
-				return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("load requires a text file path, got %s", TypeName(pathVal)), "Example: load \"./data.csv\" as csv")
+			if len(call.Args) == 1 {
+				pathVal, err := ev.EvalExpr(call.Args[0], env)
+				if err != nil {
+					return nil, err
+				}
+				pathStr, ok := pathVal.(string)
+				if !ok {
+					return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("load requires a text file path, got %s", TypeName(pathVal)), "Example: load \"./data.csv\" as csv")
+				}
+				return ev.evalLoad(pathStr, e.TypeName, e.Line, e.Col)
 			}
-			return ev.evalLoad(pathStr, e.TypeName, e.Line, e.Col)
 		}
 		targetVal, err := ev.EvalExpr(e.Target, env)
 		if err != nil {
@@ -1300,10 +1452,184 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			return modEv.callFunction(e.Callee, args, e.Line, e.Col)
 		}
 		return ev.callFunction(e.Callee, args, e.Line, e.Col)
+
+	case *MatchExpr:
+		targetVal, err := ev.EvalExpr(e.Target, env)
+		if err != nil {
+			return nil, err
+		}
+		if err := ev.checkNotConditionValue(targetVal, e.Line, e.Col); err != nil {
+			return nil, err
+		}
+		switch tv := targetVal.(type) {
+		case string:
+			if !e.HasElse {
+				return nil, newError(
+					"RuntimeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					"'match' expression on text requires an 'else' branch",
+					"Add 'else -> <fallback>' before 'end', or use statement form without assignment.",
+				)
+			}
+			for _, arm := range e.Arms {
+				bindings, matched, err := matchPatternRunes(tv, arm.Pattern, env, ev.source)
+				if err != nil {
+					return nil, err
+				}
+				if !matched {
+					continue
+				}
+				armEnv := NewEnv(env)
+				for k, v := range bindings {
+					armEnv.Define(k, v, false)
+				}
+				val, err := ev.EvalExpr(arm.Value, armEnv)
+				if err != nil {
+					return nil, err
+				}
+				if err := ev.checkNotConditionValue(val, arm.Line, arm.Col); err != nil {
+					return nil, err
+				}
+				return val, nil
+			}
+			val, sig, err := ev.execBlock(e.ElseBody, NewEnv(env))
+			if err != nil {
+				return nil, err
+			}
+			if sig != nil {
+				if sig.loopEnd {
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
+				}
+				val = sig.val
+			}
+			if err := ev.checkNotConditionValue(val, e.Line, e.Col); err != nil {
+				return nil, err
+			}
+			return val, nil
+
+		case *ListValue:
+			return ev.evalMatchList(tv, e.Arms, e.HasElse, e.ElseBody, env, e.Line, e.Col)
+
+		default:
+			return nil, newError(
+				"RuntimeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("'match' requires text or a list of text, got %s", TypeName(targetVal)),
+				"Pass a text string or a list of text items to 'match'.",
+			)
+		}
 	}
 
 	line, col := expr.Pos()
 	return nil, newError("RuntimeError", line, col, ev.source, "Unsupported expression", "")
+}
+
+func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse bool, elseBody []Stmt, env *Env, line, col int) (*ListValue, error) {
+	if lv.ElemType != "" && lv.ElemType != "text" {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("'match' on a list requires text items, got list of %s", lv.ElemType),
+			"Convert items to text or pass a list of text values to 'match'.",
+		)
+	}
+	var items []Value
+	var firstType string
+	for idx, el := range lv.Elements {
+		textItem, ok := el.(string)
+		if !ok {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'match' on a list requires text items, got %s at index %d", TypeName(el), idx),
+				"Ensure every item in the target list is text.",
+			)
+		}
+		itemEnv := NewEnv(env)
+		itemEnv.Define("it", textItem, false)
+		itemEnv.SetLoopIndex(float64(idx))
+
+		matchedAny := false
+		for _, arm := range arms {
+			bindings, matched, err := matchPatternRunes(textItem, arm.Pattern, env, ev.source)
+			if err != nil {
+				return nil, err
+			}
+			if !matched {
+				continue
+			}
+			matchedAny = true
+			armEnv := NewEnv(itemEnv)
+			for k, v := range bindings {
+				armEnv.Define(k, v, false)
+			}
+			val, err := ev.EvalExpr(arm.Value, armEnv)
+			if err != nil {
+				return nil, err
+			}
+			if err := ev.checkNotConditionValue(val, arm.Line, arm.Col); err != nil {
+				return nil, err
+			}
+			gotType := structuredTypeName(val)
+			if len(items) == 0 {
+				firstType = gotType
+			} else if gotType != firstType {
+				return nil, newError(
+					"TypeError",
+					arm.Line,
+					arm.Col,
+					ev.source,
+					fmt.Sprintf("Mixed result types in list 'match': expected %s, got %s", firstType, gotType),
+					"All branches in a list 'match' must return the same type (use 'def' records or convert values with 'as text').",
+				)
+			}
+			items = append(items, val)
+			break
+		}
+
+		if !matchedAny && hasElse {
+			val, sig, err := ev.execBlock(elseBody, NewEnv(itemEnv))
+			if err != nil {
+				return nil, err
+			}
+			if sig != nil {
+				if sig.loopEnd {
+					return nil, newError("RuntimeError", line, col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
+				}
+				val = sig.val
+			}
+			if err := ev.checkNotConditionValue(val, line, col); err != nil {
+				return nil, err
+			}
+			gotType := structuredTypeName(val)
+			if len(items) == 0 {
+				firstType = gotType
+			} else if gotType != firstType {
+				elLine, elCol := line, col
+				if len(elseBody) > 0 {
+					elLine, elCol = elseBody[len(elseBody)-1].Pos()
+				}
+				return nil, newError(
+					"TypeError",
+					elLine,
+					elCol,
+					ev.source,
+					fmt.Sprintf("Mixed result types in list 'match': expected %s, got %s", firstType, gotType),
+					"All branches in a list 'match' (including 'else') must return the same type.",
+				)
+			}
+			items = append(items, val)
+		}
+	}
+	return &ListValue{ElemType: firstType, Elements: items}, nil
 }
 
 func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFieldUpdate, env *Env, line, col int) (*ListValue, error) {

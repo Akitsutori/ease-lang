@@ -408,6 +408,13 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 				collectFromStmts(st.ElseBody)
 			case *LoopStmt:
 				collectFromStmts(st.Body)
+			case *MatchStmt:
+				for _, arm := range st.Arms {
+					if arm.Action != nil {
+						collectFromStmts([]Stmt{arm.Action})
+					}
+				}
+				collectFromStmts(st.ElseBody)
 			}
 		}
 	}
@@ -517,6 +524,24 @@ func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 			}
 		case *LoopStmt:
 			if inFunction && hasLoopExit(st.Body, inFunction, false) {
+				return true
+			}
+		case *MatchStmt:
+			for _, arm := range st.Arms {
+				if arm.Action == nil {
+					continue
+				}
+				if _, isEnd := arm.Action.(*LoopEndStmt); isEnd && directLoop {
+					return true
+				}
+				if _, isExpr := arm.Action.(*ExprStmt); isExpr && inFunction {
+					return true
+				}
+				if hasLoopExit([]Stmt{arm.Action}, inFunction, directLoop) {
+					return true
+				}
+			}
+			if hasLoopExit(st.ElseBody, inFunction, directLoop) {
 				return true
 			}
 		}
@@ -633,6 +658,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 
 	case *CheckGuardStmt:
 		return v.checkCheckGuardStmt([]Stmt{st}, 0, st, inFunction)
+
+	case *MatchStmt:
+		return v.checkMatchStmt(st, inFunction)
 
 	case *CheckIsStmt:
 		if err := v.checkExpr(st.Actual); err != nil {
@@ -958,6 +986,10 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		case "csv":
 			return varTypeState{}
 		default:
+			targetSt := v.inferExprTypeState(ex.Target)
+			if targetSt.listElemType != "" {
+				return varTypeState{listElemType: ex.TypeName}
+			}
 			return v.typeStateFromName(ex.TypeName)
 		}
 	case *TypedListExpr:
@@ -991,6 +1023,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *WhereExpr:
 		return v.inferExprTypeState(ex.Target)
+	case *MatchExpr:
+		return v.inferMatchExprTypeState(ex)
 	case *FieldExpr:
 		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" && v.loopDepth > 0 {
 			return varTypeState{exactNonRecord: true}
@@ -1120,9 +1154,12 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkNotCondition(ex.Target); err != nil {
 			return err
 		}
+		isLoadCall := false
+		if call, isCall := ex.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" {
+			isLoadCall = true
+		}
 		if ex.TypeName == "csv" || ex.TypeName == "bytes" {
-			call, isCall := ex.Target.(*CallExpr)
-			if !isCall || call.Callee != "load" {
+			if !isLoadCall {
 				if !v.inErrorTestExpr {
 					return newError(
 						"TypeError",
@@ -1133,10 +1170,52 @@ func (v *typeValidator) checkExpr(e Expr) error {
 						fmt.Sprintf("Write: load \"./path\" as %s", ex.TypeName),
 					)
 				}
+			} else if ex.Fallback != nil && !v.inErrorTestExpr {
+				return newError(
+					"TypeError",
+					ex.OrLine,
+					ex.OrCol,
+					v.source,
+					fmt.Sprintf("'or' fallback cannot be used with 'load ... as %s'", ex.TypeName),
+					"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
+				)
+			}
+			if ex.Fallback != nil {
+				if err := v.checkExpr(ex.Fallback); err != nil {
+					return err
+				}
+				if err := v.checkNotCondition(ex.Fallback); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
-		return v.validateTypeTarget(ex.TypeName, ex.TypeLine, ex.TypeCol, "as", false)
+		if isLoadCall && ex.Fallback != nil {
+			if err := v.checkExpr(ex.Fallback); err != nil {
+				return err
+			}
+			if err := v.checkNotCondition(ex.Fallback); err != nil {
+				return err
+			}
+			if !v.inErrorTestExpr {
+				return newError(
+					"TypeError",
+					ex.OrLine,
+					ex.OrCol,
+					v.source,
+					"'or' fallback cannot be used with 'load ... as text'",
+					"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
+				)
+			}
+			return nil
+		}
+		if err := v.validateTypeTarget(ex.TypeName, ex.TypeLine, ex.TypeCol, "as", false); err != nil {
+			return err
+		}
+		if ex.Fallback != nil {
+			return v.checkCastFallback(ex)
+		}
+		return nil
 
 	case *TypedListExpr:
 		for _, row := range ex.Rows {
@@ -1494,6 +1573,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		v.popScope()
 		return condErr
 
+	case *MatchExpr:
+		return v.checkMatchExpr(ex)
+
 	case *CallExpr:
 		if ex.Module != "" {
 			mod, isMod := v.modules[ex.Module]
@@ -1573,6 +1655,830 @@ func (v *typeValidator) checkNotCondition(e Expr) error {
 		"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
 		"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
 	)
+}
+
+func isFailCallExpr(e Expr) bool {
+	call, ok := e.(*CallExpr)
+	return ok && call.Module == "" && call.Callee == "fail"
+}
+
+func (v *typeValidator) staticConcreteType(st varTypeState) string {
+	if st.exactBaseType != "" {
+		return st.exactBaseType
+	}
+	if st.exactRecord != "" {
+		return st.exactRecord
+	}
+	if st.listElemType != "" {
+		return "list"
+	}
+	var variants []resolvedUnionVariant
+	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
+		variants = st.inlineUnionVariants
+	} else if st.unionName != "" {
+		variants = v.resolvedUnions[st.unionName]
+	}
+	if len(variants) == 0 {
+		return ""
+	}
+	kind := ""
+	for _, vr := range variants {
+		cur := ""
+		switch vr.kind {
+		case variantStringLit:
+			cur = "text"
+		case variantNumberLit:
+			cur = "number"
+		case variantBaseType:
+			cur = vr.baseType
+		case variantRecord:
+			cur = vr.recordName
+		}
+		if cur == "" {
+			return ""
+		}
+		if kind == "" {
+			kind = cur
+		} else if kind != cur {
+			return ""
+		}
+	}
+	return kind
+}
+
+func (v *typeValidator) classifyMatchTarget(target Expr) (isList bool, isText bool, badType string) {
+	st := v.inferExprTypeState(target)
+	if st.listElemType != "" {
+		if st.listElemType == "text" || st.listElemType == "any" {
+			return true, false, ""
+		}
+		return false, false, "list of " + st.listElemType
+	}
+	if st.exactRecord != "" {
+		return false, false, st.exactRecord
+	}
+	if st.exactBaseType == "number" {
+		return false, false, "number"
+	}
+	if st.exactBaseType == "text" {
+		return false, true, ""
+	}
+	if st.unionName != "" || (st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0) {
+		ct := v.staticConcreteType(st)
+		switch ct {
+		case "text":
+			return false, true, ""
+		case "":
+			return false, false, ""
+		default:
+			return false, false, ct
+		}
+	}
+	return false, false, ""
+}
+
+func effectiveMatchCaptureType(c string) string {
+	if c == "" {
+		return "text"
+	}
+	return c
+}
+
+func (v *typeValidator) captureTypeState(castType string) varTypeState {
+	if castType == "" {
+		return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+	}
+	return v.typeStateFromName(castType)
+}
+
+func (v *typeValidator) bindMatchPatternTypes(pat MatchPattern, scope *typeScope) {
+	for _, seg := range pat.Segments {
+		if seg.Kind != MatchSegCapture {
+			continue
+		}
+		if _, exists := scope.vars[seg.VarName]; exists {
+			continue
+		}
+		scope.vars[seg.VarName] = v.captureTypeState(seg.CastType)
+	}
+}
+
+func (v *typeValidator) validateAndBindMatchPattern(pat MatchPattern, scope *typeScope) error {
+	firstSeg := make(map[string]MatchSegment)
+	for _, seg := range pat.Segments {
+		if seg.Kind != MatchSegCapture {
+			continue
+		}
+		if err := v.checkNameNotCallable(seg.VarName, seg.Line, seg.Col, "capture variable"); err != nil {
+			return err
+		}
+		if seg.ExplicitCast {
+			tLine, tCol := seg.TypeLine, seg.TypeCol
+			if tLine == 0 {
+				tLine, tCol = seg.Line, seg.Col
+			}
+			if seg.CastType == "csv" || seg.CastType == "bytes" {
+				return newError(
+					"TypeError",
+					tLine,
+					tCol,
+					v.source,
+					fmt.Sprintf("Type %q cannot be used in match capture", seg.CastType),
+					"Match captures support 'text', 'number', or a scalar union type.",
+				)
+			}
+			if err := v.validateTypeTarget(seg.CastType, tLine, tCol, "as", false); err != nil {
+				return err
+			}
+			if info, ok := v.known[seg.CastType]; ok && info.isRecord {
+				return newError(
+					"TypeError",
+					tLine,
+					tCol,
+					v.source,
+					fmt.Sprintf("Record type %q cannot be used directly in match capture", seg.CastType),
+					"Capture atomic fields first (text, number, or union), then construct the record with 'with' after '->'.",
+				)
+			}
+			if variants, ok := v.resolvedUnions[seg.CastType]; ok {
+				hasScalar := false
+				for _, vr := range variants {
+					if vr.kind == variantStringLit || vr.kind == variantNumberLit || (vr.kind == variantBaseType && (vr.baseType == "text" || vr.baseType == "number")) {
+						hasScalar = true
+						break
+					}
+				}
+				if !hasScalar {
+					return newError(
+						"TypeError",
+						tLine,
+						tCol,
+						v.source,
+						fmt.Sprintf("Union %q contains only record variants and cannot match text captures", seg.CastType),
+						"Match captures can only cast to 'text', 'number', or unions with text/number variants.",
+					)
+				}
+			}
+		}
+
+		if prev, seen := firstSeg[seg.VarName]; seen {
+			if seg.ExplicitCast && effectiveMatchCaptureType(seg.CastType) != effectiveMatchCaptureType(prev.CastType) {
+				tLine, tCol := seg.TypeLine, seg.TypeCol
+				if tLine == 0 {
+					tLine, tCol = seg.Line, seg.Col
+				}
+				return newError(
+					"TypeError",
+					tLine,
+					tCol,
+					v.source,
+					fmt.Sprintf("Conflicting types for repeated capture %q in match pattern (%s vs %s)", seg.VarName, effectiveMatchCaptureType(prev.CastType), effectiveMatchCaptureType(seg.CastType)),
+					fmt.Sprintf("Use consistent types for repeated '{%s}', or write '{%s as %s}' once and repeat it as '{%s}'.", seg.VarName, seg.VarName, effectiveMatchCaptureType(prev.CastType), seg.VarName),
+				)
+			}
+			continue
+		}
+		firstSeg[seg.VarName] = seg
+		scope.vars[seg.VarName] = v.captureTypeState(seg.CastType)
+	}
+	return nil
+}
+
+func (v *typeValidator) checkMatchListResultExpr(expectedType *string, expr Expr, inElse bool) error {
+	if v.inErrorTestExpr || expr == nil || isFailCallExpr(expr) {
+		return nil
+	}
+	ct := v.staticConcreteType(v.inferExprTypeState(expr))
+	if ct == "" {
+		return nil
+	}
+	if *expectedType == "" {
+		*expectedType = ct
+		return nil
+	}
+	if ct != *expectedType {
+		bLine, bCol := expr.Pos()
+		hint := "All branches in a list 'match' must return compatible types (use 'def' records or 'as text')."
+		if inElse {
+			hint = "All branches in a list 'match' (including 'else') must return compatible types."
+		}
+		return newError(
+			"TypeError",
+			bLine,
+			bCol,
+			v.source,
+			fmt.Sprintf("Mixed result types in list 'match': expected %s, got %s", *expectedType, ct),
+			hint,
+		)
+	}
+	return nil
+}
+
+func (v *typeValidator) checkMatchStmt(st *MatchStmt, inFunction bool) error {
+	if err := v.checkExpr(st.Target); err != nil {
+		return err
+	}
+	if err := v.checkNotCondition(st.Target); err != nil {
+		return err
+	}
+	isList, _, badType := v.classifyMatchTarget(st.Target)
+	if !v.inErrorTestExpr && badType != "" {
+		return newError(
+			"TypeError",
+			st.Line,
+			st.Col,
+			v.source,
+			fmt.Sprintf("'match' requires text or a list of text, got %s", badType),
+			"Pass a text string or a list of text items to 'match'.",
+		)
+	}
+
+	if isList {
+		if !inFunction && !v.inErrorTestExpr {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"Cannot use list 'match' without assigning its result at top level",
+				"Assign the result (e.g. 'result = match items ... end') or return it from a 'to' function.",
+			)
+		}
+		matchScope := v.pushScope()
+		matchScope.vars["it"] = varTypeState{exactNonRecord: true, exactBaseType: "text"}
+		v.loopDepth++
+		defer func() {
+			v.loopDepth--
+			v.popScope()
+		}()
+
+		var expectedType string
+		for _, arm := range st.Arms {
+			es, isExpr := arm.Action.(*ExprStmt)
+			if !isExpr {
+				return newError(
+					"TypeError",
+					arm.Line,
+					arm.Col,
+					v.source,
+					"List 'match' transforms items with expressions and cannot execute statements",
+					"Use 'loop items ... end' with 'match it ... end' to run statements for each item.",
+				)
+			}
+			armScope := v.pushScope()
+			if err := v.validateAndBindMatchPattern(arm.Pattern, armScope); err != nil {
+				v.popScope()
+				return err
+			}
+			err := v.checkExpr(es.Expression)
+			if err == nil {
+				err = v.checkNotCondition(es.Expression)
+			}
+			if err == nil {
+				err = v.checkMatchListResultExpr(&expectedType, es.Expression, false)
+			}
+			v.popScope()
+			if err != nil {
+				return err
+			}
+		}
+
+		if len(st.ElseBody) > 0 {
+			lastStmt := st.ElseBody[len(st.ElseBody)-1]
+			lastEs, isExpr := lastStmt.(*ExprStmt)
+			if !isExpr {
+				elLine, elCol := lastStmt.Pos()
+				return newError(
+					"TypeError",
+					elLine,
+					elCol,
+					v.source,
+					"List 'match' 'else' branch must end with an expression",
+					"End 'else' with a result expression (or write 'else -> <expr>').",
+				)
+			}
+			v.pushScope()
+			err := v.checkStmts(st.ElseBody, false)
+			if err == nil {
+				err = v.checkNotCondition(lastEs.Expression)
+			}
+			if err == nil {
+				err = v.checkMatchListResultExpr(&expectedType, lastEs.Expression, true)
+			}
+			v.popScope()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, arm := range st.Arms {
+		if !inFunction && !v.inErrorTestExpr {
+			if es, isExpr := arm.Action.(*ExprStmt); isExpr {
+				if _, isCall := es.Expression.(*CallExpr); !isCall {
+					line, col := es.Pos()
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
+						"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
+					)
+				}
+			}
+		}
+		armScope := v.pushScope()
+		err := v.validateAndBindMatchPattern(arm.Pattern, armScope)
+		if err == nil {
+			err = v.checkStmt(arm.Action, inFunction)
+		}
+		v.popScope()
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(st.ElseBody) > 0 {
+		if !inFunction && !v.inErrorTestExpr {
+			lastStmt := st.ElseBody[len(st.ElseBody)-1]
+			if es, isExpr := lastStmt.(*ExprStmt); isExpr {
+				if _, isCall := es.Expression.(*CallExpr); !isCall {
+					line, col := es.Pos()
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
+						"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
+					)
+				}
+			}
+		}
+		v.pushScope()
+		err := v.checkStmts(st.ElseBody, inFunction)
+		v.popScope()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *typeValidator) checkMatchExpr(ex *MatchExpr) error {
+	if err := v.checkExpr(ex.Target); err != nil {
+		return err
+	}
+	if err := v.checkNotCondition(ex.Target); err != nil {
+		return err
+	}
+	isList, isText, badType := v.classifyMatchTarget(ex.Target)
+	if !v.inErrorTestExpr && badType != "" {
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("'match' requires text or a list of text, got %s", badType),
+			"Pass a text string or a list of text items to 'match'.",
+		)
+	}
+	if !v.inErrorTestExpr && isText && !ex.HasElse {
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			"'match' expression on text requires an 'else' branch",
+			"Add 'else -> <fallback>' before 'end', or use statement form without assignment.",
+		)
+	}
+
+	treatAsList := isList || (!isText && !ex.HasElse)
+	bindIt := isList || !isText
+	if bindIt {
+		matchScope := v.pushScope()
+		matchScope.vars["it"] = varTypeState{exactNonRecord: true, exactBaseType: "text"}
+		v.loopDepth++
+		defer func() {
+			v.loopDepth--
+			v.popScope()
+		}()
+	}
+
+	expectedType := ""
+	for _, arm := range ex.Arms {
+		armScope := v.pushScope()
+		err := v.validateAndBindMatchPattern(arm.Pattern, armScope)
+		if err == nil {
+			err = v.checkExpr(arm.Value)
+		}
+		if err == nil {
+			err = v.checkNotCondition(arm.Value)
+		}
+		if err == nil && treatAsList {
+			err = v.checkMatchListResultExpr(&expectedType, arm.Value, false)
+		}
+		v.popScope()
+		if err != nil {
+			return err
+		}
+	}
+
+	if ex.HasElse && len(ex.ElseBody) > 0 {
+		v.pushScope()
+		err := v.checkStmts(ex.ElseBody, false)
+		if err == nil {
+			if lastEs, ok := ex.ElseBody[len(ex.ElseBody)-1].(*ExprStmt); ok {
+				err = v.checkNotCondition(lastEs.Expression)
+				if err == nil && treatAsList {
+					err = v.checkMatchListResultExpr(&expectedType, lastEs.Expression, true)
+				}
+			}
+		}
+		v.popScope()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (v *typeValidator) unifyScalarTypeStates(states []varTypeState) varTypeState {
+	if len(states) == 0 {
+		return varTypeState{}
+	}
+	first := states[0]
+	sameRec := first.exactRecord != ""
+	sameBase := first.exactBaseType != ""
+	sameUnion := first.unionName != ""
+	sameList := first.listElemType != ""
+	allNonRec := first.exactNonRecord
+	commonConcrete := v.staticConcreteType(first)
+
+	for _, st := range states[1:] {
+		if st.exactRecord == "" || st.exactRecord != first.exactRecord {
+			sameRec = false
+		}
+		if st.exactBaseType == "" || st.exactBaseType != first.exactBaseType {
+			sameBase = false
+		}
+		if st.unionName == "" || st.unionName != first.unionName {
+			sameUnion = false
+		}
+		if st.listElemType == "" || st.listElemType != first.listElemType {
+			sameList = false
+		}
+		if !st.exactNonRecord {
+			allNonRec = false
+		}
+		ct := v.staticConcreteType(st)
+		if ct == "" || ct != commonConcrete {
+			commonConcrete = ""
+		}
+	}
+	if sameRec {
+		return varTypeState{exactRecord: first.exactRecord}
+	}
+	if sameUnion {
+		return varTypeState{unionName: first.unionName}
+	}
+	if sameBase {
+		return varTypeState{exactNonRecord: true, exactBaseType: first.exactBaseType}
+	}
+	if sameList {
+		return varTypeState{listElemType: first.listElemType}
+	}
+	if commonConcrete == "text" || commonConcrete == "number" {
+		return varTypeState{exactNonRecord: true, exactBaseType: commonConcrete}
+	}
+	if allNonRec {
+		return varTypeState{exactNonRecord: true}
+	}
+	return varTypeState{}
+}
+
+func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
+	isList, isText, _ := v.classifyMatchTarget(ex.Target)
+	if !isList && !isText && !ex.HasElse {
+		isList = true
+	}
+	if !isList && !isText {
+		return varTypeState{}
+	}
+
+	if isList {
+		matchScope := v.pushScope()
+		matchScope.vars["it"] = varTypeState{exactNonRecord: true, exactBaseType: "text"}
+		v.loopDepth++
+		defer func() {
+			v.loopDepth--
+			v.popScope()
+		}()
+	}
+
+	var states []varTypeState
+	for _, arm := range ex.Arms {
+		if isFailCallExpr(arm.Value) {
+			continue
+		}
+		armScope := v.pushScope()
+		v.bindMatchPatternTypes(arm.Pattern, armScope)
+		states = append(states, v.inferExprTypeState(arm.Value))
+		v.popScope()
+	}
+
+	if ex.HasElse && len(ex.ElseBody) > 0 {
+		elseScope := v.pushScope()
+		for i, s := range ex.ElseBody {
+			if i < len(ex.ElseBody)-1 {
+				if as, ok := s.(*AssignStmt); ok {
+					elseScope.vars[as.Name] = v.inferExprTypeState(as.Value)
+				}
+			} else if es, ok := s.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
+				states = append(states, v.inferExprTypeState(es.Expression))
+			}
+		}
+		v.popScope()
+	}
+
+	if isList {
+		if len(states) == 0 {
+			return varTypeState{listElemType: "any"}
+		}
+		unified := v.unifyScalarTypeStates(states)
+		switch {
+		case unified.exactRecord != "":
+			return varTypeState{listElemType: unified.exactRecord}
+		case unified.unionName != "":
+			return varTypeState{listElemType: unified.unionName}
+		case unified.exactBaseType != "":
+			return varTypeState{listElemType: unified.exactBaseType}
+		default:
+			return varTypeState{listElemType: "any"}
+		}
+	}
+
+	return v.unifyScalarTypeStates(states)
+}
+
+func (v *typeValidator) resolveFallbackLiteralVariant(e Expr) (resolvedUnionVariant, bool) {
+	switch ex := e.(type) {
+	case *IdentExpr:
+		if cExpr, isConst := v.constExprs[ex.Name]; isConst {
+			return v.resolveFallbackLiteralVariant(cExpr)
+		}
+		return resolvedUnionVariant{}, false
+	case *FieldExpr:
+		if id, ok := ex.Target.(*IdentExpr); ok {
+			if mod, isMod := v.modules[id.Name]; isMod {
+				if cExpr, isConst := mod.consts[ex.Field]; isConst {
+					return v.resolveFallbackLiteralVariant(cExpr)
+				}
+			}
+		}
+		return resolvedUnionVariant{}, false
+	}
+	variants, ok := v.exprToPatternVariants(e)
+	if !ok || len(variants) != 1 || variants[0].kind == variantBaseType || variants[0].kind == variantRecord {
+		return resolvedUnionVariant{}, false
+	}
+	return variants[0], true
+}
+
+func (v *typeValidator) unionVariantsForTypeState(st varTypeState) []resolvedUnionVariant {
+	if st.inlineUnionLabel != "" && len(st.inlineUnionVariants) > 0 {
+		return st.inlineUnionVariants
+	}
+	if st.unionName != "" {
+		return v.resolvedUnions[st.unionName]
+	}
+	return nil
+}
+
+func (v *typeValidator) unionContainsOnlyBaseType(variants []resolvedUnionVariant, base string) bool {
+	if len(variants) == 0 {
+		return false
+	}
+	for _, vr := range variants {
+		switch base {
+		case "number":
+			if vr.kind != variantNumberLit && !(vr.kind == variantBaseType && vr.baseType == "number") {
+				return false
+			}
+		case "text":
+			if vr.kind != variantStringLit && !(vr.kind == variantBaseType && vr.baseType == "text") {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (v *typeValidator) checkCastFallback(ex *CastExpr) error {
+	if err := v.checkExpr(ex.Fallback); err != nil {
+		return err
+	}
+	if err := v.checkNotCondition(ex.Fallback); err != nil {
+		return err
+	}
+	if v.inErrorTestExpr {
+		return nil
+	}
+
+	if info, ok := v.known[ex.TypeName]; ok && info.isRecord {
+		return newError(
+			"TypeError",
+			ex.TypeLine,
+			ex.TypeCol,
+			v.source,
+			fmt.Sprintf("'or' fallback cannot be used with record type %q", ex.TypeName),
+			"Record contracts ('as <def>') must remain strict; use '<def> with ...' for default instances.",
+		)
+	}
+	uVariants, isUnion := v.resolvedUnions[ex.TypeName]
+	if isUnion {
+		hasScalar := false
+		for _, vr := range uVariants {
+			if vr.kind == variantStringLit || vr.kind == variantNumberLit || vr.kind == variantBaseType {
+				hasScalar = true
+				break
+			}
+		}
+		if !hasScalar {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				fmt.Sprintf("'or' fallback cannot be used with record-only union %q", ex.TypeName),
+				"Unions containing only 'def' records must remain strict; 'or' fallbacks support number, text, or scalar unions.",
+			)
+		}
+	}
+
+	targetSt := v.inferExprTypeState(ex.Target)
+	if targetSt.exactRecord != "" || (targetSt.listElemType != "" && v.known[targetSt.listElemType].isRecord) {
+		bad := targetSt.exactRecord
+		if bad == "" {
+			bad = "list of " + targetSt.listElemType
+		}
+		return newError(
+			"TypeError",
+			ex.OrLine,
+			ex.OrCol,
+			v.source,
+			fmt.Sprintf("Cannot convert %s with 'as %s or ...' fallback", bad, ex.TypeName),
+			"Records cannot be cast with 'or' fallbacks; access an atomic field (e.g. 'rec.field as ...') instead.",
+		)
+	}
+
+	fbSt := v.inferExprTypeState(ex.Fallback)
+	fbLine, fbCol := ex.Fallback.Pos()
+	if fbSt.listElemType != "" {
+		return newError(
+			"TypeError",
+			fbLine,
+			fbCol,
+			v.source,
+			fmt.Sprintf("Fallback for 'as %s' must be %s, got list of %s", ex.TypeName, ex.TypeName, fbSt.listElemType),
+			"Provide a single element value after 'or' (even when casting a list like 'lines as number or 0').",
+		)
+	}
+
+	if ex.TypeName == "number" || ex.TypeName == "text" {
+		if fbSt.exactRecord != "" {
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback for 'as %s' must be %s, got %s", ex.TypeName, ex.TypeName, fbSt.exactRecord),
+				fmt.Sprintf("Provide a %s value after 'or'.", ex.TypeName),
+			)
+		}
+		if fbSt.exactBaseType != "" && fbSt.exactBaseType != ex.TypeName {
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback for 'as %s' must be %s, got %s", ex.TypeName, ex.TypeName, fbSt.exactBaseType),
+				fmt.Sprintf("Provide a %s value after 'or'.", ex.TypeName),
+			)
+		}
+		if fbUnion := v.unionVariantsForTypeState(fbSt); len(fbUnion) > 0 && !v.unionContainsOnlyBaseType(fbUnion, ex.TypeName) {
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback union for 'as %s' is not guaranteed to be %s", ex.TypeName, ex.TypeName),
+				fmt.Sprintf("Provide a %s value or a pure-%s union after 'or'.", ex.TypeName, ex.TypeName),
+			)
+		}
+		return nil
+	}
+
+	// Union target: strict AOT verification (Decision 5.4).
+	if litVar, isLit := v.resolveFallbackLiteralVariant(ex.Fallback); isLit {
+		if !v.variantCoveredByUnion(litVar, uVariants) {
+			var allowedDisplay []string
+			var strCandidates []string
+			for _, uv := range uVariants {
+				allowedDisplay = append(allowedDisplay, uv.display())
+				if uv.kind == variantStringLit {
+					strCandidates = append(strCandidates, uv.strVal)
+				}
+			}
+			hint := fmt.Sprintf("Valid values for %s: %s.", ex.TypeName, strings.Join(allowedDisplay, " | "))
+			if litVar.kind == variantStringLit {
+				if suggestion := closestTypeName(litVar.strVal, strCandidates); suggestion != "" {
+					hint = fmt.Sprintf("Did you mean %q? %s", suggestion, hint)
+				}
+			}
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback %s is not a valid value of union %q (%s)", litVar.display(), ex.TypeName, strings.Join(allowedDisplay, " | ")),
+				hint,
+			)
+		}
+		return nil
+	}
+
+	if fbUnion := v.unionVariantsForTypeState(fbSt); len(fbUnion) > 0 {
+		for _, vr := range fbUnion {
+			if !v.variantCoveredByUnion(vr, uVariants) {
+				var allowedDisplay []string
+				for _, uv := range uVariants {
+					allowedDisplay = append(allowedDisplay, uv.display())
+				}
+				return newError(
+					"TypeError",
+					fbLine,
+					fbCol,
+					v.source,
+					fmt.Sprintf("Fallback variant %s is not covered by union %q (%s)", vr.display(), ex.TypeName, strings.Join(allowedDisplay, " | ")),
+					fmt.Sprintf("Valid values for %s: %s.", ex.TypeName, strings.Join(allowedDisplay, " | ")),
+				)
+			}
+		}
+		return nil
+	}
+
+	if fbSt.exactRecord != "" {
+		recVar := resolvedUnionVariant{kind: variantRecord, recordName: fbSt.exactRecord}
+		if !v.variantCoveredByUnion(recVar, uVariants) {
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback record %q is not a member of union %q", fbSt.exactRecord, ex.TypeName),
+				fmt.Sprintf("Use a valid member of union %s after 'or'.", ex.TypeName),
+			)
+		}
+		if id, isIdent := ex.Fallback.(*IdentExpr); isIdent && v.defs[id.Name] != nil {
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Cannot use 'def' blueprint %q as fallback without 'with'", id.Name),
+				fmt.Sprintf("Instantiate a concrete record, e.g. '%s with ...'.", id.Name),
+			)
+		}
+		return nil
+	}
+
+	if fbSt.exactBaseType != "" {
+		baseVar := resolvedUnionVariant{kind: variantBaseType, baseType: fbSt.exactBaseType}
+		if !v.variantCoveredByUnion(baseVar, uVariants) {
+			var allowedDisplay []string
+			for _, uv := range uVariants {
+				allowedDisplay = append(allowedDisplay, uv.display())
+			}
+			return newError(
+				"TypeError",
+				fbLine,
+				fbCol,
+				v.source,
+				fmt.Sprintf("Fallback of type %s is not statically guaranteed to belong to union %q (%s)", fbSt.exactBaseType, ex.TypeName, strings.Join(allowedDisplay, " | ")),
+				fmt.Sprintf("Use an allowed literal, a 'def' constant, or a value already typed as '%s'.", ex.TypeName),
+			)
+		}
+		return nil
+	}
+
+	return nil
 }
 func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx string, requireRecord bool) error {
 	switch typeName {

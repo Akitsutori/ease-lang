@@ -133,3 +133,31 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   8. `import "network"` (string without `as alias`) or non-relative / cyclic `.ease` import
   9. `import network` inside `to`
   10. `import` missing module name (`import\n`), `mod.fn` dot call (`TypeError` hinting `mod:fn`), `mod = 1`, `mod with ...`
+
+## 10. Pattern Matching & Structured Extraction (`match ... end`)
+- **Happy Path**: `match cmd\n "PING" -> "PONG"\nend`, `res = match s\n "PORT={p as number}" -> p\n else -> 0\nend`, `entries = match lines\n "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with level = lvl, msg = msg\nend`, fixed rune widths `"{y: 4}-{m: 2}-{d: 2}"`, raw literal `'{"ok": true}'`, backreferences `"<{tag}>{body}</{tag}>"` / `"{n as number}:{n}"`, loop exit `match cmd\n "quit" -> end\nend`
+- **Negative Cases**:
+  1. Adjacent variable-length placeholders (`"{a}{b}"`, `"{...}{b}"`, `"{a}{...}"`, `"{...}{...}"`)
+  2. Invalid fixed width (`"{a: 0}{b}"`, `"{a: 1.5}{b}"`) or reserved `{it}` capture
+  3. Empty `match` block without pattern arms or missing `end`
+  4. `match` expression on `text` without `else`
+  5. Top-level value return in `match` (`"A" -> 1`) or unassigned top-level list `match`
+  6. List `match` in statement form with imperative action (`-> say v`)
+  7. Non-text / `list as number` target in `match`
+  8. Direct `def` record or `bool`/`csv`/`bytes`/`string` target in `{x as Type}`
+  9. Conflicting repeated capture types (`"{n as number}-{n as text}"`, `"{n}-{n as number}"`)
+  10. Mixed incompatible list branch return types (`number` vs `text`, `RecA` vs `RecB`) or mutating immutable capture variable (`-> v = "new"`)
+
+## 11. Safe Cast Fallbacks (`<expr> as <type> or <fallback>`)
+- **Happy Path**: `raw as number or 0`, `ask "Port?" as number or -1`, `"404" as HttpCode or 200`, `raw as Level or "INFO"`, `(list "10", "bad", "20") as number or 0`, `(lines as number or 0) where it > 0`, `raw as number or 8080 + 1`
+- **10 Negative Cases**:
+  1. Wrong fallback literal type: `raw as number or "abc"` (`TypeError`)
+  2. List passed as fallback: `lines as number or (list 0)` (`TypeError`)
+  3. Union fallback typo / invalid literal: `raw as Level or "TYPO"` (`TypeError` with hint)
+  4. Plain unannotated `text` var for closed union: `fb = "INFO"; raw as Level or fb` (`TypeError`)
+  5. Condition expression as fallback: `raw as number or (1 > 0)` (`TypeError`)
+  6. `def` record contract with `or`: `raw_map as api_user or default_user` (`TypeError`)
+  7. Record-only union with `or`: `raw_map as RecUnion or rec` (`TypeError`)
+  8. `load` with `or`: `load "./data.csv" as csv or 0`, `load "./a.txt" as text or ""` (`TypeError`)
+  9. Forbidden target types: `raw as bool or 0`, `raw as string or ""`, `raw as unknown or 0` (`TypeError`)
+  10. Runtime non-suppression: bare `"abc" as number`, bare `(list "a", "b") as number`, `(1 / 0) as number or 0` -> `is error` in `.ease`

@@ -189,6 +189,54 @@ type CheckErrorBlockStmt struct {
 
 func (*CheckErrorBlockStmt) stmtNode() {}
 
+// MatchSegKind identifies the kind of segment in a parsed `match` pattern.
+type MatchSegKind int
+
+const (
+	MatchSegLiteral MatchSegKind = iota
+	MatchSegWildcard
+	MatchSegCapture
+)
+
+// MatchSegment represents one parsed unit inside a `match` string pattern.
+type MatchSegment struct {
+	Kind         MatchSegKind
+	Literal      string // for MatchSegLiteral (already NFC-normalized by lexer)
+	VarName      string // for MatchSegCapture
+	FixedWidth   int    // >0 for `{name: N}` rune count, 0 for variable-width `{name}`
+	CastType     string // empty or explicit/inherited type target
+	ExplicitCast bool   // true if `as <type>` was written in this segment
+	TypeLine     int    // 1-based line of type target token (when ExplicitCast is true)
+	TypeCol      int    // 1-based column of type target token (when ExplicitCast is true)
+	Line         int    // 1-based placeholder line
+	Col          int    // 1-based placeholder column
+}
+
+// MatchPattern is a compiled pattern template on a `match` arm.
+type MatchPattern struct {
+	posInfo
+	Raw      string
+	Segments []MatchSegment
+}
+
+// MatchArmStmt represents one `<pattern> -> <action>` branch in a `match` statement.
+type MatchArmStmt struct {
+	Line    int
+	Col     int
+	Pattern MatchPattern
+	Action  Stmt
+}
+
+// MatchStmt represents `match <target> ... end` in statement position.
+type MatchStmt struct {
+	posInfo
+	Target   Expr
+	Arms     []MatchArmStmt
+	ElseBody []Stmt
+}
+
+func (*MatchStmt) stmtNode() {}
+
 // Expressions
 
 type NumberExpr struct {
@@ -272,13 +320,16 @@ type TypeCheckExpr struct {
 
 func (*TypeCheckExpr) exprNode() {}
 
-// CastExpr represents explicit type conversion `<expr> as <type>` (e.g. `ask "Age?" as number`).
+// CastExpr represents explicit type conversion `<expr> as <type> [or <fallback>]` (e.g. `ask "Age?" as number or 0`).
 type CastExpr struct {
 	posInfo
 	Target   Expr
 	TypeName string
 	TypeLine int
 	TypeCol  int
+	Fallback Expr
+	OrLine   int
+	OrCol    int
 }
 
 func (*CastExpr) exprNode() {}
@@ -344,3 +395,22 @@ type IndexExpr struct {
 }
 
 func (*IndexExpr) exprNode() {}
+
+// MatchArmExpr represents one `<pattern> -> <expr>` branch in a `match` expression.
+type MatchArmExpr struct {
+	Line    int
+	Col     int
+	Pattern MatchPattern
+	Value   Expr
+}
+
+// MatchExpr represents `match <target> ... end` in expression position.
+type MatchExpr struct {
+	posInfo
+	Target   Expr
+	Arms     []MatchArmExpr
+	HasElse  bool
+	ElseBody []Stmt
+}
+
+func (*MatchExpr) exprNode() {}

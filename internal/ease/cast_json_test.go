@@ -506,3 +506,208 @@ moved = cloud with x = it.x + it.vx
 		t.Fatalf("value semantics corrupted: b1=%v b2=%v", b1.Elements, b2.Elements)
 	}
 }
+
+func TestCastFallbackRuntimeAndPrecedence(t *testing.T) {
+	t.Run("scalar, union, numeric union, batch list, and precedence checks", func(t *testing.T) {
+		src := `
+def Level = "INFO" | "WARN" | "ERROR"
+def HttpCode = 200 | 404 | 500
+def SubLevel = "INFO" | "WARN"
+
+def Config
+  lvl = "INFO" | "WARN" | "ERROR"
+end
+
+to fallback_port
+  9090
+end
+
+to check_guard raw flag
+  check raw as number or 0 > 5 -> "big"
+  check raw as number or 0 > 2 or flag is "force" -> "medium_or_forced"
+  "small"
+end
+
+to test_logical_or a b
+  check a is 1 or b is 2 -> "ok"
+  "no"
+end
+
+test "cast fallback comprehensive behavior"
+  # Scalar number casts (valid, trimmed, invalid, strict number rules)
+  ("42" as number or 0) is 42
+  (" -3.5 " as number or 0) is -3.5
+  ("abc" as number or 0) is 0
+  ("" as number or -1) is -1
+  ("1_000" as number or -1) is -1
+  ("NaN" as number or -1) is -1
+  ("Inf" as number or -1) is -1
+  (42 as number or -1) is 42
+
+  # Variable, function call, and negated variable fallback
+  def_port = 8080
+  ("bad" as number or def_port) is 8080
+  ("bad" as number or fallback_port) is 9090
+  ("bad" as number or -def_port) is -8080
+
+  # Scalar text fallback on dynamic JSON values
+  ((decode_json 'null') as text or "missing") is "missing"
+  ((decode_json '"ok"') as text or "missing") is "ok"
+
+  # Scalar union and numeric union casts
+  ("WARN" as Level or "INFO") is "WARN"
+  ("DEBUG" as Level or "INFO") is "INFO"
+  ("404" as HttpCode or 200) is 404
+  (" 500 " as HttpCode or 200) is 500
+  ("999" as HttpCode or 200) is 200
+  ("abc" as HttpCode or 200) is 200
+
+  # Sub-union constant/variable and record inline union fallback
+  sub = "WARN" as SubLevel
+  ("BAD" as Level or sub) is "WARN"
+  cfg = Config with lvl = "ERROR"
+  ("BAD" as Level or cfg.lvl) is "ERROR"
+
+  # Precedence: 'or' binds tighter than arithmetic & comparisons
+  ("abc" as number or 8080 + 1) is 8081
+  ("42" as number or 8080 + 1) is 43
+  (("abc" as number or 0) + 1) is 1
+  ("abc" as number or 0) is 0
+  "abc" as number or 0 is 0
+  check_guard "10" "no" is "big"
+  check_guard "abc" "force" is "medium_or_forced"
+  check_guard "1" "no" is "small"
+  test_logical_or 9 2 is "ok"
+  test_logical_or 9 9 is "no"
+
+  # Chained 'as ... or ... as ... or ...'
+  ("bad" as number or "77" as number or 0) is 77
+  ("12" as number or "bad" as number or 0) is 12
+
+  # Batch lists + downstream where / sum + empty list
+  nums = (list "10", "bad", " -5.5 ", "1_000") as number or 0
+  nums is list 10, 0, -5.5, 0
+  sum nums is 4.5
+  positives = nums where it > 0
+  count positives is 1
+  count ((list " -2 ", "5", "nope", "12") as number or 0 where it > 0) is 2
+
+  lvls = (list "INFO", "TRACE", "ERROR") as Level or "WARN"
+  lvls is list "INFO", "WARN", "ERROR"
+
+  codes = (list "200", "bad", "500") as HttpCode or 404
+  codes is list 200, 404, 500
+
+  empty_out = (list as text) as number or 99
+  count empty_out is 0
+
+  json_nums = (decode_json '[1, "bad", null, "4"]') as number or -1
+  json_nums is list 1, -1, -1, 4
+
+  # Errors that must NOT be masked by 'or'
+  "abc" as number is error
+  (list "a", "b") as number is error
+  (1 / 0) as number or 0 is error
+end
+`
+		report, err := RunChecks(src)
+		if err != nil {
+			t.Fatalf("RunChecks failed: %v", err)
+		}
+		if report.Failed != 0 || report.Passed != 44 {
+			t.Fatalf("unexpected check report: passed=%d failed=%d total=%d\n%+v", report.Passed, report.Failed, report.Total, report.Results)
+		}
+	})
+
+	t.Run("lazy and memoized batch fallback evaluation", func(t *testing.T) {
+		src := `
+to make_default tag
+  say "CALLED:{tag}"
+  -1
+end
+
+a = "42" as number or make_default "scalar_ok"
+b = "bad" as number or make_default "scalar_bad"
+c = (list "1", "2", "3") as number or make_default "list_ok"
+d = (list "1", "x", "y", "z") as number or make_default "list_bad"
+
+say "{a}|{b}|{count c}|{d.0},{d.1},{d.2},{d.3}"
+`
+		var out bytes.Buffer
+		if _, err := EvalProgram(src, &out); err != nil {
+			t.Fatalf("EvalProgram failed: %v", err)
+		}
+		want := "CALLED:scalar_bad\nCALLED:list_bad\n42|-1|3|1,-1,-1,-1\n"
+		if out.String() != want {
+			t.Fatalf("unexpected lazy output:\ngot:\n%q\nwant:\n%q", out.String(), want)
+		}
+	})
+
+	t.Run("ask with as number or fallback reads stdin safely", func(t *testing.T) {
+		src := `
+p1 = ask "Port 1?" as number or 8080
+p2 = ask "Port 2?" as number or 8080
+say "{p1}|{p2}"
+`
+		prog, err := ParseProgram(src)
+		if err != nil {
+			t.Fatalf("ParseProgram failed: %v", err)
+		}
+		var out bytes.Buffer
+		ev := NewEvaluatorWithInput(src, prog, strings.NewReader("invalid\n3000\n"), &out)
+		defer ev.Close()
+		if _, err := ev.ExecTopLevel(prog.Body); err != nil {
+			t.Fatalf("ExecTopLevel failed: %v", err)
+		}
+		want := "Port 1? Port 2? 8080|3000\n"
+		if out.String() != want {
+			t.Fatalf("unexpected output: got %q, want %q", out.String(), want)
+		}
+	})
+
+	t.Run("runtime validation on dynamic untyped fallback params", func(t *testing.T) {
+		src := `
+def Level = "INFO" | "WARN"
+
+to dyn_num raw fb
+  raw as number or fb
+end
+
+to dyn_lvl raw fb
+  raw as Level or fb
+end
+
+good1 = dyn_num "nope" 99
+good2 = dyn_lvl "nope" "WARN"
+say "{good1}|{good2}"
+`
+		var out bytes.Buffer
+		if _, err := EvalProgram(src, &out); err != nil {
+			t.Fatalf("EvalProgram valid dynamic fallbacks failed: %v", err)
+		}
+		if out.String() != "99|WARN\n" {
+			t.Fatalf("unexpected output: %q", out.String())
+		}
+
+		badDynNum := `
+to dyn_num raw fb
+  raw as number or fb
+end
+say dyn_num "nope" "still-bad"
+`
+		if _, err := EvalProgram(badDynNum, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Fallback for 'as number' must be number") {
+			t.Fatalf("expected runtime TypeError for bad dynamic number fallback, got: %v", err)
+		}
+
+		badDynLvl := `
+def Level = "INFO" | "WARN"
+to dyn_lvl raw fb
+  raw as Level or fb
+end
+say dyn_lvl "nope" "TYPO"
+`
+		if _, err := EvalProgram(badDynLvl, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "is not valid for union \"Level\"") {
+			t.Fatalf("expected runtime TypeError for bad dynamic union fallback, got: %v", err)
+		}
+	})
+}

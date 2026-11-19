@@ -303,10 +303,280 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 	}
 }
 
+func parseCastEaseNumber(s string) (float64, bool) {
+	return parseStrictEaseNumber(strings.TrimSpace(s))
+}
+
+func castScalarToUnion(targetVal Value, union *UnionValue, env *Env, typeName string) (Value, error) {
+	coerced, cErr := coerceToUnionOptions(targetVal, union.Values, env, typeName)
+	if cErr == nil {
+		return coerced, nil
+	}
+	if raw, isStr := targetVal.(string); isStr {
+		if n, ok := parseCastEaseNumber(raw); ok {
+			for _, opt := range union.Values {
+				if numOpt, isNum := opt.(float64); isNum && ValuesEqual(n, numOpt) {
+					return n, nil
+				}
+				if bt, isBT := opt.(BaseTypeValue); isBT && string(bt) == "number" {
+					return n, nil
+				}
+			}
+		}
+	}
+	return nil, cErr
+}
+
+func unionHasScalarOption(union *UnionValue) bool {
+	if union == nil {
+		return false
+	}
+	for _, opt := range union.Values {
+		switch o := opt.(type) {
+		case string, float64:
+			return true
+		case BaseTypeValue:
+			if string(o) == "text" || string(o) == "number" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (ev *Evaluator) validateCastFallbackValue(fbVal Value, targetType string, env *Env, line, col int) error {
+	switch targetType {
+	case "number":
+		if _, ok := fbVal.(float64); !ok {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Fallback for 'as number' must be number, got %s", TypeName(fbVal)),
+				"Provide a numeric fallback value after 'or', e.g. 'raw as number or 0'.",
+			)
+		}
+		return nil
+	case "text":
+		if _, ok := fbVal.(string); !ok {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Fallback for 'as text' must be text, got %s", TypeName(fbVal)),
+				"Provide a text fallback value after 'or', e.g. 'val as text or \"\"'.",
+			)
+		}
+		return nil
+	default:
+		union, ok := lookupUnion(env, targetType)
+		if !ok || union == nil {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'or' fallback is not supported for target type %q", targetType),
+				"Use 'or' fallbacks with 'number', 'text', or a scalar union type.",
+			)
+		}
+		if !valueInUnion(fbVal, union) {
+			allowed := formatUnionOptions(union.Values)
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Fallback value %s is not valid for union %q", FormatValue(fbVal), targetType),
+				fmt.Sprintf("Allowed values for %s: %s.", targetType, strings.Join(allowed, ", ")),
+			)
+		}
+		return nil
+	}
+}
+
+func (ev *Evaluator) castScalarForFallback(item Value, targetType string, union *UnionValue, env *Env, line, col int) (Value, bool, error) {
+	switch targetType {
+	case "number":
+		switch v := item.(type) {
+		case float64:
+			return v, true, nil
+		case string:
+			n, ok := parseCastEaseNumber(v)
+			return n, ok, nil
+		case *RecordValue:
+			return nil, false, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to number", TypeName(item)),
+				"Only number or numeric text can be converted with 'as number'.",
+			)
+		default:
+			return nil, false, nil
+		}
+	case "text":
+		switch v := item.(type) {
+		case string:
+			return v, true, nil
+		case float64:
+			return FormatValue(v), true, nil
+		case *RecordValue:
+			return nil, false, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot convert %s to text", TypeName(item)),
+				"Only atomic values (text, number) can be cast with 'as text'. Use 'encode_json ...' to serialize structured data to JSON.",
+			)
+		default:
+			return nil, false, nil
+		}
+	default:
+		coerced, cErr := castScalarToUnion(item, union, env, targetType)
+		if cErr == nil {
+			return coerced, true, nil
+		}
+		return nil, false, nil
+	}
+}
+
+func (ev *Evaluator) castWithFallback(e *CastExpr, targetVal Value, env *Env, line, col int) (Value, error) {
+	if e.TypeName == "csv" || e.TypeName == "bytes" {
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("'or' fallback cannot be used with 'as %s'", e.TypeName),
+			"Target types 'csv' and 'bytes' only work with 'load <path> as ...' without 'or'.",
+		)
+	}
+	var union *UnionValue
+	if e.TypeName != "number" && e.TypeName != "text" {
+		protoVal, ok := lookupTypeInEnv(env, e.TypeName)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Unknown type %q after 'as'", e.TypeName),
+				"Only built-in types (text, number) or a previously defined/imported 'def' blueprint are allowed after 'as'.",
+			)
+		}
+		if rec, isRec := protoVal.(*RecordValue); isRec && rec.IsPrototype {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'or' fallback cannot be used with record type %q", e.TypeName),
+				"Record contracts ('as <def>') must remain strict; use '<def> with ...' for default instances.",
+			)
+		}
+		u, isUnion := protoVal.(*UnionValue)
+		if !isUnion {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("%q is not a 'def' blueprint or built-in type", e.TypeName),
+				"Use 'number', 'text', or a scalar union type with 'or' fallbacks.",
+			)
+		}
+		if !unionHasScalarOption(u) {
+			return nil, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'or' fallback cannot be used with record-only union %q", e.TypeName),
+				"Unions containing only 'def' records must remain strict; 'or' fallbacks support number, text, or scalar unions.",
+			)
+		}
+		union = u
+	}
+
+	var fbCached Value
+	var fbLoaded bool
+	getFallback := func() (Value, error) {
+		if fbLoaded {
+			return fbCached, nil
+		}
+		fbVal, err := ev.EvalExpr(e.Fallback, env)
+		if err != nil {
+			return nil, err
+		}
+		fbLine, fbCol := e.Fallback.Pos()
+		if err := ev.checkNotConditionValue(fbVal, fbLine, fbCol); err != nil {
+			return nil, err
+		}
+		if err := ev.validateCastFallbackValue(fbVal, e.TypeName, env, fbLine, fbCol); err != nil {
+			return nil, err
+		}
+		fbCached = fbVal
+		fbLoaded = true
+		return fbCached, nil
+	}
+
+	if lv, isList := targetVal.(*ListValue); isList {
+		if lv.ElemType != "" {
+			if recVal, ok := lookupTypeInEnv(env, lv.ElemType); ok {
+				if rec, isRec := recVal.(*RecordValue); isRec && rec.IsPrototype {
+					return nil, newError(
+						"TypeError",
+						line,
+						col,
+						ev.source,
+						fmt.Sprintf("Cannot convert list of %s with 'as %s or ...' fallback", lv.ElemType, e.TypeName),
+						"Lists of records cannot be cast to scalar types.",
+					)
+				}
+			}
+		}
+		out := make([]Value, 0, len(lv.Elements))
+		for _, item := range lv.Elements {
+			converted, ok, err := ev.castScalarForFallback(item, e.TypeName, union, env, line, col)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out = append(out, converted)
+				continue
+			}
+			fb, fbErr := getFallback()
+			if fbErr != nil {
+				return nil, fbErr
+			}
+			out = append(out, fb)
+		}
+		return &ListValue{ElemType: e.TypeName, Elements: out}, nil
+	}
+
+	converted, ok, err := ev.castScalarForFallback(targetVal, e.TypeName, union, env, line, col)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return converted, nil
+	}
+	return getFallback()
+}
+
 func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, error) {
 	line, col := e.TypeLine, e.TypeCol
 	if line == 0 {
 		line, col = e.Line, e.Col
+	}
+
+	if e.Fallback != nil {
+		return ev.castWithFallback(e, targetVal, env, line, col)
 	}
 
 	if lv, isList := targetVal.(*ListValue); isList {
@@ -345,8 +615,8 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		case float64:
 			return v, nil
 		case string:
-			n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			n, ok := parseCastEaseNumber(v)
+			if !ok {
 				return nil, newError(
 					"RuntimeError",
 					line,
@@ -382,7 +652,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		}
 
 		if union, isUnion := protoVal.(*UnionValue); isUnion {
-			coerced, cErr := coerceToUnionOptions(targetVal, union.Values, env, e.TypeName)
+			coerced, cErr := castScalarToUnion(targetVal, union, env, e.TypeName)
 			if cErr != nil {
 				allowed := formatUnionOptions(union.Values)
 				msg := fmt.Sprintf("Value %s is not valid for union %q", FormatValue(targetVal), e.TypeName)
