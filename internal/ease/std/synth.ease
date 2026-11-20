@@ -1,0 +1,14 @@
+# Standard library module: synth
+# Minimal waveform synthesizer for melodies, games, and concurrent voices.
+
+def wave_kind = "triangle" | "square" | "sine"
+
+def melody
+    notes = list as text
+    bpm   = 120
+    wave  = wave_kind
+end
+
+to play m
+    synth_play m
+end

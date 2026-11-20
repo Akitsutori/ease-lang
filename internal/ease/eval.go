@@ -369,6 +369,7 @@ type Evaluator struct {
 	initErr        error
 	headlessScreen bool
 	headlessNet    bool
+	headlessAudio  bool
 	httpClient     *http.Client
 }
 
@@ -385,6 +386,14 @@ func (ev *Evaluator) SetHeadlessNet(headless bool) {
 	ev.headlessNet = headless
 	for _, modEv := range ev.modules {
 		modEv.SetHeadlessNet(headless)
+	}
+}
+
+// SetHeadlessAudio toggles silent headless audio simulation for `--check` / CI tests.
+func (ev *Evaluator) SetHeadlessAudio(headless bool) {
+	ev.headlessAudio = headless
+	for _, modEv := range ev.modules {
+		modEv.SetHeadlessAudio(headless)
 	}
 }
 
@@ -484,6 +493,7 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		modEv.httpClient = ev.httpClient
 		modEv.SetHeadlessScreen(ev.headlessScreen)
 		modEv.SetHeadlessNet(ev.headlessNet)
+		modEv.SetHeadlessAudio(ev.headlessAudio)
 		modEv.SetTrace(ev.trace)
 		if modEv.initErr != nil {
 			return modEv.initErr
@@ -714,6 +724,7 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	defer ev.Close()
 	ev.SetHeadlessScreen(headless)
 	ev.SetHeadlessNet(headless)
+	ev.SetHeadlessAudio(headless)
 	ev.SetTrace(trace)
 	ev.logTrace("parsed %d def(s), %d function(s), %d check block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))

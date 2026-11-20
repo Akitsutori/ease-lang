@@ -1,0 +1,50 @@
+import synth
+
+test "synth.melody defaults and empty melody"
+    m = synth.melody
+    m.bpm is 120
+    m.wave is "triangle"
+    count m.notes is 0
+
+    synth:play m
+    (synth:play m) is not error
+end
+
+test "melody playback with rests, sharps, flats, and all waveforms"
+    mel = synth.melody with
+        notes = split "E4/8 G4/8 C5/4 REST/8 B4/8 C5/2" " "
+        bpm   = 160
+        wave  = "square"
+    end
+    synth:play mel
+    (synth:play mel) is not error
+
+    chrom = synth.melody with
+        notes = split "C#4/8 Bb3/8 F#5/4 Db4/4 REST/4 A4/4" " "
+        bpm   = 140
+        wave  = "sine"
+    end
+    (synth:play chrom) is not error
+
+    tri = chrom with wave = "triangle"
+    (synth:play tri) is not error
+end
+
+test "invalid wave, bpm, and note tokens fail loudly"
+    (synth.melody with wave = "sawtooth") is error
+    (synth:play (synth.melody with notes = list "H99/4")) is error
+    (synth:play (synth.melody with notes = list "C4/0")) is error
+    (synth:play (synth.melody with notes = list "C4")) is error
+    (synth:play (synth.melody with notes = list "")) is error
+    (synth:play (synth.melody with bpm = 0, notes = list "E4/4")) is error
+    (synth:play (synth.melody with bpm = -60, notes = list "E4/4")) is error
+end
+
+test "concurrent voices via spawn synth:play"
+    lead = synth.melody with notes = split "C5/4 E5/4 G5/2" " ", bpm = 160, wave = "square"
+    bass = synth.melody with notes = split "C3/2 G2/2" " ", bpm = 160, wave = "triangle"
+
+    spawn synth:play lead
+    spawn synth:play bass
+    synth:play lead
+end

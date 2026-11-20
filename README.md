@@ -246,7 +246,7 @@ Use `ease serve` for long-running servers with crash-isolated workers, `--watch`
 ## Where to Go Next
 
 - [`llms.txt`](llms.txt) — Complete single-page Ease language specification (ideal for humans & AI coding agents)
-- [`examples/`](examples/) — Runnable programs, including [`07_http_server.ease`](examples/07_http_server.ease), [`08_haunted_hotel.ease`](examples/08_haunted_hotel.ease), and [`06_window.ease`](examples/06_window.ease)
+- [`examples/`](examples/) — Runnable programs, including [`07_http_server.ease`](examples/07_http_server.ease), [`08_haunted_hotel.ease`](examples/08_haunted_hotel.ease), [`10_game_server.ease`](examples/10_game_server.ease), and [`11_chords_and_melodies.ease`](examples/11_chords_and_melodies.ease)
 - [`README_VSCODE.md`](README_VSCODE.md) — VS Code extension, syntax highlighting, and built-in `ease lsp` language server
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — Repository layout, build prerequisites, full CLI & test commands, and language design invariants
 - [`LICENSE`](LICENSE) — Project license

@@ -13,21 +13,22 @@ const maxParseDepth = 256
 
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
-	tokens         []Token
-	source         string
-	sourcePath     string
-	pos            int
-	depth          int
-	disallowTopIs  bool
-	stopChainedIs  bool
-	disallowAs     bool
-	disallowWhere  bool
-	inCallArg      bool
-	inTestBlock    bool
-	funcArities    map[string]int
-	moduleArities  map[string]map[string]int
-	fileImports    map[string]*Program
-	fileImportSrcs map[string]string
+	tokens             []Token
+	source             string
+	sourcePath         string
+	pos                int
+	depth              int
+	disallowTopIs      bool
+	stopChainedIs      bool
+	disallowAs         bool
+	disallowWhere      bool
+	inCallArg          bool
+	inTestBlock        bool
+	funcArities        map[string]int
+	moduleArities      map[string]map[string]int
+	stdModuleOrigNames map[string]string
+	fileImports        map[string]*Program
+	fileImportSrcs     map[string]string
 }
 
 func (p *Parser) enterDepth() error {
@@ -83,12 +84,13 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 		}
 	}
 	p := &Parser{
-		tokens:         tokens,
-		source:         source,
-		sourcePath:     sourcePath,
-		moduleArities:  make(map[string]map[string]int),
-		fileImports:    make(map[string]*Program),
-		fileImportSrcs: make(map[string]string),
+		tokens:             tokens,
+		source:             source,
+		sourcePath:         sourcePath,
+		moduleArities:      make(map[string]map[string]int),
+		stdModuleOrigNames: make(map[string]string),
+		fileImports:        make(map[string]*Program),
+		fileImportSrcs:     make(map[string]string),
 	}
 	arities, err := p.collectSignatures(seen, activeStack, extraArities)
 	if err != nil {
@@ -154,6 +156,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 						modFns[fn.Name] = len(fn.Params)
 					}
 					p.moduleArities[alias] = modFns
+					p.stdModuleOrigNames[alias] = modName
 					p.fileImports[alias] = modProg
 					p.fileImportSrcs[alias] = modSrc
 				} else if p.tokens[i+1].Type == TOK_STRING && i+3 < len(p.tokens) && p.tokens[i+2].Type == TOK_AS && p.tokens[i+3].Type == TOK_IDENT {
@@ -862,7 +865,8 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	if _, isSwarm := expr.(*SwarmLoopExpr); isSwarm {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
-	if call, isCall := expr.(*CallExpr); isCall && call.Module == "" && (call.Callee == "put" || call.Callee == "close") {
+	if call, isCall := expr.(*CallExpr); isCall && ((call.Module == "" && (call.Callee == "put" || call.Callee == "close" || call.Callee == "synth_play")) ||
+		(call.Module != "" && p.stdModuleOrigNames[call.Module] == "synth" && call.Callee == "play")) {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
 	return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: expr}, nil

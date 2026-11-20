@@ -88,6 +88,7 @@ func StartService(opts ServiceOptions) (*Service, error) {
 	}
 	ev.SetHeadlessScreen(false)
 	ev.SetHeadlessNet(false)
+	ev.SetHeadlessAudio(false)
 
 	svc := &Service{
 		entryPath:     absEntry,
@@ -638,6 +639,7 @@ func (s *Service) EvalDebugChunk(chunk string) (string, error) {
 		global:         s.ev.global,
 		headlessScreen: s.ev.headlessScreen,
 		headlessNet:    s.ev.headlessNet,
+		headlessAudio:  s.ev.headlessAudio,
 		httpClient:     s.ev.httpClient,
 	}
 

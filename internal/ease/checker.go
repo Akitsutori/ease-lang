@@ -67,6 +67,7 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 	defer ev.Close()
 	ev.SetHeadlessScreen(true)
 	ev.SetHeadlessNet(true)
+	ev.SetHeadlessAudio(true)
 	ev.SetTrace(trace)
 	ev.logTrace("parsed %d def(s), %d function(s), %d test block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))

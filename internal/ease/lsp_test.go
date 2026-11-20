@@ -288,3 +288,36 @@ func TestLSPDiagnoseRelativeModuleImportInSubdir(t *testing.T) {
 		t.Fatalf("expected non-empty completion items")
 	}
 }
+
+func TestLSPDiagnoseStdSynthModule(t *testing.T) {
+	validSrc := `import synth
+
+mel = synth.melody with
+    notes = split "E4/8 G4/8 C5/4 REST/8 B4/8 C5/2" " "
+    bpm   = 160
+    wave  = "square"
+end
+
+synth:play mel
+spawn synth:play mel
+`
+	if diags := DiagnoseSource(validSrc); len(diags) != 0 {
+		t.Fatalf("expected 0 diagnostics for valid synth usage, got: %+v", diags)
+	}
+
+	badWaveSrc := `import synth
+w = "sine" as synth.wave_kind or "sawtooth"
+`
+	if diags := DiagnoseSource(badWaveSrc); len(diags) == 0 || !strings.Contains(diags[0].Message, `"sawtooth" is not a valid value`) {
+		t.Fatalf("expected diagnostic for invalid synth.wave_kind fallback, got: %+v", diags)
+	}
+
+	voidAssignSrc := `import synth
+m = synth.melody with notes = list "C4/4"
+x = synth:play m
+`
+	diags := DiagnoseSource(voidAssignSrc)
+	if len(diags) == 0 || !strings.Contains(diags[0].Message, "does not return a value") {
+		t.Fatalf("expected void assignment diagnostic for synth:play, got: %+v", diags)
+	}
+}

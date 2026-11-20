@@ -619,6 +619,7 @@ func (ev *Evaluator) execSpawnStmt(s *SpawnStmt, env *Env) (Value, *reportSignal
 			return nil, nil, newError("RuntimeError", s.Line, s.Col, ev.source, fmt.Sprintf("Unknown module %q", s.Call.Module), "")
 		}
 		target = modEv
+		target.inSwarmWorker = false
 	}
 
 	if ev.rt == nil {

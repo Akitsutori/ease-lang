@@ -1,0 +1,42 @@
+import synth
+
+# Because synth:play blocks synchronously for the duration of a melody,
+# running multiple voices via `spawn synth:play ...` naturally gives both
+# polyphony/chords and non-blocking game sound effects.
+
+lead_voice = synth.melody with
+    notes = split "E4/8 G4/8 C5/4 REST/8 B4/8 C5/2" " "
+    bpm   = 160
+    wave  = "square"
+end
+
+bass_voice = synth.melody with
+    notes = split "C3/2 G2/2 C3/2 REST/8" " "
+    bpm   = 160
+    wave  = "triangle"
+end
+
+coin_sfx = synth.melody with
+    notes = split "B5/16 E6/8" " "
+    bpm   = 160
+    wave  = "sine"
+end
+
+to play_duet lead bass sfx
+    # Fire both voices concurrently for stereo-mixed polyphony.
+    spawn synth:play lead
+    spawn synth:play bass
+    # Trigger a non-blocking SFX while the game step continues immediately.
+    spawn synth:play sfx
+    say "Playing two-voice chiptune + non-blocking SFX..."
+end
+
+play_duet lead_voice bass_voice coin_sfx
+
+test "two-voice duet and SFX run cleanly"
+    (synth:play lead_voice) is not error
+    (synth:play bass_voice) is not error
+    (synth:play coin_sfx) is not error
+    (synth:play (synth.melody with notes = list "H99/4")) is error
+    (synth:play (synth.melody with bpm = 0, notes = list "C4/4")) is error
+end

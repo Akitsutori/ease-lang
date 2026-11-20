@@ -289,53 +289,88 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 	return nil
 }
 
-func isVoidBuiltinCallStmt(s Stmt) bool {
+func (v *typeValidator) isSynthPlayCall(e Expr) bool {
+	ce, ok := e.(*CallExpr)
+	if !ok {
+		return false
+	}
+	if ce.Module == "" {
+		return ce.Callee == "synth_play"
+	}
+	if mod, ok := v.modules[ce.Module]; ok && mod.origName == "synth" && ce.Callee == "play" {
+		return true
+	}
+	return false
+}
+
+func (v *typeValidator) checkNotVoidValue(e Expr) error {
+	if v.inErrorTestExpr || e == nil || !v.isSynthPlayCall(e) {
+		return nil
+	}
+	line, col := e.Pos()
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		"'synth:play' does not return a value",
+		"Call 'synth:play <melody>' as a statement (or with 'spawn synth:play <melody>').",
+	)
+}
+
+func (v *typeValidator) isVoidCallStmt(s Stmt) bool {
 	es, ok := s.(*ExprStmt)
 	if !ok {
 		return false
 	}
 	ce, ok := es.Expression.(*CallExpr)
-	if !ok || ce.Module != "" {
+	if !ok {
 		return false
 	}
-	switch ce.Callee {
-	case "close", "put":
+	if ce.Module == "" {
+		switch ce.Callee {
+		case "close", "put", "synth_play":
+			return true
+		default:
+			return false
+		}
+	}
+	if mod, ok := v.modules[ce.Module]; ok && mod.origName == "synth" && ce.Callee == "play" {
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
-func stmtEndsWithExpr(stmts []Stmt) bool {
+func (v *typeValidator) stmtEndsWithExpr(stmts []Stmt) bool {
 	if len(stmts) == 0 {
 		return false
 	}
 	last := stmts[len(stmts)-1]
 	switch st := last.(type) {
 	case *ExprStmt:
-		return !isVoidBuiltinCallStmt(st)
+		return !v.isVoidCallStmt(st)
 	case *LoopStmt:
 		// An infinite `loop ... end` (no iterable) cannot fall through normally.
 		return st.Iterable == nil
 	case *MatchStmt:
-		if len(st.ElseBody) > 0 && stmtEndsWithExpr(st.ElseBody) {
+		if len(st.ElseBody) > 0 && v.stmtEndsWithExpr(st.ElseBody) {
 			return true
 		}
 		for _, arm := range st.Arms {
-			if arm.Action != nil && stmtEndsWithExpr([]Stmt{arm.Action}) {
+			if arm.Action != nil && v.stmtEndsWithExpr([]Stmt{arm.Action}) {
 				return true
 			}
 		}
 		return false
 	case *CheckGuardStmt:
 		if len(st.ElseBody) > 0 {
-			return stmtEndsWithExpr(st.ElseBody)
+			return v.stmtEndsWithExpr(st.ElseBody)
 		}
 		// Exhaustive multi-branch `check ... end` where every rule returns an expression.
 		if len(st.Rules) >= 2 {
 			allExpr := true
 			for _, r := range st.Rules {
-				if r.Action == nil || !stmtEndsWithExpr([]Stmt{r.Action}) {
+				if r.Action == nil || !v.stmtEndsWithExpr([]Stmt{r.Action}) {
 					allExpr = false
 					break
 				}
@@ -348,37 +383,37 @@ func stmtEndsWithExpr(stmts []Stmt) bool {
 	}
 }
 
-func findGuardReturn(stmts []Stmt) (int, int, bool) {
+func (v *typeValidator) findGuardReturn(stmts []Stmt) (int, int, bool) {
 	for _, s := range stmts {
 		switch st := s.(type) {
 		case *CheckGuardStmt:
 			for _, r := range st.Rules {
-				if r.Action != nil && !isVoidBuiltinCallStmt(r.Action) {
+				if r.Action != nil && !v.isVoidCallStmt(r.Action) {
 					if _, isExpr := r.Action.(*ExprStmt); isExpr {
 						return r.Line, r.Col, true
 					}
 				}
 			}
-			if line, col, ok := findGuardReturn(st.ElseBody); ok {
+			if line, col, ok := v.findGuardReturn(st.ElseBody); ok {
 				return line, col, true
 			}
 		case *LoopStmt:
-			if line, col, ok := findGuardReturn(st.Body); ok {
+			if line, col, ok := v.findGuardReturn(st.Body); ok {
 				return line, col, true
 			}
 		case *TakeStmt:
-			if line, col, ok := findGuardReturn(st.Body); ok {
+			if line, col, ok := v.findGuardReturn(st.Body); ok {
 				return line, col, true
 			}
 		case *MatchStmt:
 			for _, arm := range st.Arms {
 				if arm.Action != nil {
-					if line, col, ok := findGuardReturn([]Stmt{arm.Action}); ok {
+					if line, col, ok := v.findGuardReturn([]Stmt{arm.Action}); ok {
 						return line, col, true
 					}
 				}
 			}
-			if line, col, ok := findGuardReturn(st.ElseBody); ok {
+			if line, col, ok := v.findGuardReturn(st.ElseBody); ok {
 				return line, col, true
 			}
 		}
@@ -392,10 +427,10 @@ func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
 	if fn == nil {
 		return nil
 	}
-	if stmtEndsWithExpr(fn.Body) {
+	if v.stmtEndsWithExpr(fn.Body) {
 		return nil
 	}
-	if line, col, hasGuard := findGuardReturn(fn.Body); hasGuard {
+	if line, col, hasGuard := v.findGuardReturn(fn.Body); hasGuard {
 		return newError(
 			"TypeError",
 			line,
@@ -710,6 +745,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotCondition(st.Value); err != nil {
 			return err
 		}
+		if err := v.checkNotVoidValue(st.Value); err != nil {
+			return err
+		}
 		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
 		return nil
 
@@ -723,6 +761,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotCondition(st.Value); err != nil {
 			return err
 		}
+		if err := v.checkNotVoidValue(st.Value); err != nil {
+			return err
+		}
 		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
 		return nil
 
@@ -730,7 +771,10 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
 		}
-		return v.checkNotCondition(st.Value)
+		if err := v.checkNotCondition(st.Value); err != nil {
+			return err
+		}
+		return v.checkNotVoidValue(st.Value)
 
 	case *ExprStmt:
 		if err := v.checkExpr(st.Expression); err != nil {
@@ -1474,6 +1518,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if err := v.checkNotCondition(el); err != nil {
 				return err
 			}
+			if err := v.checkNotVoidValue(el); err != nil {
+				return err
+			}
 		}
 
 	case *InterpStringExpr:
@@ -1483,6 +1530,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					return err
 				}
 				if err := v.checkNotCondition(p.Expr); err != nil {
+					return err
+				}
+				if err := v.checkNotVoidValue(p.Expr); err != nil {
 					return err
 				}
 			}
@@ -1533,10 +1583,16 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if err := v.checkNotCondition(ex.Left); err != nil {
 			return err
 		}
+		if err := v.checkNotVoidValue(ex.Left); err != nil {
+			return err
+		}
 		if err := v.checkExpr(ex.Right); err != nil {
 			return err
 		}
 		if err := v.checkNotCondition(ex.Right); err != nil {
+			return err
+		}
+		if err := v.checkNotVoidValue(ex.Right); err != nil {
 			return err
 		}
 		if (ex.Op == "is" || ex.Op == "is not") && !v.inErrorTestExpr {
@@ -1786,6 +1842,10 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					updErr = err
 					break
 				}
+				if err := v.checkNotVoidValue(upd.Value); err != nil {
+					updErr = err
+					break
+				}
 			}
 			v.loopDepth--
 			v.popScope()
@@ -1796,6 +1856,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return err
 			}
 			if err := v.checkNotCondition(upd.Value); err != nil {
+				return err
+			}
+			if err := v.checkNotVoidValue(upd.Value); err != nil {
 				return err
 			}
 		}
@@ -1959,6 +2022,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return err
 			}
 			if err := v.checkNotCondition(arg); err != nil {
+				return err
+			}
+			if err := v.checkNotVoidValue(arg); err != nil {
 				return err
 			}
 		}
