@@ -1,0 +1,109 @@
+import random
+
+# Discrete-event clinic waiting room simulation (DES).
+# Two clinicians pull patients concurrently from `waiting`, roll consultation durations,
+# pick an available treatment room, and push completed charts into `treated`.
+
+def urgency = "routine" | "urgent"
+
+def patient
+    id      = 0
+    name    = ""
+    symptom = urgency
+end
+
+def treatment_record
+    patient_id = 0
+    doctor     = ""
+    room       = ""
+    minutes    = 0
+end
+
+to clinician_worker doc_name waiting treated done rooms
+    take waiting
+        min_mins = 5
+        max_mins = 15
+        check it.symptom is "urgent" -> min_mins = 12
+        check it.symptom is "urgent" -> max_mins = 30
+
+        duration = random:roll min_mins max_mins
+        chosen_room = random:pick rooms
+        chart = treatment_record with
+            patient_id = it.id
+            doctor     = doc_name
+            room       = chosen_room
+            minutes    = duration
+        end
+        put treated chart
+    end
+    put done 1
+end
+
+to close_when_done done treated worker_count
+    finished = 0
+    take done
+        finished = finished + it
+        check finished >= worker_count -> end
+    end
+    close treated
+end
+
+to simulate_clinic arrivals
+    rooms = list "Room A", "Room B", "Exam 3"
+    waiting = inbox as patient
+    treated = inbox as treatment_record
+    done = inbox as number
+
+    spawn clinician_worker "Dr. Chen" waiting treated done rooms
+    spawn clinician_worker "Dr. Ortiz" waiting treated done rooms
+    spawn close_when_done done treated 2
+
+    randomized = random:shuffle arrivals
+    loop randomized
+        put waiting it
+    end
+    close waiting
+
+    records = list as treatment_record
+    take treated
+        records = append records it
+    end
+    close done
+    records
+end
+
+test "all clinic arrivals finish consultation with valid rooms and durations"
+    arrivals = list as patient with
+        id = 1, name = "Aria",  symptom = "routine"
+        id = 2, name = "Noah",  symptom = "urgent"
+        id = 3, name = "Elena", symptom = "routine"
+        id = 4, name = "Marco", symptom = "urgent"
+        id = 5, name = "Sora",  symptom = "routine"
+        id = 6, name = "Tariq", symptom = "routine"
+    end
+
+    charts = simulate_clinic arrivals
+    count charts is 6
+
+    durations = list as number
+    loop charts
+        it.minutes >= 5
+        it.minutes <= 30
+        durations = append durations it.minutes
+    end
+
+    sum durations >= 30
+    avg durations >= 5
+end
+
+patients = list as patient with
+    id = 101, name = "Aria",  symptom = "routine"
+    id = 102, name = "Noah",  symptom = "urgent"
+    id = 103, name = "Elena", symptom = "routine"
+    id = 104, name = "Marco", symptom = "urgent"
+end
+
+results = simulate_clinic patients
+loop results
+    say "[#{it.patient_id}] {it.doctor} treated patient in {it.room} ({it.minutes}m)"
+end

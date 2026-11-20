@@ -13,11 +13,12 @@ type typeDefInfo struct {
 }
 
 type modTypeInfo struct {
-	alias  string
-	defs   map[string]*DefDecl
-	unions map[string]*UnionDecl
-	funcs  map[string]*FuncDecl
-	consts map[string]Expr
+	alias    string
+	origName string
+	defs     map[string]*DefDecl
+	unions   map[string]*UnionDecl
+	funcs    map[string]*FuncDecl
+	consts   map[string]Expr
 }
 
 type fieldSchema struct {
@@ -193,12 +194,17 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 		if err := validateProgramTypesWithMode(imp.ModuleProg, imp.ModuleSource, true); err != nil {
 			return err
 		}
+		origName := ""
+		if !imp.IsFileImport {
+			origName = imp.Name
+		}
 		mi := modTypeInfo{
-			alias:  alias,
-			defs:   make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
-			unions: make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
-			funcs:  make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
-			consts: make(map[string]Expr),
+			alias:    alias,
+			origName: origName,
+			defs:     make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
+			unions:   make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
+			funcs:    make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
+			consts:   make(map[string]Expr),
 		}
 		for _, d := range imp.ModuleProg.Defs {
 			mi.defs[d.Name] = d
@@ -1285,6 +1291,23 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{exactNonRecord: true, exactBaseType: "number"}
 		}
 	case *CallExpr:
+		if ex.Module != "" {
+			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "random" {
+				switch ex.Callee {
+				case "roll":
+					return varTypeState{exactNonRecord: true, exactBaseType: "number"}
+				case "pick":
+					if len(ex.Args) >= 1 {
+						return v.inferIterableElemState(ex.Args[0])
+					}
+				case "shuffle":
+					if len(ex.Args) >= 1 {
+						return v.inferExprTypeState(ex.Args[0])
+					}
+				}
+			}
+			return varTypeState{}
+		}
 		switch ex.Callee {
 		case "append":
 			if len(ex.Args) >= 1 {
@@ -1325,6 +1348,16 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{exactNonRecord: true}
 		case "range":
 			return varTypeState{listElemType: "number"}
+		case "rand_roll":
+			return varTypeState{exactNonRecord: true, exactBaseType: "number"}
+		case "rand_pick":
+			if len(ex.Args) >= 1 {
+				return v.inferIterableElemState(ex.Args[0])
+			}
+		case "rand_shuffle":
+			if len(ex.Args) >= 1 {
+				return v.inferExprTypeState(ex.Args[0])
+			}
 		}
 	}
 	return varTypeState{}
@@ -1671,6 +1704,28 @@ func (v *typeValidator) checkExpr(e Expr) error {
 						v.source,
 						fmt.Sprintf("Cannot read field '.%s' on un-narrowed variable %q", ex.Field, id.Name),
 						fmt.Sprintf("Narrow %q with '%s is <Record>' before accessing '.%s'.", id.Name, id.Name, ex.Field),
+					)
+				}
+			}
+		} else {
+			targetSt := v.inferExprTypeState(ex.Target)
+			if targetSt.exactRecord != "" {
+				if defDecl, ok := v.defs[targetSt.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
+					fieldNames := make([]string, len(defDecl.Fields))
+					for i, f := range defDecl.Fields {
+						fieldNames[i] = f.Name
+					}
+					fieldHint := fmt.Sprintf("Available fields on %s: %s.", targetSt.exactRecord, defFieldNames(defDecl))
+					if suggestion := closestTypeName(ex.Field, fieldNames); suggestion != "" {
+						fieldHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fieldHint)
+					}
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("%s has no field %q", targetSt.exactRecord, ex.Field),
+						fieldHint,
 					)
 				}
 			}

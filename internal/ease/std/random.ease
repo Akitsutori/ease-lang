@@ -1,0 +1,14 @@
+# Standard library module: random
+# Random integers, selection, and shuffling for games and simulations.
+
+to roll low high
+    rand_roll low high
+end
+
+to pick items
+    rand_pick items
+end
+
+to shuffle items
+    rand_shuffle items
+end

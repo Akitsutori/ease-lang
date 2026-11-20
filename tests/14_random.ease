@@ -1,0 +1,76 @@
+import random
+
+def room_ticket
+    name = ""
+    room = 0
+end
+
+to roll_worker out_box count_n
+    loop range 1 count_n
+        put out_box (random:roll 1 100)
+    end
+end
+
+test "random:roll returns integers inside inclusive bounds"
+    random:roll 42 42 is 42
+    random:roll 0 0 is 0
+
+    loop range 1 60
+        r = random:roll 1 6
+        r >= 1
+        r <= 6
+        (floor r) is r
+    end
+
+    (random:roll 8 3) is error
+    (random:roll 1.25 4) is error
+end
+
+test "random:pick selects an element and preserves typed fields"
+    rooms = list 101, 102, 103
+    chosen_room = random:pick rooms
+    chosen_room >= 101
+    chosen_room <= 103
+
+    tickets = list as room_ticket with
+        name = "Maya", room = 101
+        name = "Liam", room = 102
+    end
+    ticket = random:pick tickets
+    ticket.room >= 101
+
+    empty = list as text
+    (random:pick empty) is error
+end
+
+test "random:shuffle returns an immutable shuffled copy"
+    orig = list 10, 20, 30, 40, 50
+    snapshot = encode_json orig
+    shuffled = random:shuffle orig
+
+    encode_json orig is snapshot
+    count shuffled is 5
+    encode_json (sort shuffled) is snapshot
+
+    empty = list as number
+    count (random:shuffle empty) is 0
+end
+
+test "random verbs work safely inside concurrent spawn workers"
+    box = inbox as number
+    spawn roll_worker box 10
+    spawn roll_worker box 10
+
+    seen = 0
+    total = 0
+    take box
+        it >= 1
+        it <= 100
+        seen = seen + 1
+        total = total + it
+        check seen >= 20 -> end
+    end
+    close box
+    seen is 20
+    total >= 20
+end
