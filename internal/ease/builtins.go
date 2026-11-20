@@ -50,6 +50,7 @@ var builtinArities = map[string]int{
 	"min":            2,
 	"max":            2,
 	"screen_present": 2,
+	"screen_open":    2,
 	"replace":        3,
 	"slice":          3,
 	"net_serve_http": 2,
@@ -725,42 +726,19 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		}
 		return resRec, true, nil
 
+	case "screen_open":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_open takes 2 arguments (screen, events)", "")
+		}
+		v, err := ev.execScreenOpen(args, line, col)
+		return v, true, err
+
 	case "screen_present":
 		if len(args) != 2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_present takes 2 arguments (screen, scene)", "")
 		}
-		winRec, ok1 := args[0].(*RecordValue)
-		sceneRec, ok2 := args[1].(*RecordValue)
-		if !ok1 || !ok2 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_present requires (screen, scene) records", "")
-		}
-		if ev.headlessScreen {
-			ev.screenFrameCount++
-			st := screenFrameState{Status: "open"}
-			if ev.screenFrameCount == 1 {
-				st.Key = "right"
-			} else {
-				st.Status = "closed"
-			}
-			b, _ := json.Marshal(st)
-			return string(b), true, nil
-		}
-		if ev.activeScreen == nil {
-			w := 800
-			h := 600
-			title := "Ease Window"
-			if v, ok := winRec.Fields["width"].(float64); ok && v > 0 {
-				w = int(v)
-			}
-			if v, ok := winRec.Fields["height"].(float64); ok && v > 0 {
-				h = int(v)
-			}
-			if v, ok := winRec.Fields["title"].(string); ok && v != "" {
-				title = v
-			}
-			ev.activeScreen = startScreenSession(w, h, title)
-		}
-		return ev.activeScreen.present(recordToScreenScene(sceneRec)), true, nil
+		v, err := ev.execScreenPresent(args, line, col)
+		return v, true, err
 
 	case "net_serve_http":
 		v, err := ev.execNetServeHTTP(args, line, col)

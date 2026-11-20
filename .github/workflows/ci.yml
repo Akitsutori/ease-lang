@@ -87,6 +87,7 @@ jobs:
             examples/05_network.ease \
             examples/06_window.ease \
             examples/07_http_server.ease \
+            examples/08_haunted_hotel.ease \
             examples/fibonacci.ease \
             examples/showcase.ease; do
             echo "==> ease test $f"
@@ -100,6 +101,7 @@ jobs:
           ./${{ matrix.bin }} run examples/00_hello_world.ease --check
           ./${{ matrix.bin }} run examples/06_window.ease --check
           ./${{ matrix.bin }} run examples/07_http_server.ease --check
+          ./${{ matrix.bin }} run examples/08_haunted_hotel.ease --check
           ./${{ matrix.bin }} run examples/fibonacci.ease --check
           ./${{ matrix.bin }} run examples/showcase.ease --check
 

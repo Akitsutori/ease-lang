@@ -10,32 +10,38 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 
 ```text
 .
-├── cmd/ease/main.go             # CLI entrypoint (run, test, build, ast, tokens, repl, version)
+├── cmd/ease/main.go             # CLI entrypoint (run, check, test, build, ast, tokens, repl, lsp, version)
 ├── internal/ease/
 │   ├── token.go                 # Token types and reserved keywords
-│   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, # comments, operators)
+│   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, raw '...', # comments, operators)
 │   ├── ast.go                   # AST node definitions for declarations, statements, and expressions
-│   ├── parser.go                # Two-pass arity-based recursive-descent parser and stdlib import resolution
-│   ├── typecheck.go             # Strict `as` / `list as` validation, name collision checks, and control-flow checking
-│   ├── typecheck_unions.go      # Union type resolution, 3 compile-time guardrails, narrowing, and exhaustiveness
+│   ├── parser.go                # Two-pass arity-based recursive-descent parser and stdlib/file import resolution
+│   ├── typecheck.go             # Static type/arity checks, safe `or` fallbacks, return consistency & flow checking
+│   ├── typecheck_unions.go      # Union type resolution, 3 compile-time guardrails, narrowing & exhaustiveness
 │   ├── checker.go               # Data-driven soft-assert test runner (`test` blocks, `is error`, context reports)
-│   ├── eval.go                  # Tree-walking evaluator, runtime environments, and statement/expression execution
-│   ├── values.go                # Runtime value representations, formatting, and structural equality
-│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, HTTP/screen bridges)
-│   ├── cast.go                  # Strict `as` casting, list coercion, and JSON-to-Ease validation
-│   ├── screen.go                # Ebitengine main-thread bridge and headless `--check` frame simulation
-│   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`)
+│   ├── eval.go                  # Tree-walking evaluator, thread-safe `Env`, and statement/expression execution
+│   ├── values.go                # Runtime value representations, formatting, freezing & structural equality
+│   ├── match.go                 # Full-string pattern matching and typed extraction engine (`match`)
+│   ├── swarm.go                 # Bounded data-parallel `swarm loop` worker pool and deterministic ordering
+│   ├── inbox.go                 # Typed concurrent FIFO `inbox`, `spawn` workers, `take`, `close` hooks & lifecycle cleanup
+│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, file I/O, HTTP/screen dispatch)
+│   ├── net_builtins.go          # `inbox`-driven HTTP & TCP server host bridges (`serve_http`, `reply_*`, `serve_tcp`, `tcp_send`)
+│   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, and JSON-to-Ease validation
+│   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
+│   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
 │   ├── bundle.go                # Standalone executable packer (`EASE_BUNDLE_V1`)
 │   ├── errors.go                # Structured `EaseError` diagnostics with source snippets and hints
-│   ├── ease_test.go             # Core Go test suite (lexer, parser, arity calls, evaluator, CLI, screen)
+│   ├── ease_test.go             # Core Go test suite (lexer, parser, arity calls, evaluator, match, CLI)
 │   ├── typecheck_test.go        # Static typecheck, union narrowing, and exhaustiveness Go tests
-│   ├── cast_json_test.go        # JSON decode/encode, strict `as`, and list coercion Go tests
+│   ├── cast_json_test.go        # JSON decode/encode, strict `as`, `or` fallbacks & list coercion Go tests
+│   ├── net_test.go              # HTTP/TCP inbox server concurrency and lifecycle Go tests
+│   ├── screen_test.go           # Screen config, color/shape parsing, and headless `screen.event` inbox Go tests
 │   └── std/
-│       ├── network.ease         # `network` standard module (`def` schemas + `fetch`/`send` via `http_call`)
-│       └── screen.ease          # `screen` standard module (`def` schemas + `present` via `screen_present`)
-├── examples/                    # Runnable examples and end-to-end reference specifications
-├── tests/                       # Language feature test files (01–07) executed via `ease test`
-└── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux & Windows)
+│       ├── network.ease         # `network` stdlib module (HTTP client + `inbox`-driven HTTP & TCP servers)
+│       └── screen.ease          # `screen` stdlib module (`fps_mode`, `event`, 2D shapes, `open` & `present`)
+├── examples/                    # Runnable examples (00–08, fibonacci, showcase) and reference specs
+├── tests/                       # Language feature test files (01–13) executed via `ease test`
+└── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux with -race, and Windows)
 ```
 
 ### High-Value Contribution Areas
@@ -62,7 +68,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
   ```
 - **Windows**: No extra OS system libraries are needed beyond Go.
 
-### Building and Running Checks Locally
+### Building, CLI Reference & Running Checks Locally
 
 **Linux / macOS:**
 
@@ -74,6 +80,8 @@ go build -o ease ./cmd/ease
 for f in tests/*.ease; do ./ease test "$f"; done
 ./ease run examples/06_window.ease --check
 ./ease run examples/07_http_server.ease --check
+./ease run examples/08_haunted_hotel.ease --check
+./ease test examples/08_haunted_hotel.ease
 ```
 
 **Windows (PowerShell):**
@@ -86,7 +94,27 @@ go build -o ease.exe .\cmd\ease
 Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 .\ease.exe run examples\06_window.ease --check
 .\ease.exe run examples\07_http_server.ease --check
+.\ease.exe run examples\08_haunted_hotel.ease --check
+.\ease.exe test examples\08_haunted_hotel.ease
 ```
+
+**Local stdlib override:** Pass `EASE_STD=internal/ease/std` from the repository root (or `EASE_STD=1` when running inside a directory with `./std/`) to test changes to `std/network.ease` or `std/screen.ease` without rebuilding embedded files.
+
+**CLI Reference:**
+
+```text
+ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (optionally running tests first, tracing, or emitting JSON)
+ease check <file.ease> [--json]                      Parse and type-check without executing
+ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions
+ease build <file.ease> [-o <out>]                    Package an Ease program into a standalone executable
+ease ast <file.ease> [--json]                        Inspect parsed defs, functions, checks, and statements (or full AST JSON)
+ease tokens <file.ease>                              Inspect lexer tokens with line/column positions
+ease repl                                            Start interactive Ease REPL
+ease lsp                                             Start Language Server (stdio JSON-RPC for editors)
+ease version                                         Print Ease CLI version
+```
+
+Shorthand: `ease <file.ease>` is equivalent to `ease run <file.ease>`.
 
 ---
 

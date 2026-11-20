@@ -1,0 +1,90 @@
+import screen
+
+# Animated Haunted Hotel facade running at 60 TPS with an explicit `inbox as screen.event`.
+# Demonstrates `fps = 60`, `screen:open`, `spawn` + endless `loop`, and all 2D shapes:
+# `triangle` (roof), `box` (facade & outlined/lit windows), `line` + `circle` (swinging lantern), and `label`.
+
+to lantern_sway tick
+    phase = (tick % 120) - 60
+    (abs phase) - 30
+end
+
+to build_hotel_scene tick note_text
+    sway = lantern_sway tick
+    lantern_x = 400 + sway
+    lantern_y = 435
+
+    notes = list as screen.label
+    notes = append notes (screen.label with x = 215, y = 44, content = "THE MIDNIGHT INN (ESC OR X TO CLOSE)", size = 18, color = "cream")
+    notes = append notes (screen.label with x = 230, y = 76, content = note_text, size = 15, color = "amber")
+
+    roof = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "indigo", filled = "yes"
+    roof_trim = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "silver", filled = "no", stroke = 3
+
+    shapes = list as screen.shape
+    shapes = append shapes (screen.circle with x = 685, y = 110, size = 34, color = "cream", filled = "yes")
+    shapes = append shapes (screen.circle with x = 685, y = 110, size = 46, color = "amber", filled = "no", stroke = 2)
+    shapes = append shapes roof
+    shapes = append shapes roof_trim
+    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "slate", filled = "yes")
+    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "silver", filled = "no", stroke = 3)
+    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "amber", filled = "yes")
+    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "gold", filled = "yes")
+    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "black", filled = "no", stroke = 3)
+    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "black", filled = "no", stroke = 3)
+    shapes = append shapes (screen.box with x = 355, y = 370, width = 90, height = 120, color = "#1f2937", filled = "yes")
+    shapes = append shapes (screen.line with x1 = 400, y1 = 370, x2 = lantern_x, y2 = lantern_y, width = 3, color = "silver")
+    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 12, color = "orange", filled = "yes")
+    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 18, color = "yellow", filled = "no", stroke = 2)
+
+    screen.scene with
+        background = "midnight"
+        shapes     = shapes
+        labels     = notes
+    end
+end
+
+to render_hotel win updates
+    note_text = "Room 13 left a key at the desk."
+    loop
+        sc = build_hotel_scene it.index note_text
+        raw = screen:present win sc
+        st = decode_json raw as screen.frame_state
+        check st.status is "closed" -> "closed"
+    end
+end
+
+to handle_hotel_events win events
+    seen = list as text
+    take events
+        seen = append seen it.kind
+        check it.kind is "key" and it.key is "escape" -> close events
+        check it.kind is "close" -> end
+    end
+    seen
+end
+
+to run_haunted_hotel
+    win = screen.screen with width = 800, height = 560, title = "Haunted Hotel", fps = 60
+    events = inbox as screen.event
+    screen:open win events
+    spawn render_hotel win "quiet"
+    handle_hotel_events win events
+end
+
+test "haunted hotel animation and headless event stream behave deterministically"
+    lantern_sway 0   is 30
+    lantern_sway 30  is 0
+    lantern_sway 60  is -30
+    lantern_sway 120 is 30
+
+    sc = build_hotel_scene 0 "Room 7 asks for extra towels."
+    count sc.labels is 2
+    count sc.shapes is 14
+
+    events_seen = run_haunted_hotel
+    encode_json events_seen is '["key","click","close"]'
+end
+
+log = run_haunted_hotel
+say "Hotel closed after events: {encode_json log}"

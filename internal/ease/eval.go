@@ -247,24 +247,22 @@ const (
 
 // Evaluator executes parsed Ease programs.
 type Evaluator struct {
-	source           string
-	out              io.Writer
-	trace            io.Writer
-	ioMu             *sync.Mutex
-	rt               *runtimeLifecycle
-	isChild          bool
-	inReader         *bufio.Reader
-	funcs            map[string]*FuncDecl
-	modules          map[string]*Evaluator
-	global           *Env
-	callDepth        int
-	inSwarmWorker    bool
-	initErr          error
-	headlessScreen   bool
-	headlessNet      bool
-	screenFrameCount int
-	activeScreen     *screenSession
-	httpClient       *http.Client
+	source         string
+	out            io.Writer
+	trace          io.Writer
+	ioMu           *sync.Mutex
+	rt             *runtimeLifecycle
+	isChild        bool
+	inReader       *bufio.Reader
+	funcs          map[string]*FuncDecl
+	modules        map[string]*Evaluator
+	global         *Env
+	callDepth      int
+	inSwarmWorker  bool
+	initErr        error
+	headlessScreen bool
+	headlessNet    bool
+	httpClient     *http.Client
 }
 
 // SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
@@ -288,10 +286,6 @@ func (ev *Evaluator) Close() {
 	if !ev.isChild && ev.rt != nil {
 		ev.rt.abort()
 		ev.rt.wg.Wait()
-	}
-	if ev.activeScreen != nil {
-		ev.activeScreen.close()
-		ev.activeScreen = nil
 	}
 	if ev.httpClient != nil {
 		ev.httpClient.CloseIdleConnections()

@@ -76,6 +76,9 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 			return nil, err
 		}
 	}
+	if err := ev.WaitWorkers(); err != nil {
+		return nil, err
+	}
 	ev.SetHeadlessNet(false)
 
 	report := &CheckReport{TestBlocks: len(prog.Checks)}

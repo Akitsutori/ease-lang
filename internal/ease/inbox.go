@@ -75,6 +75,28 @@ func (ib *InboxValue) Close() {
 	}
 }
 
+// TryPut freezes and enqueues `val` without blocking. Returns false if the inbox is closed or full.
+func (ib *InboxValue) TryPut(val Value) bool {
+	if ib == nil {
+		return false
+	}
+	ib.mu.Lock()
+	closed := ib.closed
+	ib.mu.Unlock()
+	if closed {
+		return false
+	}
+	freezeValueForParallel(val, map[any]bool{})
+	select {
+	case <-ib.done:
+		return false
+	case ib.ch <- val:
+		return true
+	default:
+		return false
+	}
+}
+
 // Put sends `val` into the inbox, returning a RuntimeError if the inbox is already closed.
 func (ib *InboxValue) Put(ctx context.Context, val Value, line, col int, source string) error {
 	ib.mu.Lock()
@@ -217,16 +239,20 @@ func (h *netConnHandle) close() {
 }
 
 type runtimeLifecycle struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	mu        sync.Mutex
-	inboxes   []*InboxValue
-	listeners map[string]*netListenerHandle
-	conns     map[string]*netConnHandle
-	netSeq    uint64
-	firstErr  error
-	closed    bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	mu               sync.Mutex
+	inboxes          []*InboxValue
+	listeners        map[string]*netListenerHandle
+	conns            map[string]*netConnHandle
+	netSeq           uint64
+	firstErr         error
+	closed           bool
+	screenMu         sync.Mutex
+	activeScreen     *screenSession
+	screenEvents     *InboxValue
+	screenFrameCount int
 }
 
 func newRuntimeLifecycle() *runtimeLifecycle {
@@ -411,6 +437,14 @@ func (rt *runtimeLifecycle) abort() {
 	}
 	for _, h := range conns {
 		h.close()
+	}
+
+	rt.screenMu.Lock()
+	sess := rt.activeScreen
+	rt.activeScreen = nil
+	rt.screenMu.Unlock()
+	if sess != nil {
+		sess.close()
 	}
 }
 

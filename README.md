@@ -4,692 +4,248 @@
 
 # Ease
 
-**Ease** is a compact, strongly boundary-checked programming language implemented in Go. It is built around bracket-free prefix calls (`to`), logic-free data blueprints (`def`), explicit union value spaces (no `bool`), declarative guards (`check`), and built-in tests (`test`).
+It is five minutes past midnight in the oak-paneled lobby of a hotel at the edge of town. A brass bell sits on the desk, rain taps at the tall panes, and the first handwritten slip of paper just slid under the door.
 
-> **VS Code Support:** Syntax highlighting, live diagnostics (`ease lsp`), outline symbols, and autocomplete are documented in [README_VSCODE.md](README_VSCODE.md).  
-> **1-Page LLM Reference:** See [`llms.txt`](llms.txt).
-
----
-
-## Table of Contents
-
-1. [Installation & CLI](#installation--cli)
-2. [Tutorial: Build a Text Adventure in Ease](#tutorial-build-a-text-adventure-in-ease)
-   - [1. Entering the Tavern](#1-entering-the-tavern)
-   - [2. The Command Loop](#2-the-command-loop)
-   - [3. Choosing Your Move](#3-choosing-your-move)
-   - [4. Hero Stats, Damage & Combat Outcomes](#4-hero-stats-damage--combat-outcomes)
-   - [5. Cleaning Up the Game Loop](#5-cleaning-up-the-game-loop)
-   - [6. Ambush! Fighting a Pack of Monsters](#6-ambush-fighting-a-pack-of-monsters)
-   - [7. Loot Tables & Savegames](#7-loot-tables--savegames)
-   - [8. Expanding the World & Testing Combat Rules](#8-expanding-the-world--testing-combat-rules)
-3. [Pattern Matching & Structured Extraction (`match`)](#pattern-matching--structured-extraction-match)
-4. [Why Ease Works Well for AI Agents](#why-ease-works-well-for-ai-agents)
-5. [Built-in Verbs](#built-in-verbs)
-6. [Formal Grammar (EBNF)](#formal-grammar-ebnf)
-7. [Running Tests & Project Layout](#running-tests--project-layout)
+**Ease** is a compact, race-free language built in Go for moments like that night shift: when data slips have to stay intact, background helpers must never smudge each other's ledgers, and HTTP servers and 2D windows should speak the exact same plain message-passing grammar.
 
 ---
 
-## Installation & CLI
+## 1. Alone at the Desk
 
-### Prerequisites & Build
-
-- **Go** matching [`go.mod`](go.mod) (`go 1.27.4`)
-- **Linux system dependencies** (required by [Ebitengine](https://ebitengine.org/) for `screen`):
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y libc6-dev libgl1-mesa-dev libxcursor-dev libxi-dev \
-    libxinerama-dev libxrandr-dev libxxf86vm-dev libasound2-dev pkg-config
-  ```
-
-```bash
-# Linux / macOS
-go build -o ease ./cmd/ease
-
-# Windows (PowerShell)
-go build -o ease.exe .\cmd\ease
-```
-
-### CLI Reference
-
-```text
-ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (optionally running tests first, tracing, or emitting JSON)
-ease check <file.ease> [--json]                      Parse and type-check without executing
-ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions
-ease build <file.ease> [-o <out>]                    Compile an Ease program into a standalone binary
-ease ast <file.ease> [--json]                        Inspect parsed defs, functions, checks, and statements (or full AST JSON)
-ease tokens <file.ease>                              Inspect lexer tokens with line/column positions
-ease repl                                            Start interactive Ease REPL
-ease lsp                                             Start Language Server (stdio JSON-RPC for editors)
-ease version                                         Print Ease CLI version
-```
-
-Shorthand: `ease <file.ease>` is equivalent to `ease run <file.ease>`.
-
----
-
-## Tutorial: Build a Text Adventure in Ease
-
-In this tutorial, we build a playable **text adventure** from scratch. Each chapter advances the game and introduces only the Ease ideas needed for that scene.
-
-### 1. Entering the Tavern
-
-Our adventure begins in a tavern. Before the hero sets off, the game asks for their name, buys a few supplies, calculates their starting gold, and prints a welcome banner.
-
-In Ease, variables are plain assignments (`=`) and constants use `def`. Text in double quotes (`"..."`) interpolates `{expr}` values and normalizes to Unicode NFC, while single-quoted text (`'...'`) is raw 1:1 literal text (handy for JSON strings). Numbers are 64-bit floats (`/` is real division, and `-2` directly before digits is a negative literal; write `a - 2` with spaces for subtraction). Parentheses `(...)` group arithmetic sub-expressions, `+` combines only `number + number` or `text + text`, and `ask` / `say` handle console input and output:
+You pick up the slip from the carpet. You never scratch out ink on an original guest note — instead, when a room asks for towels and you stamp it handled, you copy the slip onto a fresh card and leave the original untouched.
 
 ```ease
-def starting_gold = 50
+def RequestKind = "towels" | "late_checkout" | "key"
+def SlipStatus  = "waiting" | "done" | "escalated"
 
-hero_name = ask "What is your name, traveler?"
-gold = starting_gold - (2 * 5)
-sign_json = '{"tavern": "The Rusty Tankard"}'
-
-title = "Traveler " + hero_name
-say "Welcome, {title}! You start with {gold} gold."
-say "Tavern sign: {sign_json}"
-```
-
----
-
-### 2. The Command Loop
-
-Now the hero steps into the dungeon and starts typing commands. The game needs a real command loop that keeps asking for input until the player types `"quit"`.
-
-Ease has a single loop construct: `loop ... end` (or `loop <list|range> ... end` when iterating over values). An unbounded `loop ... end` binds `it.index` (0, 1, 2, ...) and requires at least one exit guard: a single-line `check <cond> -> end` breaks out of the innermost loop immediately:
-
-```ease
-loop
-    cmd = ask "> "
-    check cmd is "quit" -> end
-    say "Turn {it.index}: you typed '{cmd}'."
+def guest_note
+    room   = 0
+    kind   = RequestKind
+    status = SlipStatus
 end
 
-say "Farewell, adventurer!"
-```
+to stamp_done note
+    check note.room <= 0 -> note with status = "escalated"
+    note with status = "done"
+end
 
----
-
-### 3. Choosing Your Move
-
-Typing commands is only fun if the dungeon reacts. The player should be able to `"look"`, `"fight"`, `"rest"` (for a 3-round breather using `loop range 1 3`, where `it` counts `1, 2, 3`), or `"flee"` — and get a helpful message if they type anything else.
-
-Ease has no `if` keyword and no `bool` (`true`/`false`) type. Instead, you model choices explicitly (for example as a closed union type `def move = "look" | "fight" | "rest" | "flee"`) and dispatch with a multi-line `check ... else -> ... end` block:
-
-```ease
-def move = "look" | "fight" | "rest" | "flee"
-
-loop
-    cmd = ask "Choose (look, fight, rest, flee, quit)> "
-    check cmd is "quit" -> end
-
+to log_line note
     check
-        cmd is "look"  -> say "Torchlight flickers along damp stone walls."
-        cmd is "fight" -> say "You raise your sword!"
-        cmd is "rest"  -> loop range 1 3
-            say "Resting... round {it} of 3"
-        end
-        cmd is "flee"  -> say "You slip back into the shadows."
-        else -> say "Unknown move '{cmd}'. Try look, fight, rest, or flee."
+        note.status is "done"      -> "Room {note.room}: fulfilled {note.kind}"
+        note.status is "escalated" -> "Front desk alert: invalid room number"
+        note.status is "waiting"   -> "Room {note.room}: still waiting for {note.kind}"
     end
 end
+
+slip = guest_note with room = 13, kind = "towels"
+handled = stamp_done slip
+
+say log_line slip
+say log_line handled
 ```
+
+Look closely at the counter beside you:
+- **`def` describes things; `to` describes verbs.** Records (`guest_note`) and closed unions (`RequestKind`, `SlipStatus`) have no methods inside them, and `to` functions take space-separated inputs without outer parentheses or commas.
+- **`with` always makes a fresh copy.** Both `slip` (still `"waiting"`) and `handled` (`"done"`) stay alive without locking or cloning boilerplate.
+- **No `bool`, no `if`, no `null`.** Choices are explicit words checked with `is`, and in `log_line` the compiler makes sure you never forget a status — or misspell `"done"` as `"doen"`.
 
 ---
 
-### 4. Hero Stats, Damage & Combat Outcomes
+## 2. When Two Hands Aren't Enough
 
-A real fight needs hero stats — `name`, `hp`, and `stamina` — and an attack outcome that is richer than a boolean: a swing might update the hero, end in `"fled"`, or fail with a `CombatError` when stamina is too low.
-
-Ease separates logic-free noun blueprints (`def`) from actions. Records are immutable: `with` creates an updated copy. Combining a record, a text literal, and an error record with `|` creates an explicit union (`turn_outcome`), and `check` narrows `res` inside `res is CombatError -> ...` so `res.code` and `res.message` are safe to read:
+By 12:20 AM, three guests have dropped notes through the lobby slot at once. Thankfully there is a night porter downstairs, connected to your desk by a pneumatic brass chute: you drop notes into the chute, the porter pulls them out in order down in the cellar, stamps them, and drops the receipts back up in a return tray.
 
 ```ease
-def CombatError
-    code    = 400
-    message = "Invalid action"
+def guest_note
+    room   = 0
+    kind   = "towels" | "late_checkout" | "key"
+    status = "waiting" | "done"
 end
 
-def hero
-    name    = "Aria"
-    hp      = 100
-    stamina = 10
-end
-
-def turn_outcome = hero | "fled" | CombatError
-
-aria = hero with name = "Aria", stamina = 4
-aria_after_hit = aria with hp = aria.hp - 15, stamina = aria.stamina - 2
-
-res = CombatError with code = 409, message = "Not enough stamina"
-check
-    res is hero        -> say "{res.name} now has {res.hp} HP."
-    res is "fled"      -> say "Hero escaped safely."
-    res is CombatError -> say "Blocked ({res.code}): {res.message}"
-end
-say "After skirmish: {aria_after_hit.name} HP={aria_after_hit.hp}"
-```
-
----
-
-### 5. Cleaning Up the Game Loop
-
-As the dungeon grows, inline damage math and `check` blocks make the main loop noisy. Let's extract reusable combat rules like `calc_damage`, `heal`, and `attempt_strike`.
-
-Functions are declared with `to <name> <params...>` (space-separated, no commas) and return their last evaluated expression. Calls use prefix syntax without parentheses; `(...)` groups compound arguments (`heal aria.hp (calc_damage 14 3)`). Inside a `to` function, `check <cond> -> <value>` returns immediately from the function, and every assignment stays local (`Assigned-in-Function = Local`):
-
-```ease
-def base_crit = 1.5
-
-def CombatError
-    code    = 400
-    message = "Invalid action"
-end
-
-def hero
-    name    = "Aria"
-    hp      = 100
-    stamina = 10
-end
-
-def turn_outcome = hero | "fled" | CombatError
-
-to calc_damage attack armor
-    (attack - armor) * base_crit
-end
-
-to heal current bonus
-    next_hp = current + bonus
-    next_hp
-end
-
-to attempt_strike h cost
-    check h.hp <= 0 -> CombatError with code = 410, message = "Hero has fallen"
-    check h.stamina < cost -> CombatError with code = 409, message = "Not enough stamina"
-    h with stamina = h.stamina - cost
-end
-
-aria = hero with hp = 60, stamina = 5
-repaired_hp = heal aria.hp (calc_damage 14 3)
-res = attempt_strike (aria with hp = repaired_hp) 2
-
-check
-    res is hero        -> say "{res.name}: HP={res.hp}, stamina={res.stamina}"
-    res is "fled"      -> say "Retreated"
-    res is CombatError -> say "Blocked: {res.message}"
-end
-```
-
----
-
-### 6. Ambush! Fighting a Pack of Monsters
-
-Around the next corner, a whole pack of monsters ambushes our hero! We need to filter out defeated enemies, apply end-of-turn poison to every survivor at once, scale a list of damage rolls, and clean up the loot names dropped in the room.
-
-Lists are homogeneous (`list 1, 2, 3` or `list as <type>`) with `.0` / `.(i)` indexing and element-wise numeric arithmetic. Both `where` filters and batch `with` updates bind `it` and `it.index`; `append` builds new lists without mutating in place, and built-in text verbs (`trim`, `split`, `join`, `upper`, `slice`, `contains`) clean up text safely:
-
-```ease
-def monster
-    name = ""
-    hp   = 0
-end
-
-pack = list as monster with
-    name = "Goblin", hp = 12
-    name = "Slime",  hp = 0
-    name = "Orc",    hp = 35
-end
-
-alive = pack where
-    it.hp > 0
-end
-poisoned = alive with hp = it.hp - 3
-say "Surviving monsters: {count poisoned}, first HP: {poisoned.0.hp}"
-
-rolls = list 4, 6, 8
-scaled = rolls * 1.5 + 2
-say "Scaled rolls total: {sum scaled}, avg: {avg scaled}, second: {scaled.(1)}"
-
-raw_loot = "  rusty key, iron shield, broken horn  "
-drops = split (trim raw_loot) ", "
-kept = list as text
-
-loop drops
-    check it is "broken horn" -> end
-    check not (contains it "iron") -> say "Non-iron drop: {it}"
-    tag = upper (slice it 0 4)
-    kept = append kept "{it.index}:{tag}"
-end
-say "Pack loot: {join kept " | "}"
-```
-
----
-
-### 7. Loot Tables & Savegames
-
-A full adventure needs external data: a CSV loot table for treasure chests and a JSON save file so the hero can resume later.
-
-Ease keeps external data untrusted until you explicitly validate it with `as`. `load path [as text|csv|bytes]` reads UTF-8/NFC text (50 MB max, BOM stripped), uniform CSV rows (`list` of `map` with positional `it.0` and header `it.("Header")` access), or raw `0..255` bytes; `save path data` writes text or bytes and returns the byte count; `decode_json` / `encode_json` handle JSON conversion:
-
-```ease
-def rarity = "common" | "rare"
-
-def loot_item
-    name  = ""
-    value = 0
-    tier  = rarity
-end
-
-def hero
-    name = "Aria"
-    hp   = 100
-end
-
-rows = load "./datafiles/loot.csv" as csv
-chest = list as loot_item
-loop rows
-    item = loot_item with
-        name  = it.("Item Name")
-        value = it.1 as number
-        tier  = it.2 as rarity
+to cellar_porter chute tray
+    take chute
+        completed = it with status = "done"
+        put tray completed
     end
-    chest = append chest item
+    close tray
 end
-rare_chest = chest where it.tier is "rare"
-say "Rare items loaded: {count rare_chest}"
 
-saved = hero with name = "Aria", hp = 85
-bytes_written = save "./save.json" (encode_json saved)
-restored = (decode_json (load "./save.json" as text)) as hero
-raw_bytes = load "./save.json" as bytes
-say "Saved {bytes_written} bytes ({count raw_bytes} raw), restored HP: {restored.hp}"
+chute = inbox as guest_note
+tray  = inbox as guest_note
+spawn cellar_porter chute tray
+
+put chute (guest_note with room = 104, kind = "towels")
+put chute (guest_note with room = 208, kind = "key")
+close chute
+
+take tray
+    say "Receipt #{it.index}: room {it.room} -> {it.status}"
+end
 ```
+
+That pneumatic tube is the whole concurrency model of Ease:
+- **`inbox as guest_note`** is a typed tube. Nothing enters unless it matches `guest_note`, and once dropped inside with `put`, the value is frozen so two goroutines can never race over the same record.
+- **`spawn` starts any normal `to` function** in the background — no `async`/`await` keywords, no split function ecosystem.
+- **`take ... end`** sits at the other end receiving `it` and 0-based `it.index` one slip at a time, then exits the instant `close` shuts the chute and the remaining slips drain out.
 
 ---
 
-### 8. Expanding the World & Testing Combat Rules
+## 3. When Twenty Bells Ring at Midnight
 
-As our world grows, we split combat mechanics into `./combat.ease`, connect optional online highscores (`import network`) or a 2D dungeon map (`import screen`), and lock down our rules with built-in tests (`test ... end`).
-
-All modules — file modules (`import "./file.ease" as mod`) and embedded standard modules (`import network`, `import screen`, optionally `as <alias>`) — are encapsulated namespaces: call module verbs with **`:`** (`mod:verb`) and access module blueprints, unions, and constants with **`.`** (`mod.blueprint`, `mod.const`).
+At 12:30 AM, a tour bus unloads and twenty room service slips hit the blotter together. You don't need twenty separate chutes — you just hand each slip in the stack to a parallel team and gather the bill amounts back in exact room order.
 
 ```ease
-# combat.ease
-def crit_multiplier = 1.5
-
-def fighter
-    name = ""
-    hp   = 100
+def guest_note
+    room   = 0
+    kind   = "towels" | "extra_pillow" | "late_checkout"
+    fee    = 0
 end
 
-to strike target power
-    target with hp = target.hp - (power * crit_multiplier)
+orders = list as guest_note with
+    room = 301, kind = "towels"
+    room = 302, kind = "late_checkout"
+    room = 305, kind = "extra_pillow"
 end
+
+charges = swarm loop orders
+    check it.kind is "late_checkout" -> 25
+    check it.kind is "extra_pillow"  -> 8
+    0
+end
+
+say "Room fees in arrival order: {encode_json charges}, total: {sum charges}"
 ```
 
+`swarm loop` spins up isolated workers over any list or `range`, keeps outer variables strictly read-only, lets any worker return early with `check ... -> <value>`, and guarantees `charges` comes back in `0..N-1` order so `sum charges` is always deterministic.
+
+---
+
+## 4. When the Outside World Calls
+
+A thunderstorm knocks out the foyer bell, so guests start booking towels and late checkouts straight from their phones over HTTP. Instead of learning a web framework with callbacks and hidden socket structs, Ease hands you another pneumatic chute: an `inbox as network.http_request`.
+
 ```ease
-# main.ease
-import "./combat.ease" as combat
 import network
+
+def desk_status
+    hotel = "Midnight Inn"
+    desk  = "open"
+end
+
+to handle_call req
+    match "{req.method} {req.path}"
+        "GET /status"            -> network:reply_json req 200 desk_status
+        "GET /wake/{room}/{mins}" -> network:reply_text req 200 "Wake-up call set for room {room} in {mins}m"
+        else                     -> network:reply_text req 404 "No one at that extension"
+    end
+end
+
+to answer_phones requests
+    take requests
+        spawn handle_call it
+    end
+end
+
+test "late-night HTTP switchboard handles parallel callers cleanly"
+    requests = inbox as network.http_request
+    port = network:serve_http 0 requests
+    port > 0
+    spawn answer_phones requests
+
+    phone = network.network with url = "http://127.0.0.1:{port}"
+    calls = list "/status", "/wake/402/15", "/missing"
+    replies = swarm loop calls
+        network:fetch phone it
+    end
+
+    replies.0 is (encode_json desk_status)
+    replies.1 is "Wake-up call set for room 402 in 15m"
+    replies.2 is ""
+    close requests
+end
+```
+
+A few things happen right on the switchboard:
+- **`:` vs `.`:** `network:serve_http` calls a module verb with `:` while `network.http_request` reads a blueprint from the module with `.`. Passing `0` lets the OS assign a free port for the inline `test` block.
+- **`match` replaces regexes:** `"GET /wake/{room}/{mins}"` extracts both `{room}` and `{mins}` cleanly into variables on the left side of `->` (and `{name as number}` or `{z as MyUnion}` skips invalid inputs safely).
+- **`close requests` tears down the listener:** Closing your inbox closes the underlying TCP socket cleanly with zero dangling handles. (`import network` also ships `network:serve_tcp` and `network:tcp_send` following the same `clients = inbox as network.tcp_client` pattern.)
+
+---
+
+## 5. Giving the Hotel a Window
+
+Before the sun comes up, you paint the Midnight Inn itself — a pointed roof against a dark sky, glowing upstairs windows, a porch lantern swaying gently at 60 frames a second, and a window `events = inbox as screen.event` so closing the pane or pressing `Escape` sends the shift home cleanly.
+
+```ease
 import screen
 
-goblin = combat.fighter with name = "Goblin", hp = 30
-hit_goblin = combat:strike goblin 10
-say "{hit_goblin.name} HP left: {hit_goblin.hp} (crit x{combat.crit_multiplier})"
-
-api = network.network with url = "https://scores.example.test", timeout = 5
-resp = network:send api "/runs" hit_goblin
-
-win = screen.screen with width = 640, height = 480, title = "Ease Dungeon"
-hud = screen.scene with background = "slate"
-raw_frame = screen:present win hud
-frame = decode_json raw_frame as screen.frame_state
-```
-
-Finally, `test ["label"] ... end` blocks run via `ease test <file.ease>` as soft assertions with `is`, `is not`, `is error`, `-> error.type / error.message end`, and `loop` over test cases:
-
-```ease
-to safe_strike hp power
-    check power <= 0 -> fail "Power must be positive"
-    hp - power
+to lantern_x tick
+    phase = (tick % 120) - 60
+    400 + ((abs phase) - 30)
 end
 
-def strike_case
-    hp    = 0
-    power = 0
-    want  = 0
-end
+to paint_hotel win
+    loop
+        lx = lantern_x it.index
+        shapes = list as screen.shape
+        shapes = append shapes (screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "indigo")
+        shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "slate")
+        shapes = append shapes (screen.box with x = 265, y = 265, width = 70, height = 75, color = "amber")
+        shapes = append shapes (screen.box with x = 265, y = 265, width = 70, height = 75, color = "black", filled = "no", stroke = 3)
+        shapes = append shapes (screen.line with x1 = 400, y1 = 370, x2 = lx, y2 = 435, width = 3, color = "silver")
+        shapes = append shapes (screen.circle with x = lx, y = 435, size = 12, color = "orange")
+        shapes = append shapes (screen.label with x = 250, y = 55, content = "MIDNIGHT INN (ESC OR X TO LEAVE)", size = 16, color = "cream")
 
-test "dungeon combat assertions"
-    cases = list as strike_case with
-        hp = 50, power = 15, want = 35
-        hp = 20, power = 20, want = 0
-    end
-
-    loop cases
-        safe_strike it.hp it.power is it.want
-    end
-
-    (safe_strike 50 0) is error
-    (safe_strike 50 0) ->
-        error.type is "RuntimeError"
-        error.message is "Power must be positive"
-    end
-end
-```
-
-- **Headless screen testing:** `ease run <file.ease> --check` runs `screen` loops deterministically without opening an OS window. Local `./std/` overrides can be enabled via `EASE_STD=1`.
-
----
-
-## Pattern Matching & Structured Extraction (`match`)
-
-Use `match <target> ... end` for full-string pattern matching and typed data extraction on `text` or lists of `text` — without regular-expression backtracking noise:
-
-- **Statement form (`match <text> ... end`)**: Runs the first matching arm from top to bottom. Inside `to` functions, `-> <expr>` returns immediately (just like `check`), while `-> <stmt>` executes (`say`, variable updates, or `-> end` inside `loop`). `else` is optional.
-- **Expression form (`res = match <text> ... end`)**: Produces a value; an `else` branch (`else -> <expr>` or `else\n  ...\n  <expr>\nend`) is mandatory on `text`.
-- **List sieve & transform (`res = match <lines> ... end` or trailing `match <lines> ... end` in `to`)**: Iterates all `text` items (`it` and `it.index`), applies the first matching arm, and produces a homogeneous result `list`. `else` is optional (unmatched lines are skipped).
-- **Placeholders & rules**: `{name}` (`0+` runes, minimal left-to-right match), `{...}` wildcard, `{name: N}` fixed rune width (`N >= 1`), `{name as number|<Union>}` typed capture (falls through on mismatch), and single-quoted `'...'` for 1:1 literal matching with zero placeholder parsing. Repeated names (`"<{tag}>{body}</{tag}>"`, `"{n as number}:{n}"`) enforce structural equality and inherit the first type. Adjacent variable-length placeholders without a delimiter or `: N` are a compile error.
-
-```ease
-def LogLevel = "INFO" | "WARN" | "ERR"
-
-def LogEntry
-    line_no = 0
-    level   = "INFO" | "WARN" | "ERR"
-    msg     = ""
-end
-
-to parse_entries lines
-    match lines
-        "[{lvl as LogLevel}] {msg} ({...})" -> LogEntry with line_no = it.index + 1, level = lvl, msg = msg
+        sc = screen.scene with background = "midnight", shapes = shapes
+        raw = screen:present win sc
+        st = decode_json raw as screen.frame_state
+        check st.status is "closed" -> "closed"
     end
 end
 
-entries = parse_entries (list "[INFO] booted (2ms)", "debug noise", "[ERR] disk full (9ms)")
-```
-
-### Safe Type Conversion Fallbacks (`as <type> or <fallback>`)
-
-For untrusted scalar inputs or lists, add an optional `or <fallback>` right after `as number`, `as text`, or `as <union>`:
-
-- Bare `raw as number` and `raw as <union>` remain strict and raise `RuntimeError` on invalid input.
-- With `or <fallback>`, valid conversions keep their value, while invalid scalars return the **lazily evaluated** `<fallback>` (`ask "Port?" as number or 8080`, `raw as level or "INFO"`).
-- Batch list casts (`lines as number or 0`, `lines as level or "INFO"`) convert each valid element and substitute the memoized fallback for failing elements — without masking `TypeError`s in `<fallback>` (verified statically to match the target type/union).
-- Record contracts (`as <def>`), record-only unions, `load ... as <mode>`, `bool`, `csv`, and `bytes` reject `or` fallbacks statically.
-
-```ease
-def HttpCode = 200 | 404 | 500
-
-port = "bad" as number or 8080
-code = "404" as HttpCode or 200
-cleaned = (list "10", "oops", "25") as number or 0
-say "{port}|{code}|{sum cleaned}"
-```
-
-### Data-Parallel Workers (`swarm loop`)
-
-Use `swarm loop <iterable> ... end` (or `swarm loop range <start> <end> ... end`) to transform every element in parallel using isolated workers while preserving deterministic `0 .. N-1` order:
-
-- **Isolated & race-free:** Outer variables are strictly read-only, shared lists are frozen against concurrent mutation, `say` output is buffered per worker and flushed in `0 .. N-1` order, and `ask` is disallowed inside `swarm loop`.
-- **Worker guards & errors:** `check <cond> -> <expr>` and `match` return early from the current worker iteration (`-> end` is disallowed directly inside `swarm loop`). If multiple workers fail, the error with the smallest `it.index` is reported deterministically.
-- **Expression or statement:** Assign the homogeneous result list (`costs = swarm loop orders ... end`), return it implicitly at the end of a `to` function, wrap `(swarm loop ... end)` in parentheses for postfix `where`/calls, or use it as a statement for parallel side effects.
-
-```ease
-to squares_over_ten n
-    (swarm loop range 1 n
-        check it <= 3 -> 0
-        it * it
-    end) where it > 10
+to watch_window win events
+    screen:open win events
+    spawn paint_hotel win
+    take events
+        check it.kind is "key" and it.key is "escape" -> close events
+        check it.kind is "close" -> end
+    end
+    "Shift ended"
 end
 
-say squares_over_ten 5
-```
-
-### Background Workers & Typed Inboxes (`spawn`, `inbox`, `put`, `take`, `close`)
-
-For event-driven and streaming tasks, launch synchronous `to` functions concurrently in the background with `spawn` and communicate exclusively through typed FIFO `inbox`es (no shared mutable state):
-
-- `ch = inbox as <type>` creates a buffered typed inbox (`text`, `number`, `def` record, or union).
-- `spawn fn arg1 arg2` (or `spawn mod:fn arg1`) starts the call in a background worker (`forkWorker`, frozen arguments, read-only globals). The main program waits for all spawned workers on exit (`WaitWorkers`) and aborts blocked inboxes cleanly if a worker fails or `Close()` runs.
-- `put ch val` freezes `val` and sends it into `ch` (putting into a closed inbox raises `RuntimeError`).
-- `take ch ... end` receives messages in FIFO order into `it` (with full static record/union inference) and `it.index`, exiting automatically once `ch` is closed and drained (or early via `check <cond> -> end`).
-- `close ch` closes an inbox idempotently.
-
-```ease
-def Job
-    id = 0
-end
-
-to produce jobs
-    put jobs (Job with id = 1)
-    put jobs (Job with id = 2)
-    close jobs
-end
-
-jobs = inbox as Job
-spawn produce jobs
-
-take jobs
-    say "job #{it.index}: {it.id}"
+test "window shuts down cleanly on simulated close event"
+    win = screen.screen with width = 800, height = 560, title = "Midnight Inn", fps = 60
+    events = inbox as screen.event
+    watch_window win events is "Shift ended"
 end
 ```
 
-### TCP & HTTP Servers (`import network`, `inbox`-driven)
-
-`network` provides `inbox`-driven TCP and HTTP server primitives alongside `network:fetch` / `network:send`:
-
-- `network:serve_http port requests` (`port = 0` picks a free OS port; `--check` mode returns `0`; closing `requests` closes the listener)
-- `network:reply_text req status body` / `network:reply_json req status data` (writes HTTP/1.1 response with UTF-8 byte `Content-Length` and closes the request connection idempotently)
-- `network:serve_tcp port clients` (pushes `network.tcp_client` records with `id`, `remote`, and `lines: inbox as text`; closing `clients` closes the listener, closing `client.lines` closes the connection)
-- `network:tcp_send client msg` (writes raw text to an open `tcp_client`)
-
-See [`examples/07_http_server.ease`](examples/07_http_server.ease) for a full concurrent HTTP server using `inbox`, `spawn`, `match`, and `swarm loop`.
+Notice how nothing new had to be invented for graphics:
+- **`fps = 60` (or `"unlimited"`):** The painter sets `fps = 60` once on `screen.screen`, then advances the lantern directly with `it.index` — no delta-time math, and `"unlimited"` unlocks VSync/FPS whenever needed.
+- **`events = inbox as screen.event`:** Clicking the window close button (`X`) puts `"close"` into `events` and closes it; pressing `Escape` calls `close events`, which closes the OS window on the next tick.
+- **Headless `--check` & `ease test`:** In CI or headless tests, `screen:open` fires deterministic sample events (`"key"`, `"click"`, `"close"`) and closes `events` after 3 frames so graphics programs never hang automated test suites.
 
 ---
 
-## Why Ease Works Well for AI Agents
+## Try It in 30 Seconds
 
-Ease pairs a tiny, unambiguous grammar with [`llms.txt`](llms.txt) so models can hold the entire language specification in context:
-
-- **−54.6 % generated code vs. Python** across 36 benchmark tasks.
-- **100 % `pass@1` accuracy** when prompted with `llms.txt`.
-- **Single-command machine feedback:** `ease check --json`, `ease test --json`, `ease ast --json`, and `ease lsp` catch syntax, type, exhaustiveness, and assertion failures deterministically.
-
----
-
-## Built-in Verbs
-
-| Built-in | Behavior |
-| :--- | :--- |
-| `say expr` | Prints formatted value to `stdout` |
-| `ask prompt` | Reads one UTF-8 line from `stdin` (use `ask ""` for empty prompt) |
-| `count xs` | Returns rune length of `text` or element count of `list` |
-| `type val` | Returns runtime type or `def` blueprint name as `text` |
-| `range start end` | Returns inclusive `number` list `[start .. end]` (empty if `start > end`) |
-| `append xs item_or_list` | Returns a new list with an item or compatible list appended |
-| `slice xs start end` | Returns 0-based `[start:end)` clamped slice of `list` or UTF-8 `text` (by runes) |
-| `sum xs` / `avg xs` / `sort xs` | Numeric aggregations (`sum`, `avg`) and ascending sort (`number`/`text` lists) |
-| `split txt sep` / `join items sep` | Splits `text` into `list` of `text` (or runes for `""`) / joins `text` list |
-| `trim txt` / `upper txt` / `lower txt` | Unicode whitespace trimming and case conversion |
-| `replace txt old new` | Replaces all non-empty `old` occurrences with `new` in `text` |
-| `contains txt sub` | Condition verb (for `check`, `where`, `test`) checking substring membership |
-| `abs n` / `floor n` / `round n` / `min a b` / `max a b` | Numeric math helpers |
-| `fields rec` | Returns field names in declaration order for a `def` record or `map` |
-| `decode_json txt` / `encode_json val` | Parses JSON `text` / encodes values to JSON `text` |
-| `load path [as text\|csv\|bytes]` | Reads UTF-8/NFC `text`, uniform `csv` `map` list, or `0..255` byte list |
-| `save path data` | Writes UTF-8 `text` or `0..255` byte list, returning written byte count |
-| `put box val` | Sends a typed, isolated value into an `inbox` |
-| `close box` | Closes an `inbox` idempotently so `take` exits once drained |
-| `fail msg` | Raises an explicit `RuntimeError` |
-
----
-
-## Formal Grammar (EBNF)
-
-The grammar below matches [`internal/ease/lexer.go`](internal/ease/lexer.go) and [`internal/ease/parser.go`](internal/ease/parser.go).
-
-### Lexical Structure
-
-```ebnf
-WHITESPACE    ::= ( " " | "\t" | "\r" )+            (* skipped *)
-COMMENT       ::= "#" { ANY_CHAR - "\n" }           (* skipped *)
-NL            ::= "\n"+
-
-LETTER        ::= UNICODE_LETTER | "_"
-DIGIT         ::= [0-9]
-IDENT         ::= LETTER { LETTER | DIGIT }         (* excluding reserved keywords *)
-
-NUMBER        ::= [ "-" ] DIGIT+ [ "." DIGIT+ ]    (* "-" directly before a digit is an atomic negative literal; use "- " for subtraction *)
-STRING        ::= '"' { CHAR - ('"' | "\n" | "{" | "\\") | ESCAPE } '"'
-RAW_STRING    ::= "'" { CHAR - ("'" | "\n") } "'"   (* 1:1 literal: no interpolation and no escapes *)
-INTERP_STRING ::= '"' { CHAR - ('"' | "\n" | "\\") | ESCAPE | "{" EXPR_TEXT "}" } '"'
-ESCAPE        ::= "\\" ( "n" | "t" | '"' | "\\" | "{" )
-```
-
-### Reserved Keywords & Operators
-
-```text
-Keywords:
-  to  import  def  with  where  end  test  check  is
-  say  as  else  loop  swarm  spawn  inbox  take  match
-  and  or  not  text  number  list
-
-Operators & Punctuation:
-  ->  (  )  ,  .  :  |  =  <  <=  >  >=  +  -  *  /  %
-```
-
-### Program, Declarations & Statements
-
-```ebnf
-program        ::= [NL] { top_item [NL] } EOF
-
-top_item       ::= import_decl
-                 | func_decl
-                 | def_decl
-                 | top_test_blk
-                 | stmt
-
-import_decl    ::= "import" ( IDENT [ "as" IDENT ] | STRING "as" IDENT ) stmt_end
-
-func_decl      ::= "to" IDENT { IDENT } ( NL | &"end" )
-                   { stmt [NL] } "end" stmt_end
-
-def_decl       ::= "def" IDENT "=" expr { "|" expr } stmt_end
-                 | "def" IDENT NL { field_decl [NL] } "end" stmt_end
-field_decl     ::= IDENT "=" expr { "|" expr } stmt_end
-
-top_test_blk   ::= "test" [STRING] ( NL | &"end" )
-                   { test_item [NL] } "end" stmt_end
-
-stmt           ::= "say" expr stmt_end
-                 | "end" stmt_end
-                 | loop_stmt
-                 | swarm_loop stmt_end
-                 | spawn_stmt
-                 | take_stmt
-                 | check_guard
-                 | match_stmt
-                 | assign_stmt
-                 | expr stmt_end
-
-assign_stmt    ::= IDENT "=" expr stmt_end
-loop_stmt      ::= "loop" [ "range" unary unary | expr ] NL { stmt [NL] } "end" stmt_end
-spawn_stmt     ::= "spawn" call_expr stmt_end
-take_stmt      ::= "take" expr NL { stmt [NL] } "end" stmt_end
-
-check_action   ::= "end" stmt_end | stmt
-check_guard    ::= "check" expr "->" check_action
-                 | "check" NL { check_rule [NL] } [ "else" ( "->" check_action | NL { stmt [NL] } ) ] "end" stmt_end
-check_rule     ::= expr ( "->" check_action | stmt_end )
-
-match_stmt      ::= "match" expr NL match_stmt_arm { [NL] match_stmt_arm } [ [NL] match_stmt_else ] NL "end" stmt_end
-match_stmt_arm  ::= match_pattern "->" check_action
-match_stmt_else ::= "else" ( "->" check_action | NL { stmt [NL] } )
-
-test_item      ::= loop_stmt
-                 | spawn_stmt
-                 | take_stmt
-                 | "say" expr stmt_end
-                 | assign_stmt
-                 | expr "->" [NL] { test_item [NL] } "end" stmt_end
-                 | expr "is" ["not"] "error" stmt_end
-                 | expr "is" ["not"] ( "text" | "number" | "list" ) stmt_end
-                 | expr "is" ["not"] expr stmt_end
-                 | expr stmt_end
-
-stmt_end       ::= NL | EOF | &("end" | "else")
-```
-
-### Expressions (Precedence Low to High)
-
-```ebnf
-expr           ::= or_expr
-or_expr        ::= and_expr { "or" and_expr }
-and_expr       ::= not_expr { "and" not_expr }
-not_expr       ::= "not" not_expr | comparison
-
-comparison     ::= term { cmp_op term | is_op ( type_kw | term ) }
-cmp_op         ::= "<" | "<=" | ">" | ">="
-is_op          ::= "is" ["not"]
-type_kw        ::= "text" | "number" | "list"
-
-term           ::= factor { ( "+" | "-" ) factor }
-factor         ::= unary  { ( "*" | "/" | "%" ) unary }
-unary          ::= "-" unary | postfix
-
-postfix        ::= primary { "." IDENT
-                           | "." INT_PATH
-                           | "." "(" expr ")"
-                           | ":" IDENT call_args
-                           | with_clause
-                           | where_clause
-                           | "as" cast_type [ "or" unary ]
-                           | call_args }
-
-with_clause    ::= "with" NL { with_field stmt_end [NL] } "end"
-                 | "with" with_field { "," with_field }
-with_field     ::= IDENT "=" expr
-
-where_clause   ::= "where" NL { expr stmt_end [NL] } "end"
-                 | "where" expr
-
-cast_type      ::= "text" | "number" | "csv" | "bytes" | IDENT [ "." IDENT ]
-call_args      ::= unary{k}
-
-primary         ::= NUMBER | STRING | RAW_STRING | INTERP_STRING | IDENT | "(" expr ")" | list_expr | inbox_expr | match_expr | swarm_loop
-inbox_expr      ::= "inbox" "as" list_elem_type
-swarm_loop      ::= "swarm" "loop" ( "range" unary unary | expr ) NL { stmt [NL] } "end"
-match_expr      ::= "match" expr NL match_expr_arm { [NL] match_expr_arm } [ [NL] match_expr_else ] NL "end"
-match_expr_arm  ::= match_pattern "->" expr stmt_end
-match_expr_else ::= "else" ( "->" expr stmt_end | NL { stmt [NL] } expr stmt_end )
-match_pattern   ::= STRING | RAW_STRING | INTERP_STRING
-                    (* INTERP_STRING placeholders: {...} | {IDENT [":" INT] ["as" type]} *)
-list_expr      ::= "list" "as" list_elem_type [ "with" NL { with_field { "," with_field } stmt_end [NL] } "end" ]
-                 | "list" expr { "," expr }
-list_elem_type ::= "text" | "number" | IDENT [ "." IDENT ]
-```
-
----
-
-## Running Tests & Project Layout
+Build the CLI with Go (version in [`go.mod`](go.mod)) and run the full animated Midnight Hotel example:
 
 ```bash
-go vet ./...
-go test -v ./...
-for f in tests/*.ease; do ./ease test "$f"; done
-./ease test examples/05_network.ease
-./ease test examples/07_http_server.ease
-./ease run examples/06_window.ease --check
-./ease run examples/07_http_server.ease --check
+go build -o ease ./cmd/ease
+./ease test examples/08_haunted_hotel.ease
+./ease run examples/08_haunted_hotel.ease
+./ease build examples/07_http_server.ease -o hotel-api
 ```
 
-```text
-cmd/ease/           CLI entrypoint
-internal/ease/      Lexer, Parser, AST, Typechecker, Evaluator, Screen, Bundle & Stdlib
-examples/           Executable examples and reference specifications
-tests/              Language feature test files (01–13)
-.github/workflows/  GitHub Actions CI for Ubuntu Linux and Windows
-```
+On Windows PowerShell, build `.\ease.exe .\cmd\ease`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for Linux graphics library prerequisites (required by the bundled Ebitengine window backend), the full CLI command reference, and local stdlib overrides.
 
-See [`SECURITY.md`](SECURITY.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`LICENSE`](LICENSE).
+---
+
+## Where to Go Next
+
+- [`llms.txt`](llms.txt) — Complete single-page Ease language specification (ideal for humans & AI coding agents)
+- [`examples/`](examples/) — Runnable programs, including [`07_http_server.ease`](examples/07_http_server.ease), [`08_haunted_hotel.ease`](examples/08_haunted_hotel.ease), and [`06_window.ease`](examples/06_window.ease)
+- [`README_VSCODE.md`](README_VSCODE.md) — VS Code extension, syntax highlighting, and built-in `ease lsp` language server
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — Repository layout, build prerequisites, full CLI & test commands, and language design invariants
+- [`LICENSE`](LICENSE) — Project license
