@@ -72,7 +72,6 @@ func (ev *Evaluator) forkWorker(outBuf io.Writer) *Evaluator {
 		rt:             ev.rt,
 		isChild:        true,
 		inReader:       nil,
-		funcs:          ev.funcs,
 		modules:        make(map[string]*Evaluator, len(ev.modules)),
 		global:         ev.global,
 		callDepth:      0,

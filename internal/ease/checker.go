@@ -348,8 +348,10 @@ func (r *testRunner) buildVarsDetail(exprs []Expr, suffix string, env *Env) stri
 		}
 		switch ex := e.(type) {
 		case *IdentExpr:
-			if _, isFunc := r.ev.funcs[ex.Name]; isFunc {
-				return
+			if r.ev.global != nil {
+				if _, isFunc := r.ev.global.LookupFunc(ex.Name); isFunc {
+					return
+				}
 			}
 			if _, isBuiltin := builtinArities[ex.Name]; isBuiltin {
 				return

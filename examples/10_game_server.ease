@@ -1,0 +1,141 @@
+import network
+
+# Multiplayer room & chat server designed for `ease serve` hot-code-swapping.
+# Try:
+#   ease serve examples/10_game_server.ease --watch --debug
+# Then edit `to step_world state ev` (or `chat_prefix`) and save: live state inside `run_world` stays intact.
+
+def event_kind = "move" | "chat" | "status"
+
+def room_event
+    kind    = event_kind
+    player  = "guest"
+    x       = 0
+    y       = 0
+    body    = ""
+    has_req = "no" | "yes"
+    req     = network.http_request
+end
+
+def world_state
+    moves       = 0
+    messages    = 0
+    last_x      = 0
+    last_y      = 0
+    last_player = ""
+    last_chat   = ""
+end
+
+to step_world state ev
+    check ev.kind is "status" -> state
+    check ev.kind is "move" -> state with
+        moves = state.moves + 1
+        last_x = ev.x
+        last_y = ev.y
+        last_player = ev.player
+    end
+    state with
+        messages = state.messages + 1
+        last_player = ev.player
+        last_chat = ev.body
+    end
+end
+
+to run_world world
+    state = world_state
+    take world
+        state = step_world state it
+        check it.has_req is "yes" -> ignored = network:reply_json it.req 200 state
+    end
+    state
+end
+
+to route_http req world
+    match "{req.method} {req.path}"
+        "GET /status" -> put world (room_event with kind = "status", has_req = "yes", req = req)
+        "POST /chat"  -> put world (room_event with kind = "chat", player = "http", body = req.body, has_req = "yes", req = req)
+        else          -> network:reply_text req 404 "Not Found"
+    end
+end
+
+to accept_http http_reqs world
+    take http_reqs
+        spawn route_http it world
+    end
+end
+
+to handle_tcp_client client world
+    network:tcp_send client "WELCOME TO ROOM 1\n"
+    take client.lines
+        match it
+            "QUIT"                -> close client.lines
+            "MOVE {x as number} {y as number}" -> put world (room_event with kind = "move", player = client.remote, x = x, y = y)
+            "CHAT {msg}"          -> put world (room_event with kind = "chat", player = client.remote, body = msg)
+            else                  -> network:tcp_send client "ERR: use MOVE x y | CHAT msg | QUIT\n"
+        end
+    end
+end
+
+to accept_tcp tcp_clients world
+    take tcp_clients
+        spawn handle_tcp_client it world
+    end
+end
+
+to close_all a b c
+    close a
+    close b
+    close c
+    0
+end
+
+to start_game_server world http_reqs tcp_clients http_port tcp_port
+    bound_http = network:serve_http http_port http_reqs
+    bound_tcp  = network:serve_tcp tcp_port tcp_clients
+
+    check bound_http is 0 -> close_all http_reqs tcp_clients world
+
+    spawn run_world world
+    spawn accept_http http_reqs world
+    spawn accept_tcp tcp_clients world
+    say "Game server ready: HTTP http://127.0.0.1:{bound_http}, TCP 127.0.0.1:{bound_tcp}"
+    bound_http
+end
+
+test "game server handles parallel HTTP chat/status and TCP inbox cleanly"
+    world       = inbox as room_event
+    http_reqs   = inbox as network.http_request
+    tcp_clients = inbox as network.tcp_client
+
+    http_port = network:serve_http 0 http_reqs
+    tcp_port  = network:serve_tcp 0 tcp_clients
+    http_port > 0
+    tcp_port > 0
+
+    spawn run_world world
+    spawn accept_http http_reqs world
+    spawn accept_tcp tcp_clients world
+
+    # Simulate a TCP player move entering the central world inbox directly, plus HTTP requests.
+    put world (room_event with kind = "move", player = "ada", x = 14, y = 28)
+
+    api = network.network with url = "http://127.0.0.1:{http_port}"
+    post_res = network:send api "/chat" "hello world"
+    status_res = network:fetch api "/status"
+
+    decoded = decode_json status_res as world_state
+    decoded.moves is 1
+    decoded.messages is 1
+    decoded.last_x is 14
+    decoded.last_y is 28
+
+    close http_reqs
+    close tcp_clients
+    close world
+end
+
+world       = inbox as room_event
+http_reqs   = inbox as network.http_request
+tcp_clients = inbox as network.tcp_client
+
+start_game_server world http_reqs tcp_clients 8080 9000

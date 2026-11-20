@@ -235,10 +235,11 @@ Build the CLI with Go (version in [`go.mod`](go.mod)) and run the full animated 
 go build -o ease ./cmd/ease
 ./ease test examples/08_haunted_hotel.ease
 ./ease run examples/08_haunted_hotel.ease
+./ease serve examples/10_game_server.ease --watch --debug
 ./ease build examples/07_http_server.ease -o hotel-api
 ```
 
-On Windows PowerShell, build `.\ease.exe .\cmd\ease`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for Linux graphics library prerequisites (required by the bundled Ebitengine window backend), the full CLI command reference, and local stdlib overrides.
+Use `ease serve` for long-running servers with crash-isolated workers, `--watch` live `to`-function hot-code-swapping (keeping in-flight `inbox` queues intact), and an opt-in loopback debug socket (`127.0.0.1:7888`). On Windows PowerShell, build `.\ease.exe .\cmd\ease`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for Linux graphics library prerequisites (required by the bundled Ebitengine window backend), the full CLI command reference, and local stdlib overrides.
 
 ---
 

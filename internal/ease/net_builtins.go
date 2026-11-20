@@ -84,6 +84,7 @@ func (ev *Evaluator) execNetServeHTTP(args []Value, line, col int) (Value, error
 	if ev.headlessNet || requests.IsClosed() || ev.rt.isAborted() {
 		return float64(0), nil
 	}
+	port = ev.rt.applyPortOverride(port)
 
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ev.rt.ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -96,7 +97,7 @@ func (ev *Evaluator) execNetServeHTTP(args []Value, line, col int) (Value, error
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 		actualPort = tcpAddr.Port
 	}
-	lh := ev.rt.registerListener(ln)
+	lh := ev.rt.registerListener(ln, "http")
 	if lh == nil {
 		return float64(0), nil
 	}
@@ -244,6 +245,7 @@ func (ev *Evaluator) execNetServeTCP(args []Value, line, col int) (Value, error)
 	if ev.headlessNet || clients.IsClosed() || ev.rt.isAborted() {
 		return float64(0), nil
 	}
+	port = ev.rt.applyPortOverride(port)
 
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ev.rt.ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -256,7 +258,7 @@ func (ev *Evaluator) execNetServeTCP(args []Value, line, col int) (Value, error)
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 		actualPort = tcpAddr.Port
 	}
-	lh := ev.rt.registerListener(ln)
+	lh := ev.rt.registerListener(ln, "tcp")
 	if lh == nil {
 		return float64(0), nil
 	}

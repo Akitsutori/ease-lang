@@ -19,13 +19,16 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── typecheck.go             # Static type/arity checks, safe `or` fallbacks, return consistency & flow checking
 │   ├── typecheck_unions.go      # Union type resolution, 3 compile-time guardrails, narrowing & exhaustiveness
 │   ├── checker.go               # Data-driven soft-assert test runner (`test` blocks, `is error`, context reports)
-│   ├── eval.go                  # Tree-walking evaluator, thread-safe `Env`, and statement/expression execution
+│   ├── eval.go                  # Tree-walking evaluator, thread-safe hot-swappable `Env`, and statement execution
 │   ├── values.go                # Runtime value representations, formatting, freezing & structural equality
 │   ├── match.go                 # Full-string pattern matching and typed extraction engine (`match`)
 │   ├── swarm.go                 # Bounded data-parallel `swarm loop` worker pool and deterministic ordering
-│   ├── inbox.go                 # Typed concurrent FIFO `inbox`, `spawn` workers, `take`, `close` hooks & lifecycle cleanup
-│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, file I/O, HTTP/screen dispatch)
+│   ├── inbox.go                 # Typed concurrent FIFO `inbox`, `spawn` workers, service isolation & lifecycle cleanup
+│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, file I/O, HTTP/screen/random dispatch)
 │   ├── net_builtins.go          # `inbox`-driven HTTP & TCP server host bridges (`serve_http`, `reply_*`, `serve_tcp`, `tcp_send`)
+│   ├── random_builtins.go       # Goroutine-safe randomness bridges via `math/rand/v2` (`roll`, `pick`, `shuffle`)
+│   ├── service.go               # `ease serve` supervisor, fail-fast checks, `--watch` hot-code-swap & graceful shutdown
+│   ├── debug_server.go          # Opt-in `127.0.0.1` loopback debug socket (`:status`, `:funcs`, `:reload`, live eval)
 │   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, and JSON-to-Ease validation
 │   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
@@ -104,6 +107,8 @@ Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 
 ```text
 ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (optionally running tests first, tracing, or emitting JSON)
+ease serve <file.ease> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]
+                                                     Run a persistent service with crash-isolated workers, live hot-reload & opt-in loopback debug port
 ease check <file.ease> [--json]                      Parse and type-check without executing
 ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions
 ease build <file.ease> [-o <out>]                    Package an Ease program into a standalone executable

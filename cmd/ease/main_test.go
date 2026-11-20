@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"ease-lang/internal/ease"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestReplMultilineAndDeclarations(t *testing.T) {
@@ -213,5 +217,88 @@ func TestCmdBuildMultiFileCLI(t *testing.T) {
 	}
 	if bundle.Entry != "main.ease" || len(bundle.Files) != 2 {
 		t.Fatalf("unexpected CLI bundle: entry=%q files=%d", bundle.Entry, len(bundle.Files))
+	}
+}
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (sb *syncBuf) Write(p []byte) (int, error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.b.Write(p)
+}
+
+func (sb *syncBuf) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.b.String()
+}
+
+func TestCmdServeLifecycleAndFlags(t *testing.T) {
+	dir := t.TempDir()
+	oneShot := filepath.Join(dir, "oneshot.ease")
+	if err := os.WriteFile(oneShot, []byte("say 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out1, err1 bytes.Buffer
+	if code := cmdServeWithContext(context.Background(), []string{oneShot}, &out1, &err1); code != 1 {
+		t.Fatalf("expected exit code 1 for one-shot script, got %d", code)
+	}
+	if !strings.Contains(err1.String(), "no active listeners or background workers") {
+		t.Fatalf("unexpected fail-fast error: %q", err1.String())
+	}
+
+	srvFile := filepath.Join(dir, "svc.ease")
+	src := `import network
+to handle requests
+    take requests
+        network:reply_text it 200 "ok"
+    end
+end
+requests = inbox as network.http_request
+p = network:serve_http 0 requests
+spawn handle requests
+`
+	if err := os.WriteFile(srvFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out2, err2 syncBuf
+	done := make(chan int, 1)
+	go func() {
+		done <- cmdServeWithContext(ctx, []string{srvFile, "--watch", "--debug-port", strconv.Itoa(0), "--json"}, &out2, &err2)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	started := false
+	for time.Now().Before(deadline) {
+		if strings.Contains(out2.String(), `"event": "started"`) {
+			started = true
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !started {
+		cancel()
+		t.Fatalf("timed out waiting for started JSON log, got out=%q err=%q", out2.String(), err2.String())
+	}
+	if !strings.Contains(out2.String(), `"debug_addr": "127.0.0.1:`) {
+		cancel()
+		t.Fatalf("expected loopback debug_addr in started JSON log, got %q", out2.String())
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("expected clean exit code 0 on context cancel, got %d (err=%q)", code, err2.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("cmdServeWithContext did not shut down within 3s")
 	}
 }

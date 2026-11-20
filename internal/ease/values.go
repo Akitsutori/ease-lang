@@ -29,7 +29,6 @@ type MapValue struct {
 type ModuleValue struct {
 	Name   string
 	Env    *Env
-	Funcs  map[string]*FuncDecl
 	Source string
 }
 

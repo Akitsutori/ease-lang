@@ -2,14 +2,19 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"ease-lang/internal/ease"
 )
@@ -67,6 +72,8 @@ func runCLI() (exitCode int) {
 	switch cmd {
 	case "run":
 		return cmdRun(os.Args[2:])
+	case "serve":
+		return cmdServe(os.Args[2:])
 	case "check":
 		return cmdCheck(os.Args[2:])
 	case "test":
@@ -355,6 +362,149 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	if jsonMode {
 		writeJSON(out, jsonRunResult{OK: true, File: file})
 	}
+	return 0
+}
+
+func cmdServe(args []string) int {
+	return cmdServeWithContext(context.Background(), args, os.Stdout, os.Stderr)
+}
+
+func cmdServeWithContext(parentCtx context.Context, args []string, out, errOut io.Writer) int {
+	var file string
+	portOverride := 0
+	watchMode := false
+	debugEnabled := false
+	debugPort := 7888
+	debugPortExplicit := false
+	jsonMode := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--watch", "-w":
+			watchMode = true
+		case "--debug", "-d":
+			debugEnabled = true
+		case "--json":
+			jsonMode = true
+		case "--port", "-p":
+			if i+1 >= len(args) {
+				fmt.Fprintln(errOut, "Missing value after --port")
+				return 2
+			}
+			i++
+			p, err := strconv.Atoi(args[i])
+			if err != nil || p <= 0 || p > 65535 {
+				fmt.Fprintf(errOut, "Invalid --port value %q (must be 1..65535)\n", args[i])
+				return 2
+			}
+			portOverride = p
+		case "--debug-port":
+			if i+1 >= len(args) {
+				fmt.Fprintln(errOut, "Missing value after --debug-port")
+				return 2
+			}
+			i++
+			dp, err := strconv.Atoi(args[i])
+			if err != nil || dp < 0 || dp > 65535 {
+				fmt.Fprintf(errOut, "Invalid --debug-port value %q (must be 0..65535)\n", args[i])
+				return 2
+			}
+			debugEnabled = true
+			debugPort = dp
+			debugPortExplicit = true
+		default:
+			if strings.HasPrefix(arg, "--port=") {
+				val := strings.TrimPrefix(arg, "--port=")
+				p, err := strconv.Atoi(val)
+				if err != nil || p <= 0 || p > 65535 {
+					fmt.Fprintf(errOut, "Invalid --port value %q (must be 1..65535)\n", val)
+					return 2
+				}
+				portOverride = p
+			} else if strings.HasPrefix(arg, "--debug-port=") {
+				val := strings.TrimPrefix(arg, "--debug-port=")
+				dp, err := strconv.Atoi(val)
+				if err != nil || dp < 0 || dp > 65535 {
+					fmt.Fprintf(errOut, "Invalid --debug-port value %q (must be 0..65535)\n", val)
+					return 2
+				}
+				debugEnabled = true
+				debugPort = dp
+				debugPortExplicit = true
+			} else if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(errOut, "Unknown flag %q\n", arg)
+				return 2
+			} else if file == "" {
+				file = arg
+			} else {
+				fmt.Fprintf(errOut, "Unexpected extra argument %q\n", arg)
+				return 2
+			}
+		}
+	}
+
+	if debugEnabled && !debugPortExplicit {
+		debugPort = 7888
+	}
+
+	if file == "" {
+		fmt.Fprintln(errOut, "Usage: ease serve <file.ease> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]")
+		return 2
+	}
+
+	svc, err := ease.StartService(ease.ServiceOptions{
+		FilePath:     file,
+		PortOverride: portOverride,
+		Watch:        watchMode,
+		DebugEnabled: debugEnabled,
+		DebugPort:    debugPort,
+		JSONLogs:     jsonMode,
+		Out:          out,
+		ErrOut:       errOut,
+	})
+	if err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
+		}
+		return 1
+	}
+
+	listeners := svc.Listeners()
+	if jsonMode {
+		writeJSON(out, map[string]any{
+			"event":      "started",
+			"file":       file,
+			"listeners":  listeners,
+			"workers":    svc.ActiveWorkers(),
+			"watch":      watchMode,
+			"debug_addr": svc.DebugAddr(),
+		})
+	} else {
+		fmt.Fprintf(out, "Serving %s (%d listener(s), %d worker(s))\n", file, len(listeners), svc.ActiveWorkers())
+		for _, l := range listeners {
+			fmt.Fprintf(out, "  listening (%s): %s\n", l.Kind, l.Addr)
+		}
+		if watchMode {
+			fmt.Fprintln(out, "  hot-reload watch active (300ms)")
+		}
+		if addr := svc.DebugAddr(); addr != "" {
+			fmt.Fprintf(out, "  debug socket: %s (loopback opt-in)\n", addr)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	if jsonMode {
+		writeJSON(out, map[string]any{"event": "stopping", "file": file})
+	} else {
+		fmt.Fprintln(out, "Shutting down service...")
+	}
+	_ = svc.ShutdownService(2 * time.Second)
 	return 0
 }
 
@@ -712,6 +862,8 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Usage:")
 	fmt.Println("  ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (with optional tests/trace/JSON)")
+	fmt.Println("  ease serve <file.ease> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]")
+	fmt.Println("                                                       Run a persistent service with hot-reload and opt-in loopback debug port")
 	fmt.Println("  ease check <file.ease> [--json]                      Parse and type-check without executing")
 	fmt.Println("  ease test <file.ease> [--json] [--verbose] [--trace] Run all 'test' assertions")
 	fmt.Println("  ease build <file.ease> [-o <out>]                    Compile an Ease program into a standalone binary")

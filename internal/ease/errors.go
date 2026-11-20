@@ -53,3 +53,14 @@ func newError(stage string, line, col int, source, msg, hint string) *EaseError 
 		Source:  source,
 	}
 }
+
+// IsIncompleteBlockError reports whether a parse error indicates an unclosed multi-line block waiting for `end`.
+func IsIncompleteBlockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "missing 'end'") ||
+		strings.Contains(msg, "missing a closing 'end'") ||
+		strings.Contains(msg, "Expected 'end'")
+}

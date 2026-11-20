@@ -20,16 +20,122 @@ type binding struct {
 	isParam bool
 }
 
-// Env implements lexical scopes with mutability tracking (immutable `def` constants/params vs mutable bindings).
+// Env implements lexical scopes with mutability tracking (immutable `def` constants/params vs mutable bindings)
+// and a mutex-protected function table on the root scope for atomic hot-code-swapping.
 type Env struct {
 	mu             sync.RWMutex
 	parent         *Env
 	vars           map[string]binding
+	funcs          map[string]*FuncDecl
 	isFuncRoot     bool
 	isWorkerRoot   bool
 	assignedLocals map[string]bool
 	loopIndex      float64
 	hasLoopIndex   bool
+}
+
+// InboxStatus describes a named top-level inbox in a running service.
+type InboxStatus struct {
+	Name     string `json:"name"`
+	ElemType string `json:"elem_type"`
+	Buffered int    `json:"buffered"`
+	Closed   bool   `json:"closed"`
+}
+
+func (e *Env) SetFunc(name string, fn *FuncDecl) {
+	if e == nil || fn == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.funcs == nil {
+		e.funcs = make(map[string]*FuncDecl)
+	}
+	e.funcs[name] = fn
+	e.mu.Unlock()
+}
+
+func (e *Env) LookupFunc(name string) (*FuncDecl, bool) {
+	for cur := e; cur != nil; cur = cur.parent {
+		cur.mu.RLock()
+		fn, ok := cur.funcs[name]
+		cur.mu.RUnlock()
+		if ok {
+			return fn, true
+		}
+	}
+	return nil, false
+}
+
+func (e *Env) ListFuncs() []*FuncDecl {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	out := make([]*FuncDecl, 0, len(e.funcs))
+	for _, fn := range e.funcs {
+		out = append(out, fn)
+	}
+	e.mu.RUnlock()
+	slices.SortFunc(out, func(a, b *FuncDecl) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+// SwapDecls atomically replaces all function declarations and immutable def/union blueprints
+// on this Env without disturbing active variables, listeners, or inboxes.
+func (e *Env) SwapDecls(newFuncs map[string]*FuncDecl, newDecls map[string]Value) {
+	if e == nil {
+		return
+	}
+	copiedFuncs := make(map[string]*FuncDecl, len(newFuncs))
+	for k, fn := range newFuncs {
+		copiedFuncs[k] = fn
+	}
+	e.mu.Lock()
+	e.funcs = copiedFuncs
+	for k, v := range newDecls {
+		e.vars[k] = binding{val: v, mutable: false}
+	}
+	e.mu.Unlock()
+}
+
+// SnapshotInboxes returns status snapshots for all top-level InboxValue bindings in sorted name order.
+func (e *Env) SnapshotInboxes() []InboxStatus {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	var out []InboxStatus
+	for name, b := range e.vars {
+		if ib, ok := b.val.(*InboxValue); ok && ib != nil {
+			out = append(out, InboxStatus{
+				Name:     name,
+				ElemType: ib.ElemType,
+				Buffered: ib.Len(),
+				Closed:   ib.IsClosed(),
+			})
+		}
+	}
+	e.mu.RUnlock()
+	slices.SortFunc(out, func(a, b InboxStatus) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+// SnapshotBindings returns a shallow snapshot of current top-level variable/def bindings.
+func (e *Env) SnapshotBindings() map[string]Value {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	out := make(map[string]Value, len(e.vars))
+	for k, b := range e.vars {
+		out[k] = b.val
+	}
+	e.mu.RUnlock()
+	return out
 }
 
 func (env *Env) collectVisibleNames() []string {
@@ -51,10 +157,12 @@ func (env *Env) collectVisibleNames() []string {
 func (ev *Evaluator) collectCallableNames() []string {
 	seen := make(map[string]bool)
 	var names []string
-	for k := range ev.funcs {
-		if !seen[k] {
-			seen[k] = true
-			names = append(names, k)
+	if ev.global != nil {
+		for _, fn := range ev.global.ListFuncs() {
+			if !seen[fn.Name] {
+				seen[fn.Name] = true
+				names = append(names, fn.Name)
+			}
 		}
 	}
 	for k := range builtinArities {
@@ -75,7 +183,7 @@ func missingFieldHint(field string, available []string) string {
 }
 
 func NewEnv(parent *Env) *Env {
-	return &Env{parent: parent, vars: make(map[string]binding)}
+	return &Env{parent: parent, vars: make(map[string]binding), funcs: make(map[string]*FuncDecl)}
 }
 
 func NewFuncEnv(global *Env, assignedLocals map[string]bool) *Env {
@@ -254,7 +362,6 @@ type Evaluator struct {
 	rt             *runtimeLifecycle
 	isChild        bool
 	inReader       *bufio.Reader
-	funcs          map[string]*FuncDecl
 	modules        map[string]*Evaluator
 	global         *Env
 	callDepth      int
@@ -343,7 +450,6 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		ioMu:       &sync.Mutex{},
 		rt:         newRuntimeLifecycle(),
 		inReader:   bufio.NewReader(in),
-		funcs:      make(map[string]*FuncDecl),
 		modules:    make(map[string]*Evaluator),
 		global:     NewEnv(nil),
 		httpClient: &http.Client{},
@@ -388,14 +494,13 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		modVal := &ModuleValue{
 			Name:   alias,
 			Env:    modEv.global,
-			Funcs:  modEv.funcs,
 			Source: imp.ModuleSource,
 		}
 		ev.modules[alias] = modEv
 		ev.global.Define(alias, modVal, false)
 	}
 	for _, fn := range prog.Functions {
-		ev.funcs[fn.Name] = fn
+		ev.global.SetFunc(fn.Name, fn)
 	}
 	type declItem struct {
 		imported bool
@@ -1092,7 +1197,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			varHint := fmt.Sprintf("Define %q first with '%s = ...' or 'def %s = ...'.", e.Name, e.Name, e.Name)
 			var modMatches []string
 			for modAlias, modEv := range ev.modules {
-				if _, ok := modEv.funcs[e.Name]; ok {
+				if _, ok := modEv.global.LookupFunc(e.Name); ok {
 					modMatches = append(modMatches, fmt.Sprintf("%s:%s", modAlias, e.Name))
 				}
 			}
@@ -1385,7 +1490,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			return nil, err
 		}
 		if mv, ok := targetVal.(*ModuleValue); ok {
-			if _, isFunc := mv.Funcs[e.Field]; isFunc {
+			if _, isFunc := mv.Env.LookupFunc(e.Field); isFunc {
 				return nil, newError(
 					"RuntimeError",
 					e.Line,
@@ -2163,7 +2268,7 @@ func (ev *Evaluator) evalVectorArithmetic(op string, left, right Value, line, co
 }
 
 func (ev *Evaluator) callModuleFunction(name string, args []Value, line, col int) (Value, error) {
-	fn, ok := ev.funcs[name]
+	fn, ok := ev.global.LookupFunc(name)
 	if !ok {
 		return nil, newError(
 			"RuntimeError",
@@ -2182,7 +2287,7 @@ func (ev *Evaluator) callFunction(name string, args []Value, line, col int) (Val
 		return val, err
 	}
 
-	fn, ok := ev.funcs[name]
+	fn, ok := ev.global.LookupFunc(name)
 	if !ok {
 		fnHint := fmt.Sprintf("Define it with 'to %s [...] ... end' or check the spelling.", name)
 		if suggestion := closestTypeName(name, ev.collectCallableNames()); suggestion != "" {
@@ -2245,4 +2350,33 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 		return nil, err
 	}
 	return last, nil
+}
+
+// buildDeclValues evaluates `prog`'s function, def blueprint, and union declarations
+// in an isolated staging evaluator so hot-reload never mutates live state on error.
+func buildDeclValues(prog *Program, source string) (map[string]*FuncDecl, map[string]Value, error) {
+	staging := NewEvaluatorWithInput(source, prog, strings.NewReader(""), io.Discard)
+	defer staging.Close()
+	if staging.initErr != nil {
+		return nil, nil, staging.initErr
+	}
+	fnList := staging.global.ListFuncs()
+	funcsMap := make(map[string]*FuncDecl, len(fnList))
+	for _, fn := range fnList {
+		funcsMap[fn.Name] = fn
+	}
+	declsMap := make(map[string]Value)
+	for name, val := range staging.global.SnapshotBindings() {
+		switch tv := val.(type) {
+		case *RecordValue:
+			if tv != nil && tv.IsPrototype {
+				declsMap[name] = tv
+			}
+		case *UnionValue:
+			if tv != nil {
+				declsMap[name] = tv
+			}
+		}
+	}
+	return funcsMap, declsMap, nil
 }

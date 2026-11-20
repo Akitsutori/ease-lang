@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const defaultInboxCapacity = 64
@@ -52,6 +55,14 @@ func (ib *InboxValue) IsClosed() bool {
 	c := ib.closed
 	ib.mu.Unlock()
 	return c
+}
+
+// Len returns the current number of buffered messages queued in the inbox.
+func (ib *InboxValue) Len() int {
+	if ib == nil {
+		return 0
+	}
+	return len(ib.ch)
 }
 
 // Close closes the inbox idempotently so pending readers drain buffered messages and exit cleanly.
@@ -173,8 +184,17 @@ func (ib *InboxValue) Recv(ctx context.Context) (Value, bool, error) {
 	}
 }
 
+// ListenerInfo describes an active network listener registered in the runtime lifecycle.
+type ListenerInfo struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	Addr string `json:"addr"`
+}
+
 type netListenerHandle struct {
 	id     string
+	kind   string
+	addr   string
 	ln     net.Listener
 	mu     sync.Mutex
 	closed bool
@@ -249,6 +269,11 @@ type runtimeLifecycle struct {
 	netSeq           uint64
 	firstErr         error
 	closed           bool
+	serviceMode      bool
+	onWorkerError    func(error)
+	activeWorkers    atomic.Int64
+	portOverride     int
+	portOverrideUsed bool
 	screenMu         sync.Mutex
 	activeScreen     *screenSession
 	screenEvents     *InboxValue
@@ -295,11 +320,32 @@ func (rt *runtimeLifecycle) recordError(err error) {
 		return
 	}
 	rt.mu.Lock()
-	if rt.firstErr == nil {
+	serviceMode := rt.serviceMode
+	onErr := rt.onWorkerError
+	if !serviceMode && rt.firstErr == nil {
 		rt.firstErr = err
 	}
 	rt.mu.Unlock()
+	if serviceMode {
+		if onErr != nil {
+			onErr(err)
+		}
+		return
+	}
 	rt.abort()
+}
+
+func (rt *runtimeLifecycle) applyPortOverride(port int) int {
+	if rt == nil || port <= 0 {
+		return port
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.portOverride > 0 && !rt.portOverrideUsed {
+		rt.portOverrideUsed = true
+		return rt.portOverride
+	}
+	return port
 }
 
 func (rt *runtimeLifecycle) isAborted() bool {
@@ -312,9 +358,13 @@ func (rt *runtimeLifecycle) isAborted() bool {
 	return c
 }
 
-func (rt *runtimeLifecycle) registerListener(ln net.Listener) *netListenerHandle {
+func (rt *runtimeLifecycle) registerListener(ln net.Listener, kind string) *netListenerHandle {
 	if rt == nil || ln == nil {
 		return nil
+	}
+	addr := ""
+	if ln.Addr() != nil {
+		addr = ln.Addr().String()
 	}
 	rt.mu.Lock()
 	if rt.closed {
@@ -324,13 +374,42 @@ func (rt *runtimeLifecycle) registerListener(ln net.Listener) *netListenerHandle
 	}
 	rt.netSeq++
 	id := fmt.Sprintf("listener-%d", rt.netSeq)
-	h := &netListenerHandle{id: id, ln: ln}
+	h := &netListenerHandle{id: id, kind: kind, addr: addr, ln: ln}
 	if rt.listeners == nil {
 		rt.listeners = make(map[string]*netListenerHandle)
 	}
 	rt.listeners[id] = h
 	rt.mu.Unlock()
 	return h
+}
+
+func (rt *runtimeLifecycle) ListListeners() []ListenerInfo {
+	if rt == nil {
+		return nil
+	}
+	rt.mu.Lock()
+	out := make([]ListenerInfo, 0, len(rt.listeners))
+	for _, h := range rt.listeners {
+		if !h.isClosed() {
+			out = append(out, ListenerInfo{ID: h.id, Kind: h.kind, Addr: h.addr})
+		}
+	}
+	rt.mu.Unlock()
+	slices.SortFunc(out, func(a, b ListenerInfo) int {
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out
+}
+
+func (rt *runtimeLifecycle) ActiveListenerCount() int {
+	return len(rt.ListListeners())
+}
+
+func (rt *runtimeLifecycle) ActiveWorkerCount() int64 {
+	if rt == nil {
+		return 0
+	}
+	return rt.activeWorkers.Load()
 }
 
 func (rt *runtimeLifecycle) getListener(id string) (*netListenerHandle, bool) {
@@ -546,9 +625,25 @@ func (ev *Evaluator) execSpawnStmt(s *SpawnStmt, env *Env) (Value, *reportSignal
 		ev.rt = newRuntimeLifecycle()
 	}
 	ev.rt.wg.Add(1)
+	ev.rt.activeWorkers.Add(1)
+	isModCall := s.Call.Module != ""
 	go func() {
+		defer ev.rt.activeWorkers.Add(-1)
 		defer ev.rt.wg.Done()
-		if _, err := target.callFunction(s.Call.Callee, args, s.Line, s.Col); err != nil {
+		if ev.rt.serviceMode {
+			defer func() {
+				if r := recover(); r != nil {
+					ev.rt.recordError(fmt.Errorf("worker panic: %v", r))
+				}
+			}()
+		}
+		var err error
+		if isModCall {
+			_, err = target.callModuleFunction(s.Call.Callee, args, s.Line, s.Col)
+		} else {
+			_, err = target.callFunction(s.Call.Callee, args, s.Line, s.Col)
+		}
+		if err != nil {
 			ev.rt.recordError(err)
 		}
 	}()
