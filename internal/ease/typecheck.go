@@ -74,7 +74,7 @@ func validateProgramTypes(prog *Program, source string) error {
 	return validateProgramTypesWithMode(prog, source, false)
 }
 
-func validateProgramTypesWithMode(prog *Program, source string, isModule bool) error {
+func validateProgramTypesWithMode(prog *Program, source string, allowInternalBuiltins bool) error {
 	known := make(map[string]typeDefInfo, len(prog.Defs)+len(prog.Unions))
 	defs := make(map[string]*DefDecl, len(prog.Defs))
 	unions := make(map[string]*UnionDecl, len(prog.Unions))
@@ -106,18 +106,17 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 	}
 
 	funcNames := make(map[string]int, len(prog.Functions))
+	funcDecls := make(map[string]*FuncDecl, len(prog.Functions))
 	for _, fn := range prog.Functions {
-		if !isModule {
-			if _, isBuiltin := builtinArities[fn.Name]; isBuiltin {
-				return newError(
-					"TypeError",
-					fn.Line,
-					fn.Col,
-					source,
-					fmt.Sprintf("Cannot define function %q: it conflicts with a built-in function", fn.Name),
-					"Choose a different function name.",
-				)
-			}
+		if _, isBuiltin := builtinArities[fn.Name]; isBuiltin {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				source,
+				fmt.Sprintf("Cannot define function %q: it conflicts with a built-in function", fn.Name),
+				"Choose a different function name.",
+			)
 		}
 		if _, isType := known[fn.Name]; isType {
 			return newError(
@@ -140,6 +139,7 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 			)
 		}
 		funcNames[fn.Name] = fn.Line
+		funcDecls[fn.Name] = fn
 	}
 
 	modules := make(map[string]modTypeInfo)
@@ -191,7 +191,7 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 				"Each imported module must have a unique alias.",
 			)
 		}
-		if err := validateProgramTypesWithMode(imp.ModuleProg, imp.ModuleSource, true); err != nil {
+		if err := validateProgramTypesWithMode(imp.ModuleProg, imp.ModuleSource, !imp.IsFileImport); err != nil {
 			return err
 		}
 		origName := ""
@@ -230,16 +230,19 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 	}
 
 	v := &typeValidator{
-		source:         source,
-		known:          known,
-		defs:           defs,
-		unions:         unions,
-		consts:         consts,
-		constExprs:     constExprs,
-		funcNames:      funcNames,
-		modules:        modules,
-		resolvedUnions: make(map[string][]resolvedUnionVariant, len(unions)),
-		scope:          newTypeScope(nil),
+		source:                source,
+		known:                 known,
+		defs:                  defs,
+		unions:                unions,
+		consts:                consts,
+		constExprs:            constExprs,
+		funcNames:             funcNames,
+		funcDecls:             funcDecls,
+		modules:               modules,
+		resolvedUnions:        make(map[string][]resolvedUnionVariant, len(unions)),
+		scope:                 newTypeScope(nil),
+		allowInternalBuiltins: allowInternalBuiltins,
+		spawnFuncCache:        make(map[string]bool),
 	}
 
 	if err := v.resolveAndValidateUnions(prog); err != nil {
@@ -289,32 +292,62 @@ func validateProgramTypesWithMode(prog *Program, source string, isModule bool) e
 	return nil
 }
 
-func (v *typeValidator) isSynthPlayCall(e Expr) bool {
+var internalStdlibBuiltins = map[string]string{
+	"http_call":      "network:fetch / network:send",
+	"net_serve_http": "network:serve_http",
+	"net_reply_text": "network:reply_text",
+	"net_reply_json": "network:reply_json",
+	"net_serve_tcp":  "network:serve_tcp",
+	"net_send":       "network:tcp_send",
+	"screen_open":    "screen:open",
+	"screen_present": "screen:present",
+	"rand_roll":      "random:roll",
+	"rand_pick":      "random:pick",
+	"rand_shuffle":   "random:shuffle",
+	"synth_play":     "synth:play",
+}
+
+func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 	ce, ok := e.(*CallExpr)
 	if !ok {
-		return false
+		return "", false
 	}
 	if ce.Module == "" {
-		return ce.Callee == "synth_play"
+		switch ce.Callee {
+		case "close", "put":
+			return ce.Callee, true
+		case "synth_play":
+			return "synth:play", true
+		default:
+			return "", false
+		}
 	}
 	if mod, ok := v.modules[ce.Module]; ok && mod.origName == "synth" && ce.Callee == "play" {
-		return true
+		return "synth:play", true
 	}
-	return false
+	return "", false
 }
 
 func (v *typeValidator) checkNotVoidValue(e Expr) error {
-	if v.inErrorTestExpr || e == nil || !v.isSynthPlayCall(e) {
+	if v.inErrorTestExpr || e == nil {
+		return nil
+	}
+	name, isVoid := v.voidBuiltinCallName(e)
+	if !isVoid {
 		return nil
 	}
 	line, col := e.Pos()
+	hint := fmt.Sprintf("Call '%s ...' as a statement instead of using it as a value.", name)
+	if name == "synth:play" {
+		hint = "Call 'synth:play <melody>' as a statement (or with 'spawn synth:play <melody>')."
+	}
 	return newError(
 		"TypeError",
 		line,
 		col,
 		v.source,
-		"'synth:play' does not return a value",
-		"Call 'synth:play <melody>' as a statement (or with 'spawn synth:play <melody>').",
+		fmt.Sprintf("'%s' does not return a value", name),
+		hint,
 	)
 }
 
@@ -444,23 +477,164 @@ func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
 }
 
 type typeValidator struct {
-	source           string
-	known            map[string]typeDefInfo
-	defs             map[string]*DefDecl
-	unions           map[string]*UnionDecl
-	consts           map[string]int
-	constExprs       map[string]Expr
-	funcNames        map[string]int
-	modules          map[string]modTypeInfo
-	resolvedUnions   map[string][]resolvedUnionVariant
-	scope            *typeScope
-	inErrorTestExpr  bool
-	inErrorBlock     bool
-	loopDepth        int
-	swarmDepth       int
-	directInSwarm    bool
-	workerAssigned   map[string]bool
-	workerOuterScope *typeScope
+	source                string
+	known                 map[string]typeDefInfo
+	defs                  map[string]*DefDecl
+	unions                map[string]*UnionDecl
+	consts                map[string]int
+	constExprs            map[string]Expr
+	funcNames             map[string]int
+	funcDecls             map[string]*FuncDecl
+	modules               map[string]modTypeInfo
+	resolvedUnions        map[string][]resolvedUnionVariant
+	scope                 *typeScope
+	allowInternalBuiltins bool
+	spawnFuncCache        map[string]bool
+	inErrorTestExpr       bool
+	inErrorBlock          bool
+	loopDepth             int
+	swarmDepth            int
+	directInSwarm         bool
+	workerAssigned        map[string]bool
+	workerOuterScope      *typeScope
+}
+
+func (v *typeValidator) funcUsesSpawn(fnName string) bool {
+	if cached, ok := v.spawnFuncCache[fnName]; ok {
+		return cached
+	}
+	visited := make(map[string]bool)
+	res := v.funcUsesSpawnVisited(fnName, visited)
+	v.spawnFuncCache[fnName] = res
+	return res
+}
+
+func (v *typeValidator) funcUsesSpawnVisited(fnName string, visited map[string]bool) bool {
+	if visited[fnName] {
+		return false
+	}
+	visited[fnName] = true
+	fn := v.funcDecls[fnName]
+	if fn == nil {
+		return false
+	}
+	return v.stmtsContainSpawn(fn.Body, visited)
+}
+
+func (v *typeValidator) stmtsContainSpawn(stmts []Stmt, visited map[string]bool) bool {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case *SpawnStmt:
+			return true
+		case *ConstDeclStmt:
+			if v.exprContainsSpawn(st.Value, visited) {
+				return true
+			}
+		case *AssignStmt:
+			if v.exprContainsSpawn(st.Value, visited) {
+				return true
+			}
+		case *SayStmt:
+			if v.exprContainsSpawn(st.Value, visited) {
+				return true
+			}
+		case *ExprStmt:
+			if v.exprContainsSpawn(st.Expression, visited) {
+				return true
+			}
+		case *LoopStmt:
+			if v.exprContainsSpawn(st.Iterable, visited) || v.stmtsContainSpawn(st.Body, visited) {
+				return true
+			}
+		case *TakeStmt:
+			if v.exprContainsSpawn(st.Inbox, visited) || v.stmtsContainSpawn(st.Body, visited) {
+				return true
+			}
+		case *CheckGuardStmt:
+			for _, r := range st.Rules {
+				if v.exprContainsSpawn(r.Cond, visited) || (r.Action != nil && v.stmtsContainSpawn([]Stmt{r.Action}, visited)) {
+					return true
+				}
+			}
+			if v.stmtsContainSpawn(st.ElseBody, visited) {
+				return true
+			}
+		case *MatchStmt:
+			if v.exprContainsSpawn(st.Target, visited) {
+				return true
+			}
+			for _, arm := range st.Arms {
+				if arm.Action != nil && v.stmtsContainSpawn([]Stmt{arm.Action}, visited) {
+					return true
+				}
+			}
+			if v.stmtsContainSpawn(st.ElseBody, visited) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (v *typeValidator) exprContainsSpawn(e Expr, visited map[string]bool) bool {
+	if e == nil {
+		return false
+	}
+	switch ex := e.(type) {
+	case *CallExpr:
+		if ex.Module == "" && v.funcUsesSpawnVisited(ex.Callee, visited) {
+			return true
+		}
+		for _, arg := range ex.Args {
+			if v.exprContainsSpawn(arg, visited) {
+				return true
+			}
+		}
+	case *BinaryExpr:
+		return v.exprContainsSpawn(ex.Left, visited) || v.exprContainsSpawn(ex.Right, visited)
+	case *UnaryExpr:
+		return v.exprContainsSpawn(ex.Right, visited)
+	case *CastExpr:
+		return v.exprContainsSpawn(ex.Target, visited) || v.exprContainsSpawn(ex.Fallback, visited)
+	case *FieldExpr:
+		return v.exprContainsSpawn(ex.Target, visited)
+	case *IndexExpr:
+		return v.exprContainsSpawn(ex.Target, visited) || v.exprContainsSpawn(ex.Index, visited)
+	case *ListExpr:
+		for _, el := range ex.Elements {
+			if v.exprContainsSpawn(el, visited) {
+				return true
+			}
+		}
+	case *WithExpr:
+		if v.exprContainsSpawn(ex.Base, visited) {
+			return true
+		}
+		for _, u := range ex.Updates {
+			if v.exprContainsSpawn(u.Value, visited) {
+				return true
+			}
+		}
+	case *WhereExpr:
+		if v.exprContainsSpawn(ex.Target, visited) {
+			return true
+		}
+		for _, c := range ex.Conditions {
+			if v.exprContainsSpawn(c, visited) {
+				return true
+			}
+		}
+	case *MatchExpr:
+		if v.exprContainsSpawn(ex.Target, visited) || v.stmtsContainSpawn(ex.ElseBody, visited) {
+			return true
+		}
+		for _, arm := range ex.Arms {
+			if v.exprContainsSpawn(arm.Value, visited) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind string) error {
@@ -869,6 +1043,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		return v.checkMatchStmt(st, inFunction)
 
 	case *SpawnStmt:
+		if v.swarmDepth > 0 && !v.inErrorTestExpr {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"'spawn' cannot be used inside 'swarm loop'; 'swarm loop' already runs iterations in parallel",
+				"Move 'spawn' outside 'swarm loop' or use top-level inbox pipelines.",
+			)
+		}
 		return v.checkExpr(st.Call)
 
 	case *TakeStmt:
@@ -1939,15 +2123,39 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		return nil
 
 	case *CallExpr:
-		if v.swarmDepth > 0 && ex.Module == "" && ex.Callee == "ask" && !v.inErrorTestExpr {
-			return newError(
-				"TypeError",
-				ex.Line,
-				ex.Col,
-				v.source,
-				"'ask' cannot be used inside 'swarm loop'",
-				"Read interactive input before 'swarm loop', not inside parallel workers.",
-			)
+		if !v.allowInternalBuiltins && !v.inErrorTestExpr && ex.Module == "" {
+			if publicAlt, isInternal := internalStdlibBuiltins[ex.Callee]; isInternal {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Internal built-in %q cannot be called directly; use %s instead", ex.Callee, publicAlt),
+					fmt.Sprintf("Import the standard module and call %s.", publicAlt),
+				)
+			}
+		}
+		if v.swarmDepth > 0 && !v.inErrorTestExpr && ex.Module == "" {
+			if ex.Callee == "ask" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"'ask' cannot be used inside 'swarm loop'",
+					"Read interactive input before 'swarm loop', not inside parallel workers.",
+				)
+			}
+			if v.funcUsesSpawn(ex.Callee) {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Cannot call %q inside 'swarm loop' because it uses 'spawn'; 'swarm loop' already runs iterations in parallel", ex.Callee),
+					"Move 'spawn' outside 'swarm loop' or use top-level inbox pipelines.",
+				)
+			}
 		}
 		if ex.Module != "" {
 			mod, isMod := v.modules[ex.Module]

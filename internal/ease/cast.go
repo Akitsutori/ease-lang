@@ -660,7 +660,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 					msg = fmt.Sprintf("Value %s is not valid for union %q (%s)", FormatValue(targetVal), e.TypeName, cErr.Error())
 				}
 				return nil, newError(
-					"RuntimeError",
+					"TypeError",
 					line,
 					col,
 					ev.source,
@@ -722,7 +722,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		mapped, mapErr := mapToRecord(mv.Fields, proto, env, e.TypeName, mv.FromCSV)
 		if mapErr != nil {
 			return nil, newError(
-				"RuntimeError",
+				"TypeError",
 				line,
 				col,
 				ev.source,

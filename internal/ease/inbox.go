@@ -594,6 +594,16 @@ func (ev *Evaluator) evalInboxExpr(e *InboxExpr) (*InboxValue, error) {
 }
 
 func (ev *Evaluator) execSpawnStmt(s *SpawnStmt, env *Env) (Value, *reportSignal, error) {
+	if ev.inSwarmWorker {
+		return nil, nil, newError(
+			"RuntimeError",
+			s.Line,
+			s.Col,
+			ev.source,
+			"'spawn' cannot be used inside 'swarm loop'; 'swarm loop' already runs iterations in parallel",
+			"Move 'spawn' outside 'swarm loop' or use top-level inbox pipelines.",
+		)
+	}
 	args := make([]Value, len(s.Call.Args))
 	seen := make(map[any]bool)
 	for i, a := range s.Call.Args {

@@ -1041,9 +1041,7 @@ import network
 n = network.network with url = %q, timeout = 5
 body = network:fetch n "/big"
 body is ""
-
 req = network.http_request with method = "GET", url = "%s/big", timeout = 5
-resp = http_call req
 `, srv.URL, srv.URL)
 	prog, err := ParseProgram(httpSrc)
 	if err != nil {
@@ -1054,17 +1052,20 @@ resp = http_call req
 	if _, err := ev.ExecStatements(prog.Body, ev.global); err != nil {
 		t.Fatalf("ExecStatements failed: %v", err)
 	}
-	respVal, _ := ev.global.Lookup("resp")
-	respRec := respVal.(*RecordValue)
+	bodyVal, _ := ev.global.Lookup("body")
+	if bodyVal != "" {
+		t.Fatalf("expected empty body for oversized response, got %d bytes", len(FormatValue(bodyVal)))
+	}
+	reqBigVal, _ := ev.global.Lookup("req")
+	respRec, err := ev.execHTTPCall(reqBigVal.(*RecordValue), 1, 1)
+	if err != nil {
+		t.Fatalf("execHTTPCall(/big) failed: %v", err)
+	}
 	if respRec.Fields["body"] != "" {
 		t.Fatalf("expected empty body for oversized response, got %d bytes", len(FormatValue(respRec.Fields["body"])))
 	}
 	if !strings.Contains(FormatValue(respRec.Fields["error"]), "exceeds 10 MB limit") {
 		t.Fatalf("expected HTTP size limit error, got %q", respRec.Fields["error"])
-	}
-	bodyVal, _ := ev.global.Lookup("body")
-	if bodyVal != "" {
-		t.Fatalf("expected ask to return \"\" on oversized HTTP response, got %q", bodyVal)
 	}
 
 	// 4. Unopted-in ./std/<name>.ease in working directory must NOT silently override embedded stdlib.
@@ -1343,16 +1344,27 @@ say "{a}-{b}-{c}"
 
 	timeoutSrc := fmt.Sprintf(`
 import network
+n = network.network with url = %q, timeout = 0.03
+body = network:fetch n "/slow"
 req = network.http_request with url = %q, timeout = 0.03
-r = http_call req
-say r.error
-`, srv.URL+"/slow")
-	var timeoutOut bytes.Buffer
-	if _, err := EvalProgram(timeoutSrc, &timeoutOut); err != nil {
-		t.Fatalf("expected timeout HTTP call to return error record cleanly, got: %v", err)
+`, srv.URL, srv.URL+"/slow")
+	timeoutProg, err := ParseProgram(timeoutSrc)
+	if err != nil {
+		t.Fatalf("ParseProgram(timeoutSrc) failed: %v", err)
 	}
-	if !strings.Contains(timeoutOut.String(), "deadline exceeded") && !strings.Contains(timeoutOut.String(), "context") {
-		t.Fatalf("expected context deadline error in response.error, got: %q", timeoutOut.String())
+	timeoutEv := NewEvaluator(timeoutSrc, timeoutProg, &bytes.Buffer{})
+	defer timeoutEv.Close()
+	if _, err := timeoutEv.ExecStatements(timeoutProg.Body, timeoutEv.global); err != nil {
+		t.Fatalf("expected timeout network:fetch to return empty string cleanly, got: %v", err)
+	}
+	reqVal, _ := timeoutEv.global.Lookup("req")
+	rRec, err := timeoutEv.execHTTPCall(reqVal.(*RecordValue), 1, 1)
+	if err != nil {
+		t.Fatalf("expected timeout execHTTPCall to return error record cleanly, got: %v", err)
+	}
+	errStr := FormatValue(rRec.Fields["error"])
+	if !strings.Contains(errStr, "deadline exceeded") && !strings.Contains(errStr, "context") {
+		t.Fatalf("expected context deadline error in response.error, got: %q", errStr)
 	}
 
 	// 3. screenSession.close() waits cleanly without deadlocking if exited or non-ticking (Finding 4)
@@ -2120,12 +2132,12 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	badHTTPSrc := fmt.Sprintf("import network\nreq = network.http_request with method = \"GET\", url = %q\nres = http_call req\n", srv.URL+"/bad")
+	badHTTPSrc := fmt.Sprintf("import network\nn = network.network with url = %q\nres = network:fetch n \"/bad\"\n", srv.URL)
 	if _, err := EvalProgram(badHTTPSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "HTTP response body contains invalid UTF-8 bytes") {
 		t.Fatalf("expected RuntimeError on invalid UTF-8 HTTP body, got: %v", err)
 	}
 
-	nfdHTTPSrc := fmt.Sprintf("import network\nreq = network.http_request with method = \"GET\", url = %q\nres = http_call req\nsay res.body\n", srv.URL+"/nfd")
+	nfdHTTPSrc := fmt.Sprintf("import network\nn = network.network with url = %q\nsay (network:fetch n \"/nfd\")\n", srv.URL)
 	var httpOut bytes.Buffer
 	if _, err := EvalProgram(nfdHTTPSrc, &httpOut); err != nil {
 		t.Fatalf("expected valid NFD HTTP body to succeed, got: %v", err)

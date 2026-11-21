@@ -225,49 +225,58 @@ end
 
 func TestStrictAsRuntimeErrors(t *testing.T) {
 	cases := []struct {
-		name    string
-		src     string
-		wantSub string
+		name      string
+		src       string
+		wantStage string
+		wantSub   string
 	}{
 		{
-			name:    "invalid number text",
-			src:     `x = "not-a-num" as number`,
-			wantSub: `Cannot convert text "not-a-num" to number`,
+			name:      "invalid number text",
+			src:       `x = "not-a-num" as number`,
+			wantStage: "RuntimeError",
+			wantSub:   `Cannot convert text "not-a-num" to number`,
 		},
 		{
-			name:    "disallowed union value",
-			src:     "def ticket = \"open\" | \"closed\"\nx = \"pending\" as ticket\n",
-			wantSub: `Value pending is not valid for union "ticket"`,
+			name:      "disallowed union value",
+			src:       "def ticket = \"open\" | \"closed\"\nx = \"pending\" as ticket\n",
+			wantStage: "TypeError",
+			wantSub:   `Value pending is not valid for union "ticket"`,
 		},
 		{
-			name:    "raw text rejected for record def",
-			src:     "def user\n    id = 0\nend\nx = '{\"id\": 1}' as user\n",
-			wantSub: `Cannot validate text as user: expected structured map or user record`,
+			name:      "raw text rejected for record def",
+			src:       "def user\n    id = 0\nend\nx = '{\"id\": 1}' as user\n",
+			wantStage: "TypeError",
+			wantSub:   `Cannot validate text as user: expected structured map or user record`,
 		},
 		{
-			name:    "json array rejected for record def",
-			src:     "def user\n    id = 0\nend\nx = (decode_json '[1, 2]') as user\n",
-			wantSub: `Cannot validate list as user: expected structured map or user record`,
+			name:      "json array rejected for record def",
+			src:       "def user\n    id = 0\nend\nx = (decode_json '[1, 2]') as user\n",
+			wantStage: "TypeError",
+			wantSub:   `Cannot validate list as user: expected structured map or user record`,
 		},
 		{
-			name:    "missing required field rejected for record def",
-			src:     "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (decode_json '{\"id\": 1}') as user\n",
-			wantSub: `Missing field 'user.name'`,
+			name:      "missing required field rejected for record def",
+			src:       "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (decode_json '{\"id\": 1}') as user\n",
+			wantStage: "TypeError",
+			wantSub:   `Missing field 'user.name'`,
 		},
 		{
-			name:    "wrong nested field type",
-			src:     "def user\n    id = 0\nend\nx = (decode_json '{\"id\": true}') as user\n",
-			wantSub: `Field 'user.id' expected number, got text (true)`,
+			name:      "wrong nested field type",
+			src:       "def user\n    id = 0\nend\nx = (decode_json '{\"id\": true}') as user\n",
+			wantStage: "TypeError",
+			wantSub:   `Field 'user.id' expected number, got text (true)`,
 		},
 		{
-			name:    "record as text rejected",
-			src:     "def hero\n    hp = 100\nend\nx = hero as text\n",
-			wantSub: `Cannot convert hero to text`,
+			name:      "record as text rejected",
+			src:       "def hero\n    hp = 100\nend\nx = hero as text\n",
+			wantStage: "TypeError",
+			wantSub:   `Cannot convert hero to text`,
 		},
 		{
-			name:    "record string interpolation rejected",
-			src:     "def hero\n    hp = 100\nend\nsay \"{hero}\"\n",
-			wantSub: `Cannot interpolate hero into text`,
+			name:      "record string interpolation rejected",
+			src:       "def hero\n    hp = 100\nend\nsay \"{hero}\"\n",
+			wantStage: "TypeError",
+			wantSub:   `Cannot interpolate hero into text`,
 		},
 	}
 
@@ -276,7 +285,10 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 			var out bytes.Buffer
 			_, err := EvalProgram(tc.src, &out)
 			if err == nil {
-				t.Fatalf("expected runtime error for %s, got nil", tc.name)
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if tc.wantStage != "" && !strings.Contains(err.Error(), tc.wantStage) {
+				t.Fatalf("expected stage %q in error:\n%v", tc.wantStage, err)
 			}
 			if !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("expected %q in error:\n%v", tc.wantSub, err)

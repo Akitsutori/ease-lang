@@ -70,7 +70,7 @@ func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error)
 	return parseProgramWithContext(source, "", seen, nil, nil, false)
 }
 
-func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int, isModule bool) (*Program, error) {
+func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int, allowInternalBuiltins bool) (*Program, error) {
 	tokens, err := NewLexer(source).Tokenize()
 	if err != nil {
 		return nil, err
@@ -104,7 +104,7 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 	if err := resolveProgramImports(prog, source, seen); err != nil {
 		return nil, err
 	}
-	if err := validateProgramTypesWithMode(prog, source, isModule); err != nil {
+	if err := validateProgramTypesWithMode(prog, source, allowInternalBuiltins); err != nil {
 		return nil, err
 	}
 	return prog, nil
@@ -194,7 +194,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 					}
 					modSrc := string(rawBytes)
 					nextStack := append(slices.Clone(activeStack), absPath)
-					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil, true)
+					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil, false)
 					if modErr != nil {
 						return nil, modErr
 					}

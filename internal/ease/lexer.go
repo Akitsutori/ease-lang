@@ -286,6 +286,8 @@ func (l *Lexer) scanString() (Token, error) {
 			switch esc {
 			case 'n':
 				b.WriteRune('\n')
+			case 'r':
+				b.WriteRune('\r')
 			case 't':
 				b.WriteRune('\t')
 			case '"':
@@ -297,7 +299,14 @@ func (l *Lexer) scanString() (Token, error) {
 			case '}':
 				b.WriteRune('}')
 			default:
-				b.WriteRune(esc)
+				return Token{}, newError(
+					"SyntaxError",
+					line,
+					col,
+					l.source,
+					fmt.Sprintf("Unknown escape sequence '\\%c'", esc),
+					`Supported escapes: \n, \r, \t, \", \\, \{, \} — or use '...' raw strings.`,
+				)
 			}
 			continue
 		}

@@ -3,6 +3,8 @@ package ease
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -1319,5 +1321,100 @@ say "{total}|{count filtered}|{l1}|{l2}|{count l3}"
 	}
 	if out.String() != "30|2|INFO|ok|3\n" {
 		t.Fatalf("unexpected output: got %q, want %q", out.String(), "30|2|INFO|ok|3\n")
+	}
+}
+
+func TestAuditConsistencyGuardrails(t *testing.T) {
+	// 1. Direct and transitive `spawn` inside `swarm loop` rejected statically + at runtime.
+	directSpawnSwarm := `
+to worker n
+    say n
+end
+res = swarm loop range 1 2
+    spawn worker it
+    it
+end
+`
+	if _, err := ParseProgram(directSpawnSwarm); err == nil || !strings.Contains(err.Error(), "'spawn' cannot be used inside 'swarm loop'") {
+		t.Fatalf("expected TypeError for direct spawn in swarm loop, got: %v", err)
+	}
+
+	transitiveSpawnSwarm := `
+to leaf n
+    say n
+end
+to step_b n
+    spawn leaf n
+    n
+end
+to step_a n
+    step_b n
+end
+res = swarm loop range 1 2
+    step_a it
+end
+`
+	if _, err := ParseProgram(transitiveSpawnSwarm); err == nil || !strings.Contains(err.Error(), `Cannot call "step_a" inside 'swarm loop' because it uses 'spawn'`) {
+		t.Fatalf("expected TypeError for transitive spawn in swarm loop, got: %v", err)
+	}
+
+	// Runtime defense-in-depth check on execSpawnStmt when inSwarmWorker == true.
+	ev := NewEvaluator("", &Program{}, &bytes.Buffer{})
+	defer ev.Close()
+	ev.inSwarmWorker = true
+	_, _, rtSpawnErr := ev.execSpawnStmt(&SpawnStmt{
+		posInfo: posInfo{Line: 1, Col: 1},
+		Call:    &CallExpr{Callee: "leaf"},
+	}, ev.global)
+	if rtSpawnErr == nil || !strings.Contains(rtSpawnErr.Error(), "'spawn' cannot be used inside 'swarm loop'") {
+		t.Fatalf("expected RuntimeError from execSpawnStmt in swarm worker, got: %v", rtSpawnErr)
+	}
+
+	// 2. String escapes: \r allowed, unknown escapes rejected with SyntaxError.
+	var crOut bytes.Buffer
+	if _, err := EvalProgram(`say "a\rb"`, &crOut); err != nil {
+		t.Fatalf("expected \\r escape to succeed, got: %v", err)
+	}
+	if crOut.String() != "a\rb\n" {
+		t.Fatalf("unexpected \\r output: %q", crOut.String())
+	}
+	if _, err := ParseProgram(`x = "bad\sescape"`); err == nil || !strings.Contains(err.Error(), `Unknown escape sequence '\s'`) {
+		t.Fatalf("expected SyntaxError for unknown escape \\s, got: %v", err)
+	}
+
+	// 3. `put` and `close` are statically void (forbidden in value expressions).
+	for _, voidSrc := range []string{
+		"ch = inbox as number\nx = put ch 1\n",
+		"ch = inbox as number\nx = close ch\n",
+		"ch = inbox as number\nsay (put ch 1)\n",
+		"ch = inbox as number\nsay (close ch)\n",
+	} {
+		if _, err := ParseProgram(voidSrc); err == nil || !strings.Contains(err.Error(), "does not return a value") {
+			t.Fatalf("expected void TypeError for %q, got: %v", voidSrc, err)
+		}
+	}
+
+	// 4. Imported file modules cannot collide with built-in function names.
+	modDir := t.TempDir()
+	modPath := filepath.Join(modDir, "helpers.ease")
+	if err := os.WriteFile(modPath, []byte("to count xs\n    0\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(modDir, "main.ease")
+	mainSrc := "import \"./helpers.ease\" as h\nsay h:count (list 1, 2)\n"
+	if _, err := ParseProgramFromFile(mainSrc, mainPath); err == nil || !strings.Contains(err.Error(), `Cannot define function "count": it conflicts with a built-in function`) {
+		t.Fatalf("expected built-in collision TypeError in imported module, got: %v", err)
+	}
+
+	// 5. Internal stdlib primitives cannot be called directly from user code.
+	for _, privSrc := range []string{
+		"import network\nreq = network.http_request with url = \"http://127.0.0.1:1\"\nr = http_call req\n",
+		"x = rand_roll 1 6\n",
+		"import screen\nev = inbox as screen.event\nscreen_open screen.screen ev\n",
+		"import synth\nsynth_play synth.melody\n",
+	} {
+		if _, err := ParseProgram(privSrc); err == nil || !strings.Contains(err.Error(), "cannot be called directly") {
+			t.Fatalf("expected internal built-in TypeError for %q, got: %v", privSrc, err)
+		}
 	}
 }
