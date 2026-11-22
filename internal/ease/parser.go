@@ -219,6 +219,15 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		return p.parseArrowAction(arrowTok)
 	case TOK_TAKE:
 		return p.parseTakeStmt()
+	case TOK_ELSE:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Unexpected 'else' outside a multi-line 'check' or 'match' block",
+			"Single-line 'check <cond> -> <val>' cannot be followed by 'else'. Put 'check' on its own line for a verdict table, or omit '->' for a 'check <cond> ... else ... end' block.",
+		)
 	case TOK_TO:
 		return nil, newError(
 			"SyntaxError",

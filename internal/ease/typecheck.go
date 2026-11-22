@@ -1553,6 +1553,18 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					"Use '<value> as json' instead (e.g. 'raw = user as json').",
 				)
 			}
+			if ex.Name == "continue" {
+				if _, ok := v.lookupVar("continue"); !ok {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						`Unknown variable "continue"`,
+						"Ease has no 'continue' keyword; wrap the remaining loop body in 'check <inverted_cond> ... end' instead.",
+					)
+				}
+			}
 		}
 		if v.swarmDepth > 0 && v.workerAssigned != nil && v.workerAssigned[ex.Name] {
 			assignedLocal := false

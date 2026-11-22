@@ -2420,3 +2420,17 @@ end
 		}
 	}
 }
+
+func TestElseAfterSingleLineCheckAndContinueHints(t *testing.T) {
+	elseSrc := "to f x\n  check x > 0 -> 1\n  else\n    -> 0\n  end\nend\n"
+	wantElseHint := "Single-line 'check <cond> -> <val>' cannot be followed by 'else'"
+	if _, err := ParseProgram(elseSrc); err == nil || !strings.Contains(err.Error(), wantElseHint) {
+		t.Fatalf("expected hint %q, got: %v", wantElseHint, err)
+	}
+
+	contSrc := "loop range 1 3\n  check it is 2\n    continue\n  end\n  say it\nend\n"
+	wantContHint := "Ease has no 'continue' keyword; wrap the remaining loop body in 'check <inverted_cond> ... end' instead."
+	if _, err := ParseProgram(contSrc); err == nil || !strings.Contains(err.Error(), wantContHint) {
+		t.Fatalf("expected hint %q, got: %v", wantContHint, err)
+	}
+}
