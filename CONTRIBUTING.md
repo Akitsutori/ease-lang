@@ -15,35 +15,59 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── token.go                 # Token types and reserved keywords
 │   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, raw '...', # comments, operators)
 │   ├── ast.go                   # AST node definitions for declarations, statements, and expressions
-│   ├── parser.go                # Two-pass arity-based recursive-descent parser and stdlib/file import resolution
-│   ├── typecheck.go             # Static type/arity checks, safe `or` fallbacks, return consistency & flow checking
+│   ├── parser.go                # Core parser, statement parsing & diagnostic helpers
+│   ├── parser_decl.go           # Two-pass signature collection, imports, defs/unions, functions & test blocks
+│   ├── parser_expr.go           # Precedence-climbing expressions, calls, `with`/`where`/`as`, lists & inboxes
+│   ├── parser_match.go          # `match` pattern, statement & expression parsing
+│   ├── typecheck.go             # Core static typecheck validator, scope setup & expression dispatcher
+│   ├── typecheck_flow.go        # Function return/`void` consistency, statement flow & condition narrowing
+│   ├── typecheck_match.go       # `match` pattern binding, target classification & list-match inference
+│   ├── typecheck_concurrency.go # `swarm loop`, `spawn`, `inbox`, `put`/`take`/`close` static checks
+│   ├── typecheck_cast.go        # `as` target/format validation (`json`/`csv`/`bytes`), `save` rules & `or` fallbacks
 │   ├── typecheck_unions.go      # Union type resolution, 3 compile-time guardrails, narrowing & exhaustiveness
 │   ├── checker.go               # Data-driven soft-assert test runner (`test` blocks, `is error`, context reports)
-│   ├── eval.go                  # Tree-walking evaluator, thread-safe hot-swappable `Env`, and statement execution
+│   ├── eval.go                  # Tree-walking evaluator, statement execution & user/module function calls
+│   ├── eval_env.go              # Thread-safe hot-swappable `Env`, scopes, mutability & assignment analysis
+│   ├── eval_ops.go              # `match` list evaluation, immutable `with` cloning, `is` & vector arithmetic
 │   ├── values.go                # Runtime value representations, formatting, freezing & structural equality
 │   ├── match.go                 # Full-string pattern matching and typed extraction engine (`match`)
 │   ├── swarm.go                 # Bounded data-parallel `swarm loop` worker pool and deterministic ordering
 │   ├── inbox.go                 # Typed concurrent FIFO `inbox`, `spawn` workers, service isolation & lifecycle cleanup
-│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, JSON, file I/O, HTTP/screen/random dispatch)
+│   ├── builtins.go              # Fixed-arity built-in verbs (`ask`, `count`, `range`, file I/O, HTTP/screen/random/synth dispatch)
 │   ├── net_builtins.go          # `inbox`-driven HTTP & TCP server host bridges (`serve_http`, `reply_*`, `serve_tcp`, `tcp_send`)
 │   ├── random_builtins.go       # Goroutine-safe randomness bridges via `math/rand/v2` (`roll`, `pick`, `shuffle`)
+│   ├── synth.go                 # Retro chiptune waveform synthesizer & headless validation (`synth:play`)
 │   ├── service.go               # `ease serve` supervisor, fail-fast checks, `--watch` hot-code-swap & graceful shutdown
 │   ├── debug_server.go          # Opt-in `127.0.0.1` loopback debug socket (`:status`, `:funcs`, `:reload`, live eval)
-│   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, and JSON-to-Ease validation
+│   ├── lsp.go                   # Language Server Protocol (`ease lsp`) diagnostics, hover & completion
+│   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, JSON/CSV formatting & parsing
 │   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
 │   ├── bundle.go                # Standalone executable packer (`EASE_BUNDLE_V1`)
+│   ├── logo.go                  # Embedded Ease brand mark/banner helpers
 │   ├── errors.go                # Structured `EaseError` diagnostics with source snippets and hints
-│   ├── ease_test.go             # Core Go test suite (lexer, parser, arity calls, evaluator, match, CLI)
-│   ├── typecheck_test.go        # Static typecheck, union narrowing, and exhaustiveness Go tests
-│   ├── cast_json_test.go        # JSON decode/encode, strict `as`, `or` fallbacks & list coercion Go tests
+│   ├── version.go               # Toolchain version metadata
+│   ├── ease_test.go             # Core Go test suite (lexer, parser, arity calls, evaluator, `check`, `swarm`/`inbox`)
+│   ├── ease_match_test.go       # Pattern matching (`match`) statement, expression & capture Go tests
+│   ├── ease_io_modules_test.go  # File I/O (`load`/`save`/CSV), `ask` EOF, UTF-8/NFC, file modules & bundle Go tests
+│   ├── typecheck_test.go        # Static typecheck, union narrowing, exhaustiveness & format-model Go tests
+│   ├── cast_json_test.go        # JSON/CSV `as` casts, `or` fallbacks & list coercion Go tests
 │   ├── net_test.go              # HTTP/TCP inbox server concurrency and lifecycle Go tests
+│   ├── random_test.go           # `random:roll`, `pick`, `shuffle` & concurrency Go tests
 │   ├── screen_test.go           # Screen config, color/shape parsing, and headless `screen.event` inbox Go tests
+│   ├── synth_test.go            # Synthesizer note parsing, headless rendering & concurrency Go tests
+│   ├── spawn_inbox_test.go      # `spawn` / `inbox` worker isolation and backpressure Go tests
+│   ├── swarm_test.go            # `swarm loop` ordering, isolation and error-reporting Go tests
+│   ├── serve_test.go            # `ease serve` hot-reload, debug socket & lifecycle Go tests
+│   ├── lsp_test.go              # LSP server diagnostics and protocol Go tests
+│   ├── logo_test.go             # Logo/CLI banner Go tests
 │   └── std/
 │       ├── network.ease         # `network` stdlib module (HTTP client + `inbox`-driven HTTP & TCP servers)
-│       └── screen.ease          # `screen` stdlib module (`fps_mode`, `event`, 2D shapes, `open` & `present`)
-├── examples/                    # Runnable examples (00–08, fibonacci, showcase) and reference specs
-├── tests/                       # Language feature test files (01–13) executed via `ease test`
+│       ├── random.ease          # `random` stdlib module (`roll`, `pick`, `shuffle`)
+│       ├── screen.ease          # `screen` stdlib module (`fps_mode`, `event`, 2D shapes, `open` & `present`)
+│       └── synth.ease           # `synth` stdlib module (`wave_kind`, `melody`, `play`)
+├── examples/                    # Runnable examples (00–11, fibonacci, showcase) and reference specs
+├── tests/                       # Language feature test files (01–15) executed via `ease test`
 └── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux with -race, and Windows)
 ```
 
@@ -52,10 +76,11 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 | Area | Key Files | Typical Tasks |
 | :--- | :--- | :--- |
 | **Standard Library (`std/`)** | `internal/ease/std/*.ease`, `internal/ease/stdlib.go`, `eval.go` | Add clean Ease record blueprints (`def`) backed by minimal Go host bridges (e.g., `file`, `time`, `math`) |
-| **Parser & Diagnostics** | `internal/ease/parser.go`, `errors.go` | Improve beginner-friendly error messages, source spans, and actionable recovery hints |
-| **Evaluator & Built-ins** | `internal/ease/eval.go` | Add well-tested built-in verbs, tighten edge-case handling, and keep runtime limits safe |
+| **Parser & Diagnostics** | `internal/ease/parser*.go`, `errors.go` | Improve beginner-friendly error messages, source spans, and actionable recovery hints |
+| **Typechecker** | `internal/ease/typecheck*.go` | Extend static validation, union narrowing, format contracts, and concurrency checks |
+| **Evaluator & Built-ins** | `internal/ease/eval*.go`, `builtins.go` | Add well-tested built-in verbs, tighten edge-case handling, and keep runtime limits safe |
 | **Graphics & Input (`screen`)** | `internal/ease/screen.go`, `std/screen.ease` | Extend drawing primitives or input events while preserving deterministic `--check` headless behavior |
-| **Examples & Feature Tests** | `examples/*.ease`, `tests/*.ease`, `internal/ease/ease_test.go` | Expand regression coverage, edge-case specs, and clear real-world examples |
+| **Examples & Feature Tests** | `examples/*.ease`, `tests/*.ease`, `internal/ease/ease*_test.go` | Expand regression coverage, edge-case specs, and clear real-world examples |
 | **Docs & Developer Tooling** | `README.md`, `CONTRIBUTING.md`, `.github/workflows/` | Keep the BNF grammar and docs aligned with the parser, improve CI, or add editor syntax support |
 
 ---

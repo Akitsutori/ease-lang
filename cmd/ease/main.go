@@ -789,7 +789,7 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 			}
 			parsed, err := ease.ParseProgram(fullSrc)
 			if err != nil {
-				if isIncompleteBlockError(err) {
+				if ease.IsIncompleteBlockError(err) {
 					return
 				}
 				fmt.Fprintln(errOut, err)
@@ -836,16 +836,6 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 		}()
 	}
 	return 0
-}
-
-func isIncompleteBlockError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "missing 'end'") ||
-		strings.Contains(msg, "missing a closing 'end'") ||
-		strings.Contains(msg, "Expected 'end'")
 }
 
 func cmdLsp() int {
