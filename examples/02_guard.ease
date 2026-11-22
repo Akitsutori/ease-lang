@@ -6,7 +6,7 @@ to check_access age pass
         pass is "none"     -> "Abgelehnt: kein Ticket"
         pass is "vip"      -> "Willkommen in der Lounge"
     end
-    "Willkommen im Hauptbereich"
+    -> "Willkommen im Hauptbereich"
 end
 
 test "Alters- und Ticketkontrolle"

@@ -181,11 +181,11 @@ func (ev *Evaluator) execNetReplyCommon(reqVal, statusVal Value, contentType, bo
 
 	id, _ := reqRec.Fields["id"].(string)
 	if id == "" {
-		return "", nil
+		return nil, nil
 	}
 	ch, ok := ev.rt.getConn(id)
 	if !ok || ch.isClosed() || ev.rt.isAborted() {
-		return "", nil
+		return nil, nil
 	}
 
 	statusText := http.StatusText(status)
@@ -206,7 +206,7 @@ func (ev *Evaluator) execNetReplyCommon(reqVal, statusVal Value, contentType, bo
 		return nil, newError("RuntimeError", line, col, ev.source,
 			fmt.Sprintf("failed to write HTTP reply: %v", writeErr), "")
 	}
-	return "", nil
+	return nil, nil
 }
 
 func (ev *Evaluator) execNetReplyText(args []Value, line, col int) (Value, error) {
@@ -384,7 +384,7 @@ func (ev *Evaluator) execNetSend(args []Value, line, col int) (Value, error) {
 		return nil, newError("RuntimeError", line, col, ev.source,
 			fmt.Sprintf("network:tcp_send failed: %v", err), "")
 	}
-	return "", nil
+	return nil, nil
 }
 
 func writeAllBytes(conn net.Conn, payload []byte) (int, error) {

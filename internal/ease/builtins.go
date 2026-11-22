@@ -29,7 +29,6 @@ var builtinArities = map[string]int{
 	"round":          1,
 	"upper":          1,
 	"lower":          1,
-	"fail":           1,
 	"fields":         1,
 	"decode_json":    1,
 	"encode_json":    1,
@@ -454,12 +453,6 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			return math.Min(a, b), true, nil
 		}
 		return math.Max(a, b), true, nil
-
-	case "fail":
-		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "fail requires 1 argument (message)", "Example: fail \"Invalid input\"")
-		}
-		return nil, true, newError("RuntimeError", line, col, ev.source, FormatValue(args[0]), "")
 
 	case "fields":
 		if len(args) != 1 {

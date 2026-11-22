@@ -12,10 +12,14 @@ end
 
 to handle_http req
     match "{req.method} {req.path}"
-        "GET /"            -> network:reply_text req 200 "Welcome to Ease HTTP!"
-        "GET /health"      -> network:reply_json req 200 (server_status)
-        "GET /hello/{name}" -> network:reply_text req 200 "Hello, {name}!"
-        else               -> network:reply_text req 404 "Not Found"
+        "GET /"
+            network:reply_text req 200 "Welcome to Ease HTTP!"
+        "GET /health"
+            network:reply_json req 200 (server_status)
+        "GET /hello/{name}"
+            network:reply_text req 200 "Hello, {name}!"
+        else
+            network:reply_text req 404 "Not Found"
     end
 end
 
@@ -34,7 +38,7 @@ test "concurrent HTTP routes respond cleanly via inbox on ephemeral port"
     client = network.network with url = "http://127.0.0.1:{port}"
     routes = list "/", "/health", "/hello/Ada", "/unknown"
     replies = swarm loop routes
-        network:fetch client it
+        -> network:fetch client it
     end
 
     replies.1 is "Welcome to Ease HTTP!"
@@ -48,10 +52,13 @@ end
 to start_server port
     requests = inbox as network.http_request
     bound_port = network:serve_http port requests
-    check bound_port is 0 -> close requests
-    check bound_port is 0 -> 0
+    check bound_port is 0
+        close requests
+        -> 0
+    end
     say "HTTP server listening on http://127.0.0.1:{bound_port}"
     serve_loop requests
+    -> bound_port
 end
 
 start_server 8080

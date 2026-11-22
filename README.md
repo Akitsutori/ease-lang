@@ -26,7 +26,7 @@ end
 
 to stamp_done note
     check note.room <= 0 -> note with status = "escalated"
-    note with status = "done"
+    -> note with status = "done"
 end
 
 to log_line note
@@ -110,7 +110,7 @@ end
 charges = swarm loop orders
     check it.kind is "late_checkout" -> 25
     check it.kind is "extra_pillow"  -> 8
-    0
+    -> 0
 end
 
 say "Room fees in arrival order: {encode_json charges}, total: {sum charges}"
@@ -134,9 +134,12 @@ end
 
 to handle_call req
     match "{req.method} {req.path}"
-        "GET /status"            -> network:reply_json req 200 desk_status
-        "GET /wake/{room}/{mins}" -> network:reply_text req 200 "Wake-up call set for room {room} in {mins}m"
-        else                     -> network:reply_text req 404 "No one at that extension"
+        "GET /status"
+            network:reply_json req 200 desk_status
+        "GET /wake/{room}/{mins}"
+            network:reply_text req 200 "Wake-up call set for room {room} in {mins}m"
+        else
+            network:reply_text req 404 "No one at that extension"
     end
 end
 
@@ -155,7 +158,7 @@ test "late-night HTTP switchboard handles parallel callers cleanly"
     phone = network.network with url = "http://127.0.0.1:{port}"
     calls = list "/status", "/wake/402/15", "/missing"
     replies = swarm loop calls
-        network:fetch phone it
+        -> network:fetch phone it
     end
 
     replies.1 is (encode_json desk_status)
@@ -199,7 +202,7 @@ to paint_hotel win
         sc = screen.scene with background = "midnight", shapes = shapes
         raw = screen:present win sc
         st = decode_json raw as screen.frame_state
-        check st.status is "closed" -> "closed"
+        check st.status is "closed" -> end
     end
 end
 
@@ -207,10 +210,12 @@ to watch_window win events
     screen:open win events
     spawn paint_hotel win
     take events
-        check it.kind is "key" and it.key is "escape" -> close events
+        check it.kind is "key" and it.key is "escape"
+            close events
+        end
         check it.kind is "close" -> end
     end
-    "Shift ended"
+    -> "Shift ended"
 end
 
 test "window shuts down cleanly on simulated close event"

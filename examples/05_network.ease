@@ -18,9 +18,7 @@ def event
 end
 
 # 1. Stufe: Striktes Typ-Casting an der Grenze (Form via 'as' ohne stillen Fallback)
-to parse_age raw
-    raw as number
-end
+to parse_age raw -> raw as number
 
 # 2. Stufe: Inhaltsvalidität in der Fachlogik (Bedeutung via 'to' + 'check')
 to validate_age age
@@ -29,7 +27,7 @@ to validate_age age
         age < 0           -> "Alter kann nicht negativ sein"
         age > 130         -> "Alter ist unrealistisch"
     end
-    age
+    -> age
 end
 
 to describe_event ev
@@ -37,7 +35,7 @@ to describe_event ev
         ev.kind is "click" -> "click@{ev.x},{ev.y}"
         ev.kind is "key"   -> "key:{ev.key}"
     end
-    "unknown"
+    -> "unknown"
 end
 
 test "import network, fetch/send interface & form vs. content"

@@ -113,16 +113,59 @@ type LoopStmt struct {
 
 func (*LoopStmt) stmtNode() {}
 
-// LoopEndStmt represents `-> end` inside a `check` guard to exit the enclosing `loop`.
+// LoopEndStmt represents `-> end` inside a `check` or `match` guard to exit the enclosing `loop`/`take`.
 type LoopEndStmt struct {
 	posInfo
 }
 
 func (*LoopEndStmt) stmtNode() {}
 
-// CheckRule is a single line inside a `check ... end` guard block.
-// If Action != nil (`cond -> action`), Action runs when Cond is true.
-// If Action == nil (`cond`), Cond is a precondition that triggers ElseBody when false.
+// ReturnStmt represents `-> <expr>` inside a `to` function or `swarm loop`.
+type ReturnStmt struct {
+	posInfo
+	Value Expr
+}
+
+func (*ReturnStmt) stmtNode() {}
+
+// stmtsHaveReturn reports whether `stmts` contains any `-> <expr>` return statement.
+func stmtsHaveReturn(stmts []Stmt) bool {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case *ReturnStmt:
+			return true
+		case *LoopStmt:
+			if stmtsHaveReturn(st.Body) {
+				return true
+			}
+		case *TakeStmt:
+			if stmtsHaveReturn(st.Body) {
+				return true
+			}
+		case *CheckGuardStmt:
+			if stmtsHaveReturn(st.Body) || stmtsHaveReturn(st.ElseBody) {
+				return true
+			}
+			for _, r := range st.Rules {
+				if r.Action != nil && stmtsHaveReturn([]Stmt{r.Action}) {
+					return true
+				}
+			}
+		case *MatchStmt:
+			if stmtsHaveReturn(st.ElseBody) {
+				return true
+			}
+			for _, arm := range st.Arms {
+				if (arm.Action != nil && stmtsHaveReturn([]Stmt{arm.Action})) || stmtsHaveReturn(arm.Body) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// CheckRule is a single `cond -> action` line inside a single-line `check` or `check ... end` verdict block.
 type CheckRule struct {
 	Line   int
 	Col    int
@@ -130,12 +173,18 @@ type CheckRule struct {
 	Action Stmt
 }
 
-// CheckGuardStmt represents `check cond -> action` or `check ... [else ...] end`.
+// CheckGuardStmt represents:
+//   - single-line: `check cond -> action`
+//   - verdict block: `check\n  cond -> action\n  [else ...]\nend` (`IsBlock == true && !IsEffectBlock`)
+//   - effect block: `check cond\n  stmts...\n  [else\n  stmts...]\nend` (`IsBlock == true && IsEffectBlock`)
 type CheckGuardStmt struct {
 	posInfo
-	IsBlock  bool
-	Rules    []CheckRule
-	ElseBody []Stmt
+	IsBlock       bool
+	IsEffectBlock bool
+	Cond          Expr
+	Body          []Stmt
+	Rules         []CheckRule
+	ElseBody      []Stmt
 }
 
 func (*CheckGuardStmt) stmtNode() {}
@@ -225,6 +274,7 @@ type MatchArmStmt struct {
 	Col     int
 	Pattern MatchPattern
 	Action  Stmt
+	Body    []Stmt
 }
 
 // MatchStmt represents `match <target> ... end` in statement position.

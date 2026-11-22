@@ -65,17 +65,17 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Missing field access (`hero.mana` -> `is error` in `.ease`)
 
 ## 5. Guards (`check`) (`README.md`)
-- **Happy Path**: `check ... -> ... end`, `check ... else [-> ...] end`, `check cond -> stmt`, `check cond -> end` (inside `loop`)
-- **10 Negative Cases**:
-  1. `check` block without `->` or `else`: `check\n x > 0\nend`
+- **Happy Path**: `check ... -> <value|end> ... end`, `check <cond>\n  stmts...\n[else\n  stmts...]\nend`, `check cond -> <value|end>`
+- **Negative Cases**:
+  1. Verdict `check` block rule without `->`: `check\n x > 0\nend`
   2. `check` missing condition before `->`: `check -> 1`
   3. Orphan `else` without `check`
   4. `check` block missing `end`
-  5. Single-line `check cond ->` missing action
-  6. Legacy `check:` with colon
+  5. Single-line `check cond ->` missing value/`end` or statement after `->` (`check x > 0 -> say x`)
+  6. Legacy `check:` with colon or bare precondition checklist without `->`
   7. Top-level value return in `check`: `check x > 0 -> "A"`
-  8. `-> end` outside `loop`: `check x > 0 -> end`
-  9. Legacy `if` / `else` (`if x > 0 ... end`)
+  8. `-> end` outside `loop`/`take`: `check x > 0 -> end`
+  9. Legacy `if` / `else` (`if x > 0 ... end`) or `fail` (`fail "..."`)
   10. Non-condition value in `check` (`check "yes" -> "ok"` -> `is error` in `.ease`)
 
 ## 6. Type Checks (`is`, `is not`) & Logic (`README.md`)
@@ -135,18 +135,18 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. `import` missing module name (`import\n`), `mod.fn` dot call (`TypeError` hinting `mod:fn`), `mod = 1`, `mod with ...`
 
 ## 10. Pattern Matching & Structured Extraction (`match ... end`)
-- **Happy Path**: `match cmd\n "PING" -> "PONG"\nend`, `res = match s\n "PORT={p as number}" -> p\n else -> 0\nend`, `entries = match lines\n "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with level = lvl, msg = msg\nend`, fixed rune widths `"{y: 4}-{m: 2}-{d: 2}"`, raw literal `'{"ok": true}'`, backreferences `"<{tag}>{body}</{tag}>"` / `"{n as number}:{n}"`, loop exit `match cmd\n "quit" -> end\nend`
+- **Happy Path**: `match cmd\n "PING" -> "PONG"\nend`, `match cmd\n "PING"\n say "pong"\nend`, `res = match s\n "PORT={p as number}" -> p\n else -> 0\nend`, `entries = match lines\n "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with level = lvl, msg = msg\nend`, fixed rune widths `"{y: 4}-{m: 2}-{d: 2}"`, raw literal `'{"ok": true}'`, backreferences `"<{tag}>{body}</{tag}>"` / `"{n as number}:{n}"`, loop exit `match cmd\n "quit" -> end\nend`
 - **Negative Cases**:
   1. Adjacent variable-length placeholders (`"{a}{b}"`, `"{...}{b}"`, `"{a}{...}"`, `"{...}{...}"`)
   2. Invalid fixed width (`"{a: 0}{b}"`, `"{a: 1.5}{b}"`) or reserved `{it}` capture
   3. Empty `match` block without pattern arms or missing `end`
   4. `match` expression on `text` without `else`
   5. Top-level value return in `match` (`"A" -> 1`) or unassigned top-level list `match`
-  6. List `match` in statement form with imperative action (`-> say v`)
+  6. Statement/side-effect after `->` (`"PING" -> say "ok"`, `"KEY={v}" -> v = "new"`)
   7. Non-text / `list as number` target in `match`
   8. Direct `def` record or `bool`/`csv`/`bytes`/`string` target in `{x as Type}`
   9. Conflicting repeated capture types (`"{n as number}-{n as text}"`, `"{n}-{n as number}"`)
-  10. Mixed incompatible list branch return types (`number` vs `text`, `RecA` vs `RecB`) or mutating immutable capture variable (`-> v = "new"`)
+  10. Mixed incompatible list branch return types (`number` vs `text`, `RecA` vs `RecB`) or mutating immutable capture variable in effect arm (`"KEY={v}"\n v = "new"`)
 
 ## 11. Safe Cast Fallbacks (`<expr> as <type> or <fallback>`)
 - **Happy Path**: `raw as number or 0`, `ask "Port?" as number or -1`, `"404" as HttpCode or 200`, `raw as Level or "INFO"`, `(list "10", "bad", "20") as number or 0`, `(lines as number or 0) where it > 0`, `raw as number or 8080 + 1`
@@ -163,7 +163,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Runtime non-suppression: bare `"abc" as number`, bare `(list "a", "b") as number`, `(1 / 0) as number or 0` -> `is error` in `.ease`
 
 ## 12. Data-Parallel Workers (`swarm loop`)
-- **Happy Path**: `xs = swarm loop range 1 5\n it * 2\nend`, `to f xs\n swarm loop xs\n check it < 0 -> 0\n it\n end\nend`, `(swarm loop range 1 5\n it * it\nend) where it > 10`, nested `swarm loop`s
+- **Happy Path**: `xs = swarm loop range 1 5\n -> it * 2\nend`, `to f xs\n -> swarm loop xs\n check it < 0 -> 0\n -> it\n end\nend`, `(swarm loop range 1 5\n -> it * it\nend) where it > 10`, nested `swarm loop`s, statement `swarm loop xs\n say it\nend`
 - **10 Negative Cases**:
   1. Unbounded `swarm loop\n 1\nend` (`SyntaxError`)
   2. Named variable `swarm loop x in xs ... end` (`SyntaxError`)

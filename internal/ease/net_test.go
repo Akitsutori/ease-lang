@@ -38,9 +38,12 @@ end
 
 to handle_req req
     match req.path
-        "/hello" -> network:reply_text req 200 "Grüß Gott!"
-        "/json"  -> network:reply_json req 200 (api_info with service = "ease-net")
-        else     -> network:reply_text req 404 "not found"
+        "/hello"
+            network:reply_text req 200 "Grüß Gott!"
+        "/json"
+            network:reply_json req 200 (api_info with service = "ease-net")
+        else
+            network:reply_text req 404 "not found"
     end
 end
 
@@ -57,7 +60,7 @@ spawn serve_loop requests
 api = network.network with url = "http://127.0.0.1:{port}"
 paths = list "/hello", "/json", "/hello", "/missing"
 bodies = swarm loop paths
-    network:fetch api it
+    -> network:fetch api it
 end
 
 say bodies
@@ -82,7 +85,9 @@ func TestNetServeTCPInboxEcho(t *testing.T) {
 to handle_client client
     take client.lines
         network:tcp_send client "echo:{it}\n"
-        check it is "bye" -> close client.lines
+        check it is "bye"
+            close client.lines
+        end
     end
 end
 

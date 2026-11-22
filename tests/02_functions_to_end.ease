@@ -1,12 +1,9 @@
-# Feature 02: Funktionen (to ... end), implizite Rückgabe & klammerfreie Aufrufe
+# Feature 02: Funktionen (to ... end, Einzeiler & explizite Rückgabe mit ->)
 
-to add a b
-    a + b
-end
+to add a b -> a + b
 
 to safe_div a b
-    check b is 0 -> fail "Division durch Null"
-    a / b
+    -> a / b
 end
 
 test

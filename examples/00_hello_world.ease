@@ -1,8 +1,6 @@
 # Minimalbeispiel: Hallo Welt mit String-Interpolation
 
-to greet name i
-    "Hallo {name}, willkommen bei ease!{i}"
-end
+to greet name i -> "Hallo {name}, willkommen bei ease!{i}"
 
 test
     greet "Welt" "" is "Hallo Welt, willkommen bei ease!"

@@ -4,14 +4,12 @@ def LogLevel = "INFO" | "WARN" | "ERROR"
 def HttpCode = 200 | 404 | 500
 def DefaultLevel = "INFO"
 
-to fallback_port
-  8080
-end
+to fallback_port -> 8080
 
 to check_precedence raw flag
   check raw as number or 0 > 10 -> "high"
   check raw as number or 0 > 0 or flag is "force" -> "active"
-  "none"
+  -> "none"
 end
 
 test "scalar, union, and numeric union cast fallbacks"

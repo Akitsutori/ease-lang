@@ -8,7 +8,7 @@ end
 to take_damage p amount
     next_hp = p.hp - amount
     check next_hp <= 0 -> p with hp = 0, state = "KO"
-    p with hp = next_hp
+    -> p with hp = next_hp
 end
 
 test "Unveränderliche Records & with-Kopien"

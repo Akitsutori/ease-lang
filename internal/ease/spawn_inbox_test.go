@@ -70,7 +70,9 @@ to coordinator ch done
   finished = 0
   take done
     finished = finished + it
-    check finished >= 2 -> close ch
+    check finished >= 2
+      close ch
+    end
   end
 end
 

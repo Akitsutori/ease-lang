@@ -40,7 +40,7 @@ to fetch target path
     res = http_call req
     check res.error is not "" -> ""
     check res.status >= 400   -> ""
-    res.body
+    -> res.body
 end
 
 to send target path payload
@@ -55,12 +55,10 @@ to send target path payload
     res = http_call req
     check res.error is not "" -> ""
     check res.status >= 400   -> ""
-    res.body
+    -> res.body
 end
 
-to serve_http port requests
-    net_serve_http port requests
-end
+to serve_http port requests -> net_serve_http port requests
 
 to reply_text req status body
     net_reply_text req status body
@@ -70,9 +68,7 @@ to reply_json req status data
     net_reply_json req status data
 end
 
-to serve_tcp port clients
-    net_serve_tcp port clients
-end
+to serve_tcp port clients -> net_serve_tcp port clients
 
 to tcp_send client msg
     net_send client msg

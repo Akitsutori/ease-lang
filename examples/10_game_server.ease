@@ -34,7 +34,7 @@ to step_world state ev
         last_y = ev.y
         last_player = ev.player
     end
-    state with
+    -> state with
         messages = state.messages + 1
         last_player = ev.player
         last_chat = ev.body
@@ -45,16 +45,21 @@ to run_world world
     state = world_state
     take world
         state = step_world state it
-        check it.has_req is "yes" -> ignored = network:reply_json it.req 200 state
+        check it.has_req is "yes"
+            network:reply_json it.req 200 state
+        end
     end
-    state
+    -> state
 end
 
 to route_http req world
     match "{req.method} {req.path}"
-        "GET /status" -> put world (room_event with kind = "status", has_req = "yes", req = req)
-        "POST /chat"  -> put world (room_event with kind = "chat", player = "http", body = req.body, has_req = "yes", req = req)
-        else          -> network:reply_text req 404 "Not Found"
+        "GET /status"
+            put world (room_event with kind = "status", has_req = "yes", req = req)
+        "POST /chat"
+            put world (room_event with kind = "chat", player = "http", body = req.body, has_req = "yes", req = req)
+        else
+            network:reply_text req 404 "Not Found"
     end
 end
 
@@ -68,10 +73,14 @@ to handle_tcp_client client world
     network:tcp_send client "WELCOME TO ROOM 1\n"
     take client.lines
         match it
-            "QUIT"                -> close client.lines
-            "MOVE {x as number} {y as number}" -> put world (room_event with kind = "move", player = client.remote, x = x, y = y)
-            "CHAT {msg}"          -> put world (room_event with kind = "chat", player = client.remote, body = msg)
-            else                  -> network:tcp_send client "ERR: use MOVE x y | CHAT msg | QUIT\n"
+            "QUIT"
+                close client.lines
+            "MOVE {x as number} {y as number}"
+                put world (room_event with kind = "move", player = client.remote, x = x, y = y)
+            "CHAT {msg}"
+                put world (room_event with kind = "chat", player = client.remote, body = msg)
+            else
+                network:tcp_send client "ERR: use MOVE x y | CHAT msg | QUIT\n"
         end
     end
 end
@@ -86,20 +95,22 @@ to close_all a b c
     close a
     close b
     close c
-    0
 end
 
 to start_game_server world http_reqs tcp_clients http_port tcp_port
     bound_http = network:serve_http http_port http_reqs
     bound_tcp  = network:serve_tcp tcp_port tcp_clients
 
-    check bound_http is 0 -> close_all http_reqs tcp_clients world
+    check bound_http is 0
+        close_all http_reqs tcp_clients world
+        -> 0
+    end
 
     spawn run_world world
     spawn accept_http http_reqs world
     spawn accept_tcp tcp_clients world
     say "Game server ready: HTTP http://127.0.0.1:{bound_http}, TCP 127.0.0.1:{bound_tcp}"
-    bound_http
+    -> bound_http
 end
 
 test "game server handles parallel HTTP chat/status and TCP inbox cleanly"

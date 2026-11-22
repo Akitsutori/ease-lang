@@ -7,9 +7,12 @@ end
 
 to handle_http req
     match req.path
-        "/health" -> network:reply_json req 200 (ping_reply)
-        "/hello"  -> network:reply_text req 200 "Hello Ease"
-        else      -> network:reply_text req 404 "not found"
+        "/health"
+            network:reply_json req 200 (ping_reply)
+        "/hello"
+            network:reply_text req 200 "Hello Ease"
+        else
+            network:reply_text req 404 "not found"
     end
 end
 
@@ -28,7 +31,7 @@ test "concurrent HTTP server via inbox handles multiple routes"
     api = network.network with url = "http://127.0.0.1:{port}"
     paths = list "/health", "/hello", "/missing"
     responses = swarm loop paths
-        network:fetch api it
+        -> network:fetch api it
     end
 
     responses.1 is (encode_json (ping_reply))

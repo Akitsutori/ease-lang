@@ -130,10 +130,14 @@ def envelope
 end
 
 to handle res
-    check
-        res is "OK"         -> say "Alles super!"
-        res is "FEHLER"     -> say "Allgemeiner Fehler"
-        res is ErrorMessage -> say "Fehler {res.code}: {res.message}"
+    check res is "OK"
+        say "Alles super!"
+    end
+    check res is "FEHLER"
+        say "Allgemeiner Fehler"
+    end
+    check res is ErrorMessage
+        say "Fehler {res.code}: {res.message}"
     end
 end
 
@@ -146,9 +150,10 @@ to process_response res
 end
 
 to log_only_success res
-    check
-        res is "OK" -> say "Hat geklappt"
-        else        -> say "Irgendetwas anderes ist passiert"
+    check res is "OK"
+        say "Hat geklappt"
+    else
+        say "Irgendetwas anderes ist passiert"
     end
 end
 
@@ -161,7 +166,7 @@ end
 
 to unwrap_err_guard res
     check res is not ErrorMessage -> "not-error"
-    "guard:{res.code}"
+    -> "guard:{res.code}"
 end
 
 to server_error_only res
@@ -373,9 +378,9 @@ end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
     check
-        res is "OK"         -> say "{res.code}"
-        res is "FEHLER"     -> say "err"
-        res is ErrorMessage -> say "{res.code}"
+        res is "OK"         -> "{res.code}"
+        res is "FEHLER"     -> "err"
+        res is ErrorMessage -> "{res.code}"
     end
 end
 `,
@@ -392,9 +397,9 @@ def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
     say "{res.code}"
     check
-        res is "OK"         -> say "ok"
-        res is "FEHLER"     -> say "err"
-        res is ErrorMessage -> say "{res.code}"
+        res is "OK"         -> "ok"
+        res is "FEHLER"     -> "err"
+        res is ErrorMessage -> "{res.code}"
     end
 end
 `,
@@ -410,8 +415,8 @@ end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
     check
-        res is ErrorMessage -> say "{res.code}"
-        else                -> say "{res.code}"
+        res is ErrorMessage -> "{res.code}"
+        else                -> "{res.code}"
     end
 end
 `,
@@ -464,9 +469,10 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to inspect res
-    check
-        res is ErrorMessage -> say "{res.code}"
-        else                -> say "other"
+    check res is ErrorMessage
+        say "{res.code}"
+    else
+        say "other"
     end
     say "{res.code}"
 end
@@ -483,11 +489,14 @@ end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 items = list as outcome
 items = append items "OK"
-loop items
-    check
-        it is "OK"         -> say "ok"
-        it is ErrorMessage -> say "{it.code}"
+to check_items items
+    loop items
+        check
+            it is "OK"         -> "ok"
+            it is ErrorMessage -> "{it.code}"
+        end
     end
+    -> "done"
 end
 `,
 			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"FEHLER\""},
@@ -570,17 +579,17 @@ end
 	}{
 		{
 			name: "user is a",
-			src:  "def user\n    id = 0\nend\na = user with id = 1\ncheck user is a -> say \"ok\"\n",
+			src:  "def user\n    id = 0\nend\na = user with id = 1\ncheck user is a\n    say \"ok\"\nend\n",
 			want: "cannot use record type 'user' as a value on the left side of 'is'",
 		},
 		{
 			name: "user is user",
-			src:  "def user\n    id = 0\nend\ncheck user is user -> say \"ok\"\n",
+			src:  "def user\n    id = 0\nend\ncheck user is user\n    say \"ok\"\nend\n",
 			want: "cannot use record type 'user' as a value on the left side of 'is'",
 		},
 		{
 			name: "union on left of is",
-			src:  "def role = \"guest\" | \"admin\"\ncheck role is \"guest\" -> say \"ok\"\n",
+			src:  "def role = \"guest\" | \"admin\"\ncheck role is \"guest\"\n    say \"ok\"\nend\n",
 			want: "cannot use union type 'role' as a value on the left side of 'is'",
 		},
 	}
@@ -657,7 +666,7 @@ func TestIssue7NoBoolConditionJsonBoolAndStrictUnionLiteral(t *testing.T) {
 def ergebnis = "👍" | "👎"
 to check_ready score
     check score >= 100 -> "👍" as ergebnis
-    "👎" as ergebnis
+    -> "👎" as ergebnis
 end
 say check_ready 120
 say check_ready 50
@@ -700,7 +709,9 @@ def decision
     answer = "yes" | "no"
 end
 d = decision with answer = "no"
-check d.answer is "yse" -> say "ok"
+check d.answer is "yse"
+    say "ok"
+end
 `
 	if _, err := EvalProgram(staticTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
 		t.Fatalf("expected static union literal typo error, got: %v", err)
@@ -712,7 +723,7 @@ def decision
 end
 to inspect_decision dec
     check dec.answer is "yse" -> "ok"
-    "no"
+    -> "no"
 end
 d = decision with answer = "no"
 say inspect_decision d
@@ -865,7 +876,7 @@ match s
   "hello" -> 42
 end
 `,
-			wantSub: "Cannot return a value from 'match' at top level",
+			wantSub: "Cannot use '-> <value>' at top level",
 		},
 		{
 			name: "top level list match statement without assignment rejected",
@@ -875,7 +886,7 @@ match xs
   "{v}" -> v
 end
 `,
-			wantSub: "Cannot use list 'match' without assigning its result at top level",
+			wantSub: "List 'match' is a transformation expression and cannot be used as a standalone statement",
 		},
 		{
 			name: "list match statement with non-expression action rejected",
@@ -883,18 +894,20 @@ end
 to f
   xs = list "a", "b"
   match xs
-    "{v}" -> say v
+    "{v}"
+      say v
   end
 end
 `,
-			wantSub: "transforms items with expressions and cannot execute statements",
+			wantSub: "List 'match' is a transformation expression and cannot be used as a standalone statement",
 		},
 		{
 			name: "numeric target rejected statically",
 			src: `
 n = 10
 match n
-  "10" -> say "ten"
+  "10"
+    say "ten"
 end
 `,
 			wantSub: "'match' requires text or a list of text, got number",
@@ -914,7 +927,8 @@ end
 			src: `
 s = "hi"
 match s
-  "{v as string}" -> say v
+  "{v as string}"
+    say v
 end
 `,
 			wantSub: "Did you mean 'text'?",
@@ -924,7 +938,8 @@ end
 			src: `
 s = "true"
 match s
-  "{v as bool}" -> say v
+  "{v as bool}"
+    say v
 end
 `,
 			wantSub: `Boolean ("bool") is not a built-in type`,
@@ -937,7 +952,8 @@ def Item
 end
 s = "hi"
 match s
-  "{v as Item}" -> say "ok"
+  "{v as Item}"
+    say "ok"
 end
 `,
 			wantSub: `Record type "Item" cannot be used directly in match capture`,
@@ -954,7 +970,8 @@ end
 def RecOnly = A | B
 s = "hi"
 match s
-  "{v as RecOnly}" -> say "ok"
+  "{v as RecOnly}"
+    say "ok"
 end
 `,
 			wantSub: `Union "RecOnly" contains only record variants`,
@@ -964,7 +981,8 @@ end
 			src: `
 s = "1-1"
 match s
-  "{n as number}-{n as text}" -> say n
+  "{n as number}-{n as text}"
+    say n
 end
 `,
 			wantSub: `Conflicting types for repeated capture "n"`,
@@ -974,7 +992,8 @@ end
 			src: `
 s = "1-1"
 match s
-  "{n}-{n as number}" -> say n
+  "{n}-{n as number}"
+    say n
 end
 `,
 			wantSub: `Conflicting types for repeated capture "n"`,
@@ -982,12 +1001,11 @@ end
 		{
 			name: "capture variable shadowing function rejected",
 			src: `
-to helper x
-  x
-end
+to helper x -> x
 s = "abc"
 match s
-  "{helper}" -> say "ok"
+  "{helper}"
+    say "ok"
 end
 `,
 			wantSub: `Cannot name capture variable "helper" the same as a 'to' function`,
@@ -1066,10 +1084,11 @@ to loop_with_match_exit cmds
     check i > count cmds -> end
     match cmds.(i)
       "quit" -> end
-      else -> i = i + 1
+      else
+        i = i + 1
     end
   end
-  i - 1
+  -> i - 1
 end
 
 lines = list "INFO: ok", "10"
@@ -1086,7 +1105,7 @@ filtered = entries where it.lvl is "INFO"
 
 strict_entries = match (list "INFO: ok")
   "{l as Level}: {m}" -> Entry with lvl = l, msg = m
-  else -> fail "bad"
+  else -> Entry with lvl = "WARN", msg = "fallback"
 end
 
 labels = match lines
@@ -1517,5 +1536,148 @@ end
 	}
 	if report.Failed != 0 || report.Passed != 21 {
 		t.Fatalf("expected 21 passed / 0 failed, got %+v", report)
+	}
+}
+
+func TestArrowLawVoidProceduresEffectBlocksAndNoFail(t *testing.T) {
+	// 1. Happy path: one-liner `to`, void procedure, check effect block + early `->`, verdict table, match effect arms, swarm loop `->`
+	happySrc := `
+to add a b -> a + b
+
+to log_step msg
+    say "LOG:{msg}"
+end
+
+to shipping weight
+    porto = 5
+    check weight > 10
+        porto = porto + 4
+        log_step "heavy"
+    else
+        log_step "light"
+    end
+    -> porto
+end
+
+to classify n
+    check
+        n < 0  -> "neg"
+        n is 0 -> "zero"
+        else   -> "pos"
+    end
+end
+
+to dispatch cmd
+    out = ""
+    match cmd
+        "PING"
+            log_step "pong"
+            out = "pong"
+        "STOP" -> "stopped"
+        else
+            out = "other:{cmd}"
+    end
+    -> out
+end
+
+doubled = swarm loop range 1 3
+    -> it * 2
+end
+
+swarm loop (list "a", "b")
+    say "item:{it}"
+end
+
+test "arrow law and effect blocks"
+    add 2 3 is 5
+    shipping 12 is 9
+    shipping 4 is 5
+    classify -1 is "neg"
+    classify 0 is "zero"
+    classify 7 is "pos"
+    dispatch "PING" is "pong"
+    dispatch "STOP" is "stopped"
+    dispatch "GO" is "other:GO"
+    doubled is list 2, 4, 6
+end
+`
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed on happy arrow-law program: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 10 {
+		t.Fatalf("expected 10 passed / 0 failed, got %+v", report)
+	}
+
+	// 2. Negative cases
+	negCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "one-liner to with say rejected",
+			src:     "to f x -> say x\n",
+			wantSub: "Statements and side effects are not allowed after '->'",
+		},
+		{
+			name:    "one-liner to with assignment rejected",
+			src:     "to f x -> a = 1\n",
+			wantSub: "Assignments are not allowed after '->'",
+		},
+		{
+			name:    "multiline to without -> is void (calling as value rejected)",
+			src:     "to log_it msg\n  say msg\nend\nx = log_it \"hi\"\n",
+			wantSub: "'log_it' is a procedure (void) and does not return a value",
+		},
+		{
+			name:    "partial return function rejected",
+			src:     "to maybe n\n  check n > 0 -> 1\nend\n",
+			wantSub: "returns a value on some paths via '->' but can finish without returning a value",
+		},
+		{
+			name:    "-> with put/close/void call rejected",
+			src:     "to f ch\n  -> close ch\nend\n",
+			wantSub: "'close' does not return a value",
+		},
+		{
+			name:    "-> with void user function rejected",
+			src:     "to proc x\n  say x\nend\nto f x -> proc x\n",
+			wantSub: "'proc' is a procedure (void) and does not return a value",
+		},
+		{
+			name:    "legacy bare precondition checklist in check rejected",
+			src:     "to f x\n  check\n    x > 0\n  else\n    \"bad\"\n  end\n  -> \"ok\"\nend\n",
+			wantSub: "Every rule inside a 'check ... end' verdict table must have '-> <value | end>'",
+		},
+		{
+			name:    "network:reply_text is void",
+			src:     "import network\nto h req\n  x = network:reply_text req 200 \"ok\"\nend\n",
+			wantSub: "'network:reply_text' does not return a value",
+		},
+		{
+			name:    "screen:open is void",
+			src:     "import screen\nw = screen.screen\nev = inbox as screen.event\nx = screen:open w ev\n",
+			wantSub: "'screen:open' does not return a value",
+		},
+		{
+			name:    "fail removed with migration hint",
+			src:     "fail \"boom\"\n",
+			wantSub: "'fail' was removed; return an explicit error union/record with '-> ...' instead.",
+		},
+		{
+			name:    "swarm loop without -> cannot be assigned",
+			src:     "xs = swarm loop range 1 3\n  say it\nend\n",
+			wantSub: "'swarm loop' without '-> <value>' does not return a value",
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantSub, err)
+			}
+		})
 	}
 }

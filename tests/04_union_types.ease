@@ -27,7 +27,7 @@ to evaluate_entry pass door
         pass is "none" -> "Kein Einlass ohne Ticket"
         pass is "vip" -> "VIP-Lounge geöffnet"
     end
-    "Standard-Einlass gewährt"
+    -> "Standard-Einlass gewährt"
 end
 
 to process_response res

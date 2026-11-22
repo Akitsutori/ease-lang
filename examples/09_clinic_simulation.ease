@@ -23,8 +23,10 @@ to clinician_worker doc_name waiting treated done rooms
     take waiting
         min_mins = 5
         max_mins = 15
-        check it.symptom is "urgent" -> min_mins = 12
-        check it.symptom is "urgent" -> max_mins = 30
+        check it.symptom is "urgent"
+            min_mins = 12
+            max_mins = 30
+        end
 
         duration = random:roll min_mins max_mins
         chosen_room = random:pick rooms
@@ -69,7 +71,7 @@ to simulate_clinic arrivals
         records = append records it
     end
     close done
-    records
+    -> records
 end
 
 test "all clinic arrivals finish consultation with valid rooms and durations"

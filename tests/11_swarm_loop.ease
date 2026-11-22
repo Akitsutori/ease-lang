@@ -11,16 +11,16 @@ def Summary
 end
 
 to shipping_costs orders
-  swarm loop orders
+  -> swarm loop orders
     check it.amount >= 50 -> Summary with id = it.id, cost = 0
-    Summary with id = it.id, cost = 5.90
+    -> Summary with id = it.id, cost = 5.90
   end
 end
 
 to double_range n
-  swarm loop range 1 n
+  -> swarm loop range 1 n
     local = it * 2
-    local + 1
+    -> local + 1
   end
 end
 
@@ -49,7 +49,7 @@ test "swarm loop transforms, guards, scoping, and downstream type inference"
   # Parenthesized swarm loop with postfix where & outer read-only variable
   factor = 10
   filtered = (swarm loop range 1 5
-    it * factor
+    -> it * factor
   end) where it >= 30
   filtered is list 30, 40, 50
 
@@ -63,13 +63,13 @@ test "swarm loop transforms, guards, scoping, and downstream type inference"
       "ERR:{msg}" -> "fail:{msg}"
       "OK:{msg}" -> "pass:{msg}"
     end
-    "unknown"
+    -> "unknown"
   end
   tags is list "fail:disk", "pass:boot"
 
   # Empty list fast path
   empty = swarm loop (list as number)
-    it + 1
+    -> it + 1
   end
   count empty is 0
 end

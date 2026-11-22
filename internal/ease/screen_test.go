@@ -126,7 +126,7 @@ to render_loop win
         sc = screen.scene with background = "midnight"
         raw = screen:present win sc
         st = decode_json raw as screen.frame_state
-        check st.status is "closed" -> "closed"
+        check st.status is "closed" -> end
     end
 end
 

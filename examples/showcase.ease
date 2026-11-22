@@ -15,7 +15,7 @@ to greet user
         user.status is "inactive" -> "Konto deaktiviert"
         user.role is "admin"      -> "Admin-Zugang für {user.name}"
     end
-    "Willkommen, {user.name}!"
+    -> "Willkommen, {user.name}!"
 end
 
 to sum_squares nums
@@ -23,7 +23,7 @@ to sum_squares nums
     loop nums
         total = total + (it * it)
     end
-    total
+    -> total
 end
 
 test "Showcase Kernfeatures"

@@ -45,13 +45,15 @@ func TestServeWorkerCrashIsolation(t *testing.T) {
 
 to crash_when_told req
     network:reply_text req 500 "crashing"
-    fail "boom"
+    bad = 1 / 0
 end
 
 to handle_req req
     match "{req.method} {req.path}"
-        "GET /boom" -> crash_when_told req
-        else        -> network:reply_text req 200 "still alive"
+        "GET /boom"
+            crash_when_told req
+        else
+            network:reply_text req 200 "still alive"
     end
 end
 
@@ -101,7 +103,7 @@ say "PORT={port}"
 		outMu.Lock()
 		logged := errOut.String()
 		outMu.Unlock()
-		if strings.Contains(logged, "worker_error") && strings.Contains(logged, "boom") {
+		if strings.Contains(logged, "worker_error") && strings.Contains(logged, "Division by zero") {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
@@ -110,7 +112,7 @@ say "PORT={port}"
 	outMu.Lock()
 	logged := errOut.String()
 	outMu.Unlock()
-	if !strings.Contains(logged, `"event":"worker_error"`) || !strings.Contains(logged, "boom") {
+	if !strings.Contains(logged, `"event":"worker_error"`) || !strings.Contains(logged, "Division by zero") {
 		t.Fatalf("expected isolated JSON worker_error log, got %q", logged)
 	}
 
@@ -136,9 +138,7 @@ def world_event
     req  = network.http_request
 end
 
-to calc_label count_val
-    "v1:{count_val}"
-end
+to calc_label count_val -> "v1:{count_val}"
 
 to run_world world
     hits = 0
@@ -282,9 +282,7 @@ func TestServePortOverrideWatchAndGracefulShutdown(t *testing.T) {
 	path := filepath.Join(dir, "watch.ease")
 	v1 := `import network
 
-to version_tag
-    "alpha"
-end
+to version_tag -> "alpha"
 
 to serve_loop requests
     take requests

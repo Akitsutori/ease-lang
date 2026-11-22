@@ -118,7 +118,7 @@ jobs:
           ./${{ matrix.hello_bin }}
 
           mkdir -p tmp_bundle/sub
-          printf 'to greet name\n  "Hi {name}"\nend\n' > tmp_bundle/sub/mod.ease
+          printf 'to greet name -> "Hi {name}"\n' > tmp_bundle/sub/mod.ease
           printf 'import "./mod.ease" as mod\nsay mod:greet "Ease"\n' > tmp_bundle/sub/main.ease
           ./${{ matrix.bin }} build tmp_bundle/sub/main.ease -o tmp_bundle/${{ matrix.hello_bin }}
           ./tmp_bundle/${{ matrix.hello_bin }}

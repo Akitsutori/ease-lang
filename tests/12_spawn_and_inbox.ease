@@ -35,8 +35,12 @@ test "spawn, typed inbox, put, take, and close"
   total = 0
   seen = 0
   take ch
-    check it.kind is "data" -> total = total + it.val
-    check it.kind is "ping" -> total = total + it.val
+    check it.kind is "data"
+      total = total + it.val
+    end
+    check it.kind is "ping"
+      total = total + it.val
+    end
     seen = seen + 1
   end
   seen is 2

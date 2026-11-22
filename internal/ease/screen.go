@@ -778,18 +778,18 @@ func (ev *Evaluator) execScreenOpen(args []Value, line, col int) (Value, error) 
 	}
 
 	if events.IsClosed() || ev.rt.isAborted() {
-		return "closed", nil
+		return nil, nil
 	}
 
 	if ev.headlessScreen {
-		return "open", nil
+		return nil, nil
 	}
 
 	sess := startScreenSession(cfg, events)
 	ev.rt.screenMu.Lock()
 	ev.rt.activeScreen = sess
 	ev.rt.screenMu.Unlock()
-	return "open", nil
+	return nil, nil
 }
 
 func (ev *Evaluator) execScreenPresent(args []Value, line, col int) (Value, error) {

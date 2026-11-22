@@ -40,7 +40,7 @@ to load_verified_user client user_id
         raw.id > 3     -> fetch_report with status = "domain_rejected", note = "Nur Stammnutzer (ID 1-3) zugelassen"
     end
 
-    fetch_report with status = "ok", user = raw, note = "Verifiziert"
+    -> fetch_report with status = "ok", user = raw, note = "Verifiziert"
 end
 
 to publish_article client draft
@@ -50,7 +50,7 @@ to publish_article client draft
     # Echter HTTP-POST gegen /posts
     resp_json = network:send client "/posts" draft
     check resp_json is "" -> post_receipt with id = 0
-    decode_json resp_json as post_receipt
+    -> decode_json resp_json as post_receipt
 end
 
 # 3. Ausführbares Hauptprogramm (läuft direkt bei `ease.exe examples/051_network.ease`)

@@ -39,13 +39,9 @@ func TestLexerAndIsNotTokens(t *testing.T) {
 
 func TestToWhereAndCheckBlockExecution(t *testing.T) {
 	src := `
-to double x
-  x * 2
-end
+to double x -> x * 2
 
-to divide a b
-  a / b
-end
+to divide a b -> a / b
 
 test "functions"
   double 4 is 8
@@ -85,9 +81,7 @@ say "result={res}"
 
 func TestCheckFailureAndImmutabilityHint(t *testing.T) {
 	badCheck := `
-to square n
-  n * n
-end
+to square n -> n * n
 
 test
   square 3 is 10
@@ -158,7 +152,7 @@ func TestStandaloneBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	programSrc := "to greet who\n  \"Hi \" + who\nend\ntest\n  greet \"Ease\" is \"Hi Ease\"\nend\nsay greet \"Go\"\n"
+	programSrc := "to greet who -> \"Hi \" + who\ntest\n  greet \"Ease\" is \"Hi Ease\"\nend\nsay greet \"Go\"\n"
 	if err := BuildStandaloneExe(hostPath, programSrc, outPath); err != nil {
 		t.Fatalf("BuildStandaloneExe failed: %v", err)
 	}
@@ -244,20 +238,18 @@ to allow_entry name age
         age > 120         -> "Ungültiges Alter"
     end
 
-    "Willkommen {name}, du darfst rein!"
+    -> "Willkommen {name}, du darfst rein!"
 end
 
 to is_valid_vip code age
     check
-        code is text
-        code is "VIP2026"
-        age is number
-        age >= 18
-    else
-        "invalid"
+        code is not text     -> "invalid"
+        code is not "VIP2026" -> "invalid"
+        age is not number    -> "invalid"
+        age < 18             -> "invalid"
     end
 
-    "valid"
+    -> "valid"
 end
 
 test
@@ -276,7 +268,9 @@ end
 
 user_name = ask "Wie heißt du?"
 user_age  = ask "Wie alt bist du?"
-check user_age is not number -> say "Bitte beim nächsten Mal eine Zahl eingeben."
+check user_age is not number
+    say "Bitte beim nächsten Mal eine Zahl eingeben."
+end
 `
 	report, err := RunChecks(src)
 	if err != nil {
@@ -391,7 +385,7 @@ to check_access age pass
         pass is "none"     -> "Abgelehnt: kein Ticket"
         pass is "vip"      -> "Willkommen in der Lounge"
     end
-    "Willkommen im Hauptbereich"
+    -> "Willkommen im Hauptbereich"
 end
 
 test
@@ -423,7 +417,7 @@ end
 to take_damage p amount
     next_hp = p.hp - amount
     check next_hp <= 0 -> p with hp = 0, state = "KO"
-    p with hp = next_hp
+    -> p with hp = next_hp
 end
 
 test
@@ -481,9 +475,7 @@ say "Hello, {name}"
 def x = 1
 def y = 0.5
 
-to add a b
-    a + b
-end
+to add a b -> a + b
 
 to start
     say "Hello World"
@@ -491,7 +483,9 @@ to start
     say "Sum of {x} and {y} is {total}"
 
     age = ask "Wie alt bist du?" as number
-    check age is not number -> say "Keine gültige Zahl."
+    check age is not number
+        say "Keine gültige Zahl."
+    end
     say "Du bist {age} Jahre alt."
 end
 
@@ -521,7 +515,7 @@ empty_cloud  = list as particle
 
 to update_particles items dt
     total = count items
-    total + dt
+    -> total + dt
 end
 
 stepped = update_particles list as particle 1
@@ -621,7 +615,7 @@ to move_x x key
         key is "right" -> x + 6
         key is "left"  -> x - 6
     end
-    x
+    -> x
 end
 
 to run_window
@@ -653,7 +647,7 @@ to run_window
         check state is not screen.frame_state -> "Fensterfehler"
     end
 
-    "Fertig"
+    -> "Fertig"
 end
 
 test "inclusive range & headless screen"
@@ -702,13 +696,9 @@ end
 
 func TestCommaFreeFunctionCalls(t *testing.T) {
 	src := `
-to greet name suffix
-    "Hallo {name}{suffix}"
-end
+to greet name suffix -> "Hallo {name}{suffix}"
 
-to add_three a b c
-    a + b + c
-end
+to add_three a b c -> a + b + c
 
 total = 0
 loop range 1 3 total = total + it end
@@ -749,16 +739,12 @@ func TestMinusRuleAtomicLiteralVsSubtraction(t *testing.T) {
 	src := `
 to classify n
     check n > 0 -> "positive"
-    "non-positive"
+    -> "non-positive"
 end
 
-to get_count
-    10
-end
+to get_count -> 10
 
-to negate x
-    -x
-end
+to negate x -> -x
 
 a = 10
 
@@ -945,12 +931,12 @@ to check_param_and_field vx items
     outer_seen = 0
     field_seen = 0
     loop items
-        check vx is not 100 -> fail "parameter vx was shadowed"
-        check it.vx is not 5 -> fail "unexpected it.vx"
+        check vx is not 100 -> -1
+        check it.vx is not 5 -> -2
         outer_seen = vx
         field_seen = it.vx
     end
-    outer_seen * 10 + field_seen
+    -> outer_seen * 10 + field_seen
 end
 
 vx = 100
@@ -1123,12 +1109,10 @@ to sum_to n
     loop range 1 n
         total = total + it
     end
-    total
+    -> total
 end
 
-to with_tax price
-    price + (price * tax_rate)
-end
+to with_tax price -> price + (price * tax_rate)
 
 say sum_to 3
 say total
@@ -1161,7 +1145,7 @@ to mixed n
     loop range 1 n
         total = 0
     end
-    total
+    -> total
 end
 say mixed 2
 `
@@ -1169,26 +1153,28 @@ say mixed 2
 		t.Fatalf("expected mixed global/local error, got: %v", err)
 	}
 
-	// 4. Block scope in check (-> and else) keeps newly assigned variables local to the branch.
+	// 4. Block scope in check effect block keeps newly assigned variables local to the branch.
 	checkArrowLeakSrc := `
 to describe x
-    check x > 0 -> r = "pos"
-    "got {r}"
+    check x > 0
+        r = "pos"
+    end
+    -> "got {r}"
 end
 say describe 1
 `
 	if _, err := EvalProgram(checkArrowLeakSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Unknown variable "r"`) {
-		t.Fatalf("expected block-scoped r inside check -> to be unknown outside, got: %v", err)
+		t.Fatalf("expected block-scoped r inside check effect block to be unknown outside, got: %v", err)
 	}
 
 	checkElseLeakSrc := `
 to describe x
-    check
-        x > 0 -> r = "pos"
-        else
-            r = "non-pos"
+    check x > 0
+        r = "pos"
+    else
+        r = "non-pos"
     end
-    "got {r}"
+    -> "got {r}"
 end
 say describe 0
 `
@@ -1196,12 +1182,14 @@ say describe 0
 		t.Fatalf("expected block-scoped r inside check else to be unknown outside, got: %v", err)
 	}
 
-	// Updating a pre-declared local variable inside check works.
+	// Updating a pre-declared local variable inside check effect block works.
 	checkUpdateLocalSrc := `
 to describe x
     r = "non-pos"
-    check x > 0 -> r = "pos"
-    "got {r}"
+    check x > 0
+        r = "pos"
+    end
+    -> "got {r}"
 end
 say describe 1
 `
@@ -1217,7 +1205,7 @@ say describe 1
 	paramReassignSrc := `
 to inc n
     n = n + 1
-    n
+    -> n
 end
 say inc 1
 `
@@ -1239,34 +1227,36 @@ end
 }
 
 func TestIssue8CheckFormsArrowSemanticsAndTopLevelValueError(t *testing.T) {
-	// 1. Parse-time rejection of bare `check` without `->` (single-line and block without `else`).
+	// 1. Parse-time rejection of unclosed effect check and bare rules inside verdict table.
 	bareSingle := "x = 1\ncheck x > 0\n"
-	if _, err := ParseProgram(bareSingle); err == nil || !strings.Contains(err.Error(), "Expected '->'") {
-		t.Fatalf("expected parse error for single-line check without '->', got: %v", err)
+	if _, err := ParseProgram(bareSingle); err == nil || !strings.Contains(err.Error(), "'check' block is missing 'end'") {
+		t.Fatalf("expected parse error for unclosed check effect block, got: %v", err)
 	}
 
 	bareBlock := "x = 1\ncheck\n    x > 0\nend\n"
-	if _, err := ParseProgram(bareBlock); err == nil || !strings.Contains(err.Error(), "'check' block requires '->' actions or an 'else' branch") {
-		t.Fatalf("expected parse error for check block without '->' or 'else', got: %v", err)
+	if _, err := ParseProgram(bareBlock); err == nil || !strings.Contains(err.Error(), "Every rule inside a 'check ... end' verdict table must have '-> <value | end>'") {
+		t.Fatalf("expected parse error for check verdict block without '->', got: %v", err)
 	}
 
-	// 2. Arrow semantics in functions & loops:
-	//    - value expression returns from the entire function (even inside loops)
-	//    - statement (assignment / say) executes and continues to next iteration/line
+	// 2. Arrow semantics in functions & loops vs effect blocks:
+	//    - `-> <expr>` returns from the entire function (even inside loops)
+	//    - `check <cond> ... end` effect block runs statements and continues to next iteration/line
 	arrowLoopSrc := `
 to count_a words
     cnt = 0
     loop words
-        check it is "a" -> cnt = cnt + 1
+        check it is "a"
+            cnt = cnt + 1
+        end
     end
-    cnt
+    -> cnt
 end
 
 to first_big xs
     loop xs
         check it > 1 -> it
     end
-    0
+    -> 0
 end
 
 words = list "a", "b", "a"
@@ -1282,18 +1272,18 @@ say first_big nums
 		t.Fatalf("unexpected output: got %q, want %q", got, want)
 	}
 
-	// 3. Top-level value after `->` is rejected with clear diagnostic (both when true and when false).
+	// 3. Top-level value after `->` is rejected statically (both when true and when false).
 	for _, xVal := range []string{"1", "0"} {
 		topValSrc := "x = " + xVal + "\ncheck x > 0 -> \"A\"\n"
-		if _, err := EvalProgram(topValSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.") {
+		if _, err := EvalProgram(topValSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot use '-> <value>' at top level") {
 			t.Fatalf("expected top-level check value error (x=%s), got: %v", xVal, err)
 		}
 	}
 
-	// Top-level statement after `->` works cleanly.
+	// Top-level effect block works cleanly.
 	var topOut bytes.Buffer
-	if _, err := EvalProgram("x = 1\ncheck x > 0 -> say \"ok\"\n", &topOut); err != nil {
-		t.Fatalf("expected top-level check with say to succeed, got: %v", err)
+	if _, err := EvalProgram("x = 1\ncheck x > 0\n    say \"ok\"\nend\n", &topOut); err != nil {
+		t.Fatalf("expected top-level check effect block to succeed, got: %v", err)
 	}
 	if got := strings.TrimSpace(topOut.String()); got != "ok" {
 		t.Fatalf("unexpected top-level output: got %q, want %q", got, "ok")
@@ -1450,12 +1440,12 @@ end
 # Fibonacci with loop range 1 100, seq.(it.index - 1), and check -> end
 seq = list 0, 1
 loop range 1 100
-    check
-        it.index <= 2 -> say "seed:{seq.(it.index)}"
-        else
-            next = seq.(it.index - 1) + seq.(it.index - 2)
-            check next > 25 -> end
-            seq = append seq next
+    check it.index <= 2
+        say "seed:{seq.(it.index)}"
+    else
+        next = seq.(it.index - 1) + seq.(it.index - 2)
+        check next > 25 -> end
+        seq = append seq next
     end
 end
 say count seq
@@ -1475,14 +1465,14 @@ say seq.(count seq)
 to find_first_over limit xs
     found = -1
     loop xs
-        check
-            it <= limit -> say "small:{it}"
-            else
-                found = it
-                check it > 0 -> end
+        check it <= limit
+            say "small:{it}"
+        else
+            found = it
+            check it > 0 -> end
         end
     end
-    found + 100
+    -> found + 100
 end
 
 xs_in = list 1, 8, 12
@@ -1549,7 +1539,7 @@ say pairs.2
 		},
 		{
 			name: "arrow end in function outside loop",
-			src:  "to f x\n    check x > 0 -> end\n    x\nend\n",
+			src:  "to f x\n    check x > 0 -> end\n    -> x\nend\n",
 			want: "'-> end' can only be used inside a 'loop' block",
 		},
 		{
@@ -1580,29 +1570,23 @@ end
 
 say greet "Ada"
 
-to greet name
-    "Hi {name}"
-end
+to greet name -> "Hi {name}"
 
-to ping
-    "pong"
-end
+to ping -> "pong"
 
-to add a b
-    a + b
-end
+to add a b -> a + b
 
 to sum_squares xs
     total = 0
     loop xs
         total = total + (it * it)
     end
-    total
+    -> total
 end
 
 to fib n
     check n <= 1 -> n
-    fib (n - 1) + fib (n - 2)
+    -> fib (n - 1) + fib (n - 2)
 end
 
 say ping
@@ -1802,10 +1786,7 @@ def div_case
     b = 0
 end
 
-to safe_div a b
-    check b is 0 -> fail "Division by zero"
-    a / b
-end
+to safe_div a b -> a / b
 
 test "data-driven rules and error blocks"
     a = 10
@@ -1847,8 +1828,8 @@ end
 end
 
 to safe_div a b
-    check b is 0 -> fail "Division by zero"
-    a / b
+    # native division by zero
+    -> a / b
 end
 
 test "Calculator rules"
@@ -2061,7 +2042,7 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 		"end\n\n" +
 		"to classify_msg s\n" +
 		"    check contains s \"ok\" -> \"accepted\"\n" +
-		"    \"rejected\"\n" +
+		"    -> \"rejected\"\n" +
 		"end\n\n" +
 		"test \"UTF-8, NFC, and text built-ins\"\n" +
 		"    split \"äöü👍\" \"\" is list \"ä\", \"ö\", \"ü\", \"👍\"\n" +
@@ -2314,17 +2295,11 @@ end
 
 def outcome = invoice | "empty"
 
-to version
-  "v1"
-end
+to version -> "v1"
 
-to total inv
-  inv.net * (1 + default_tax)
-end
+to total inv -> inv.net * (1 + default_tax)
 
-to apply_tax amount rate
-  amount * (1 + rate)
-end
+to apply_tax amount rate -> amount * (1 + rate)
 
 test "module internal check should be ignored on import"
   1 is 2
@@ -2337,10 +2312,10 @@ end
 	// 2. Write two sibling modules with colliding names to verify encapsulation.
 	aPath := filepath.Join(dir, "mod_a.ease")
 	bPath := filepath.Join(dir, "mod_b.ease")
-	if err := os.WriteFile(aPath, []byte("def rate = 10\ndef item\n  label = \"A\"\nend\nto tag x\n  \"A:\" + x\nend\n"), 0o644); err != nil {
+	if err := os.WriteFile(aPath, []byte("def rate = 10\ndef item\n  label = \"A\"\nend\nto tag x -> \"A:\" + x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bPath, []byte("def rate = 20\ndef item\n  label = \"B\"\nend\nto tag x\n  \"B:\" + x\nend\n"), 0o644); err != nil {
+	if err := os.WriteFile(bPath, []byte("def rate = 20\ndef item\n  label = \"B\"\nend\nto tag x -> \"B:\" + x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2350,7 +2325,7 @@ end
 		t.Fatal(err)
 	}
 	helperPath := filepath.Join(subDir, "helper.ease")
-	if err := os.WriteFile(helperPath, []byte("import \"../mod_a.ease\" as ma\nto double_rate\n  ma.rate * 2\nend\n"), 0o644); err != nil {
+	if err := os.WriteFile(helperPath, []byte("import \"../mod_a.ease\" as ma\nto double_rate -> ma.rate * 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2364,9 +2339,7 @@ def item
   label = "local"
 end
 
-to tag x
-  "L:" + x
-end
+to tag x -> "L:" + x
 
 inv = billing.invoice with id = "INV-1", net = 100
 inv2 = billing.invoice with id = "INV-1", net = 100
@@ -2377,18 +2350,25 @@ first = typed_list.1
 
 res = (billing.invoice with id = "INV-3", net = 50) as billing.outcome
 res_label = ""
-check
-  res is billing.invoice -> res_label = res.id
-  res is "empty" -> res_label = "none"
+check res is billing.invoice
+  res_label = res.id
+else
+  res_label = "none"
 end
 
 say billing:version
 say billing.default_tax
 say billing:total inv
 say billing:apply_tax 100 0.05
-check inv is billing.invoice -> say "inv_type_ok"
-check inv is inv2 -> say "inv_eq_ok"
-check first.state is "paid" -> say "first_paid_ok"
+check inv is billing.invoice
+  say "inv_type_ok"
+end
+check inv is inv2
+  say "inv_eq_ok"
+end
+check first.state is "paid"
+  say "first_paid_ok"
+end
 say res_label
 say (a:tag "x") + "|" + (b:tag "y") + "|" + (tag "z")
 say a.rate + b.rate
@@ -2454,7 +2434,7 @@ end
 	if _, err := ParseProgramFromFile(nonExh, mainPath); err != nil {
 		// Note: r is exactRecord billing.invoice here unless inferred as union, so test an inline/casted union value:
 	}
-	nonExhUnion := "import \"./billing.ease\" as billing\nr = (billing.invoice with id = \"1\", net = 1) as billing.outcome\ncheck\n  r is billing.invoice -> say r.id\nend\n"
+	nonExhUnion := "import \"./billing.ease\" as billing\nr = (billing.invoice with id = \"1\", net = 1) as billing.outcome\nto check_r x\n  check\n    x is billing.invoice -> x.id\n  end\nend\n"
 	if _, err := ParseProgramFromFile(nonExhUnion, mainPath); err == nil || !strings.Contains(err.Error(), "Non-exhaustive check") {
 		t.Fatalf("expected non-exhaustive check error for billing.outcome, got: %v", err)
 	}
@@ -2542,7 +2522,7 @@ end
 	}
 
 	// Runtime TypeError for dynamically typed parameters
-	if _, err := EvalProgram("to f a b\n  a + b\nend\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
+	if _, err := EvalProgram("to f a b -> a + b\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
 		t.Fatalf("expected runtime TypeError for dynamic mixed '+', got: %v", err)
 	}
 }
@@ -2595,7 +2575,7 @@ end
 	}
 
 	// Recursion limit message and hint
-	recSrc := "to down n\n  check n <= 0 -> 0\n  down (n - 1)\nend\nsay down 300\n"
+	recSrc := "to down n\n  check n <= 0 -> 0\n  -> down (n - 1)\nend\nsay down 300\n"
 	if _, err := EvalProgram(recSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Maximum recursion depth (256) exceeded") || !strings.Contains(err.Error(), "use a 'loop' over 'range'") {
 		t.Fatalf("expected recursion limit (256) message and loop hint, got: %v", err)
 	}
@@ -2617,8 +2597,8 @@ end
 func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
 	multilineCheck := "x = 1\ncheck x > 0 ->\n  say x\nend\n"
 	if _, err := ParseProgram(multilineCheck); err == nil ||
-		!strings.Contains(err.Error(), "Single-line 'check <cond> -> <action>' cannot span multiple lines") ||
-		!strings.Contains(err.Error(), "Put the action on the same line without 'end'") {
+		!strings.Contains(err.Error(), "Single-line 'check <cond> -> <value | end>' cannot span multiple lines") ||
+		!strings.Contains(err.Error(), "Put a value expression or 'end' on the same line") {
 		t.Fatalf("expected multiline single-line check hint, got: %v", err)
 	}
 
@@ -2633,10 +2613,10 @@ func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
 func TestNotTypecheckAndCanonicalAsConversions(t *testing.T) {
 	// Static TypeError for `not <non-condition>`
 	for _, bad := range []string{
-		"check not 42 -> say 1\n",
-		"check not \"hi\" -> say 1\n",
-		"x = 1\ncheck not x -> say 1\n",
-		"check not (count (list 1, 2)) -> say 1\n",
+		"check not 42\n  say 1\nend\n",
+		"check not \"hi\"\n  say 1\nend\n",
+		"x = 1\ncheck not x\n  say 1\nend\n",
+		"check not (count (list 1, 2))\n  say 1\nend\n",
 	} {
 		if _, err := ParseProgram(bad); err == nil || !strings.Contains(err.Error(), "'not' requires a condition") {
 			t.Fatalf("expected static TypeError for %q, got: %v", bad, err)
@@ -2720,9 +2700,7 @@ end
 func TestAskEOFLoopPreventionAndTestChecks(t *testing.T) {
 	interactiveSrc := `def prompt_label = "> "
 
-to format_cmd c
-  "{prompt_label}{c}"
-end
+to format_cmd c -> "{prompt_label}{c}"
 
 loop
   cmd = ask prompt_label
@@ -2827,12 +2805,12 @@ func TestStandaloneBundleMultiFileRoundTrip(t *testing.T) {
 	}
 
 	utilPath := filepath.Join(sharedDir, "util.ease")
-	if err := os.WriteFile(utilPath, []byte("to bonus x\n  x + 5\nend\n"), 0o644); err != nil {
+	if err := os.WriteFile(utilPath, []byte("to bonus x -> x + 5\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	combatPath := filepath.Join(subDir, "combat.ease")
-	combatSrc := "import \"../shared/util.ease\" as util\ndef crit = 1.5\ndef fighter\n  hp = 100\nend\nto strike f power\n  f with hp = f.hp - util:bonus (power * crit)\nend\n"
+	combatSrc := "import \"../shared/util.ease\" as util\ndef crit = 1.5\ndef fighter\n  hp = 100\nend\nto strike f power -> f with hp = f.hp - util:bonus (power * crit)\n"
 	if err := os.WriteFile(combatPath, []byte(combatSrc), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2895,7 +2873,7 @@ to route_cmd cmd
     "ECHO: {body}" -> "echo={body}"
     "PING" -> "UNREACHABLE"
   end
-  "IGNORED"
+  -> "IGNORED"
 end
 
 to route_with_else cmd
@@ -2903,7 +2881,7 @@ to route_with_else cmd
     "A" -> "alpha"
   else
     prefix = "other:"
-    prefix + cmd
+    -> prefix + cmd
   end
 end
 
@@ -2913,11 +2891,13 @@ to run_side_effects items
   loop items
     match it
       "quit" -> end
-      "add:{n as number}" -> hits = hits + n
-      else -> log = "{log}{it};"
+      "add:{n as number}"
+        hits = hits + n
+      else
+        log = "{log}{it};"
     end
   end
-  "{hits}|{log}"
+  -> "{hits}|{log}"
 end
 
 say route_cmd "PING"
@@ -2928,8 +2908,8 @@ say run_side_effects (list "a", "add:4", "add:6", "quit", "add:99")
 
 line = "PING"
 match line
-  "PING" -> say "top_ok"
-  else -> fail "unexpected"
+  "PING"
+    say "top_ok"
 end
 `
 		var out bytes.Buffer
@@ -2946,7 +2926,8 @@ end
 		src := `
 s = "KEY=val"
 match s
-  "KEY={v}" -> v = "changed"
+  "KEY={v}"
+    v = "changed"
 end
 `
 		if _, err := EvalProgram(src, &bytes.Buffer{}); err == nil {
@@ -2954,7 +2935,7 @@ end
 		}
 	})
 
-	t.Run("text expressions, multi-line else, fail, nesting, and parens", func(t *testing.T) {
+	t.Run("text expressions, multi-line else, error handling, nesting, and parens", func(t *testing.T) {
 		src := `
 def Role = "admin" | "guest"
 
@@ -2969,13 +2950,13 @@ to classify msg
     fallback = "unknown"
     "{fallback}:{msg}"
   end
-  res
+  -> res
 end
 
 to must_parse msg
-  match msg
+  -> match msg
     "ID={id as number}" -> id * 2
-    else -> fail "invalid id"
+    else -> 1 / 0
   end
 end
 
@@ -3000,7 +2981,7 @@ end
 		}
 	})
 
-	t.Run("list match sieve, else fallback, it/it.index, records, where/with, and implicit return in to", func(t *testing.T) {
+	t.Run("list match sieve, else fallback, it/it.index, records, where/with, and explicit return in to", func(t *testing.T) {
 		src := `
 def Level = "INFO" | "WARN" | "ERR"
 
@@ -3011,7 +2992,7 @@ def LogEntry
 end
 
 to extract_errors lines
-  match lines
+  -> match lines
     "{lvl as Level}: {body}" -> LogEntry with idx = it.index, level = lvl, msg = body
   end
 end
@@ -3199,7 +3180,7 @@ to run_match x
   res = match x
     "A" -> 1
   end
-  res
+  -> res
 end
 say run_match "A"
 `
@@ -3211,20 +3192,19 @@ say run_match "A"
 		badTargetDyn := `
 to run_match x
   match x
-    "A" -> say "ok"
+    "A"
+      say "ok"
   end
 end
 run_match 123
 `
-		if _, err := EvalProgram(badTargetDyn, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "requires text or a list of text, got number") {
+		if _, err := EvalProgram(badTargetDyn, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "'match' requires text target, got number") {
 			t.Fatalf("expected runtime error for numeric target, got: %v", err)
 		}
 
 		// Mixed list outputs when branches return dynamic/untyped results
 		mixedOutDyn := `
-to id x
-  x
-end
+to id x -> x
 lines = list "N=1", "T=hi"
 res = match lines
   "N={n as number}" -> id n
@@ -3250,11 +3230,11 @@ end
 	if err == nil {
 		t.Fatalf("expected TypeError for half-value-returning function, got nil")
 	}
-	if !strings.Contains(err.Error(), "returns a value on a 'check' branch but falls through without a return value at the end") {
+	if !strings.Contains(err.Error(), "returns a value on some paths via '->' but can finish without returning a value") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Use '-> end' to exit a loop or take block") {
-		t.Fatalf("expected hint about '-> end', got: %v", err)
+	if !strings.Contains(err.Error(), "Ensure every execution path in the function ends with '-> <value>'") {
+		t.Fatalf("expected hint about '-> <value>', got: %v", err)
 	}
 
 	badTake := `
@@ -3265,7 +3245,7 @@ to drain_until_zero ch
   end
 end
 `
-	if _, err := ParseProgram(badTake); err == nil || !strings.Contains(err.Error(), "falls through without a return value at the end") {
+	if _, err := ParseProgram(badTake); err == nil || !strings.Contains(err.Error(), "can finish without returning a value") {
 		t.Fatalf("expected TypeError for take fallthrough, got: %v", err)
 	}
 
@@ -3286,7 +3266,7 @@ to find_even_or_zero xs
   loop xs
     check it % 2 is 0 -> it
   end
-  0
+  -> 0
 end
 `
 	if _, err := ParseProgram(okConsistentReturn); err != nil {

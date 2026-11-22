@@ -322,6 +322,7 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 			case *TakeStmt:
 				walk(s.Body)
 			case *CheckGuardStmt:
+				walk(s.Body)
 				for _, r := range s.Rules {
 					if r.Action != nil {
 						walk([]Stmt{r.Action})
@@ -333,6 +334,7 @@ func collectAssignedNames(stmts []Stmt) map[string]bool {
 					if arm.Action != nil {
 						walk([]Stmt{arm.Action})
 					}
+					walk(arm.Body)
 				}
 				walk(s.ElseBody)
 			}
@@ -932,12 +934,43 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		val, err := ev.EvalExpr(s.Expression, env)
 		return val, nil, err
 
+	case *ReturnStmt:
+		val, err := ev.EvalExpr(s.Value, env)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := ev.checkNotConditionValue(val, s.Line, s.Col); err != nil {
+			return nil, nil, err
+		}
+		return val, &reportSignal{val: val}, nil
+
 	case *CheckGuardStmt:
-		hasArrowRule := false
-		for _, rule := range s.Rules {
-			if rule.Action != nil {
-				hasArrowRule = true
+		if s.IsEffectBlock {
+			condVal, err := ev.EvalExpr(s.Cond, env)
+			if err != nil {
+				return nil, nil, err
 			}
+			condBool, ok := condVal.(bool)
+			if !ok {
+				return nil, nil, newError("RuntimeError", s.Line, s.Col, ev.source, fmt.Sprintf("Check condition must be a condition, got %s", TypeName(condVal)), "")
+			}
+			if condBool {
+				val, sig, err := ev.execBlock(s.Body, NewEnv(env))
+				if err != nil || sig != nil {
+					return val, sig, err
+				}
+				return nil, nil, nil
+			}
+			if len(s.ElseBody) > 0 {
+				val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
+				if err != nil || sig != nil {
+					return val, sig, err
+				}
+			}
+			return nil, nil, nil
+		}
+
+		for _, rule := range s.Rules {
 			condVal, err := ev.EvalExpr(rule.Cond, env)
 			if err != nil {
 				return nil, nil, err
@@ -946,56 +979,15 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			if !ok {
 				return nil, nil, newError("RuntimeError", rule.Line, rule.Col, ev.source, fmt.Sprintf("Check condition must be a condition, got %s", TypeName(condVal)), "")
 			}
-			if rule.Action != nil {
-				if condBool {
-					val, sig, err := ev.execStmt(rule.Action, NewEnv(env))
-					if err != nil || sig != nil {
-						return val, sig, err
-					}
-					if _, isExpr := rule.Action.(*ExprStmt); isExpr {
-						if ev.callDepth > 0 || ev.inSwarmWorker {
-							return val, &reportSignal{val: val}, nil
-						}
-						if _, isCall := rule.Action.(*ExprStmt).Expression.(*CallExpr); !isCall {
-							return nil, nil, newError(
-								"RuntimeError",
-								rule.Line,
-								rule.Col,
-								ev.source,
-								"Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.",
-								"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-							)
-						}
-					}
-					return val, nil, nil
-				}
-				continue
-			}
-			if !condBool {
-				if len(s.ElseBody) > 0 {
-					val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
-					if err != nil || sig != nil {
-						return val, sig, err
-					}
-					lastStmt := s.ElseBody[len(s.ElseBody)-1]
-					if _, isExpr := lastStmt.(*ExprStmt); isExpr && (ev.callDepth > 0 || ev.inSwarmWorker) {
-						return val, &reportSignal{val: val}, nil
-					}
-					return val, nil, nil
-				}
-				return nil, nil, newError("RuntimeError", rule.Line, rule.Col, ev.source, "Check condition failed", "Add an 'else' block or '-> action' to handle this case.")
+			if condBool {
+				return ev.execStmt(rule.Action, NewEnv(env))
 			}
 		}
-		if hasArrowRule && len(s.ElseBody) > 0 {
+		if len(s.ElseBody) > 0 {
 			val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
 			if err != nil || sig != nil {
 				return val, sig, err
 			}
-			lastStmt := s.ElseBody[len(s.ElseBody)-1]
-			if _, isExpr := lastStmt.(*ExprStmt); isExpr && (ev.callDepth > 0 || ev.inSwarmWorker) {
-				return val, &reportSignal{val: val}, nil
-			}
-			return val, nil, nil
 		}
 		return nil, nil, nil
 
@@ -1007,128 +999,49 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		if err := ev.checkNotConditionValue(targetVal, s.Line, s.Col); err != nil {
 			return nil, nil, err
 		}
-		switch tv := targetVal.(type) {
-		case string:
-			for _, arm := range s.Arms {
-				bindings, matched, err := matchPatternRunes(tv, arm.Pattern, env, ev.source)
-				if err != nil {
-					return nil, nil, err
-				}
-				if !matched {
-					continue
-				}
-				armEnv := NewEnv(env)
-				for k, v := range bindings {
-					armEnv.Define(k, v, false)
-				}
-				val, sig, err := ev.execStmt(arm.Action, armEnv)
-				if err != nil || sig != nil {
-					return val, sig, err
-				}
-				if es, isExpr := arm.Action.(*ExprStmt); isExpr {
-					if ev.callDepth > 0 || ev.inSwarmWorker {
-						return val, &reportSignal{val: val}, nil
-					}
-					if _, isCall := es.Expression.(*CallExpr); !isCall {
-						return nil, nil, newError(
-							"RuntimeError",
-							arm.Line,
-							arm.Col,
-							ev.source,
-							"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
-							"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-						)
-					}
-				}
-				return val, nil, nil
-			}
-			if len(s.ElseBody) > 0 {
-				val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
-				if err != nil || sig != nil {
-					return val, sig, err
-				}
-				lastStmt := s.ElseBody[len(s.ElseBody)-1]
-				if es, isExpr := lastStmt.(*ExprStmt); isExpr {
-					if ev.callDepth > 0 || ev.inSwarmWorker {
-						return val, &reportSignal{val: val}, nil
-					}
-					if _, isCall := es.Expression.(*CallExpr); !isCall {
-						elLine, elCol := lastStmt.Pos()
-						return nil, nil, newError(
-							"RuntimeError",
-							elLine,
-							elCol,
-							ev.source,
-							"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
-							"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-						)
-					}
-				}
-				return val, nil, nil
-			}
-			return nil, nil, nil
-
-		case *ListValue:
-			if ev.callDepth == 0 && !ev.inSwarmWorker {
+		tv, ok := targetVal.(string)
+		if !ok {
+			if _, isList := targetVal.(*ListValue); isList {
 				return nil, nil, newError(
 					"RuntimeError",
 					s.Line,
 					s.Col,
 					ev.source,
-					"Cannot use list 'match' without assigning its result at top level",
-					"Assign the result (e.g. 'result = match items ... end') or return it from a 'to' function.",
+					"List 'match' is a transformation expression and cannot be used as a standalone statement",
+					"Return or assign the result (e.g. '-> match items ... end' or 'result = match items ... end').",
 				)
 			}
-			exprArms := make([]MatchArmExpr, 0, len(s.Arms))
-			for _, arm := range s.Arms {
-				es, isExpr := arm.Action.(*ExprStmt)
-				if !isExpr {
-					return nil, nil, newError(
-						"RuntimeError",
-						arm.Line,
-						arm.Col,
-						ev.source,
-						"List 'match' transforms items with expressions and cannot execute statements",
-						"Use 'loop items ... end' with 'match it ... end' to run statements for each item.",
-					)
-				}
-				exprArms = append(exprArms, MatchArmExpr{
-					Line:    arm.Line,
-					Col:     arm.Col,
-					Pattern: arm.Pattern,
-					Value:   es.Expression,
-				})
-			}
-			hasElse := len(s.ElseBody) > 0
-			if hasElse {
-				if _, isExpr := s.ElseBody[len(s.ElseBody)-1].(*ExprStmt); !isExpr {
-					elLine, elCol := s.ElseBody[len(s.ElseBody)-1].Pos()
-					return nil, nil, newError(
-						"RuntimeError",
-						elLine,
-						elCol,
-						ev.source,
-						"List 'match' 'else' branch must end with an expression",
-						"End 'else' with a result expression (or write 'else -> <expr>').",
-					)
-				}
-			}
-			listVal, err := ev.evalMatchList(tv, exprArms, hasElse, s.ElseBody, env, s.Line, s.Col)
+			return nil, nil, newError("RuntimeError", s.Line, s.Col, ev.source, fmt.Sprintf("'match' requires text target, got %s", TypeName(targetVal)), "")
+		}
+
+		for _, arm := range s.Arms {
+			bindings, matched, err := matchPatternRunes(tv, arm.Pattern, env, ev.source)
 			if err != nil {
 				return nil, nil, err
 			}
-			return listVal, nil, nil
-
-		default:
-			return nil, nil, newError(
-				"RuntimeError",
-				s.Line,
-				s.Col,
-				ev.source,
-				fmt.Sprintf("'match' requires text or a list of text, got %s", TypeName(targetVal)),
-				"Pass a text string or a list of text items to 'match'.",
-			)
+			if !matched {
+				continue
+			}
+			armEnv := NewEnv(env)
+			for k, v := range bindings {
+				armEnv.Define(k, v, false)
+			}
+			if len(arm.Body) > 0 {
+				val, sig, err := ev.execBlock(arm.Body, armEnv)
+				if err != nil || sig != nil {
+					return val, sig, err
+				}
+				return nil, nil, nil
+			}
+			return ev.execStmt(arm.Action, armEnv)
 		}
+		if len(s.ElseBody) > 0 {
+			val, sig, err := ev.execBlock(s.ElseBody, NewEnv(env))
+			if err != nil || sig != nil {
+				return val, sig, err
+			}
+		}
+		return nil, nil, nil
 
 	default:
 		line, col := stmt.Pos()
@@ -2437,7 +2350,7 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 		fnEnv.DefineParam(param, args[i])
 	}
 
-	last, sig, err := ev.execBlock(fn.Body, fnEnv)
+	_, sig, err := ev.execBlock(fn.Body, fnEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -2447,10 +2360,17 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 		}
 		return sig.val, nil
 	}
-	if err := ev.checkNotConditionValue(last, line, col); err != nil {
-		return nil, err
+	if !stmtsHaveReturn(fn.Body) {
+		return nil, nil
 	}
-	return last, nil
+	return nil, newError(
+		"RuntimeError",
+		line,
+		col,
+		ev.source,
+		fmt.Sprintf("Function %q finished without returning a value via '->'", name),
+		"Ensure every execution path ends with '-> <value>'.",
+	)
 }
 
 // buildDeclValues evaluates `prog`'s function, def blueprint, and union declarations

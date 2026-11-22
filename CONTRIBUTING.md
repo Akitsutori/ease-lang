@@ -134,7 +134,7 @@ Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. 
    - Explicit JSON parsing/serialization (`decode_json` / `encode_json`) is strictly separated from `as <type>` validation.
    - `as <type>` enforces **shape / type conformity** only on structured `map`/`record` values (raw `text` -> `TypeError`), requires **every field declared in `def`** without default-filling (`Missing field '<type>.<field>'`), and restricts `as text` + `{...}` interpolation to atomic (`text`, `number`) values. Default filling belongs exclusively to `<def> with ...`.
    - `to ...` + `check` handles **domain validity** (business rules, ranges, invariants).
-5. **No Legacy Syntax Regressions**: Do not reintroduce `do`, `push`, `raises`, `let`, `var`, `set`, `report`, `test:`, `check "..."`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing.
+5. **No Legacy Syntax Regressions & Arrow Law**: Do not reintroduce `do`, `fail`, `push`, `raises`, `let`, `var`, `set`, `report`, `test:`, `check "..."`, `check:`, `[a b]` parameter blocks, or `[]` list literals/indexing. Preserve the Arrow Law (`-> <value>` or `-> end` only — never statements/side effects after `->`; `to` functions without `->` are `void` procedures).
 6. **Tests & Docs Ship Together**: Every change to lexing, parsing, evaluation, or standard modules must include Go unit tests in `internal/ease/ease_test.go`, corresponding `.ease` coverage in `tests/` or `examples/`, and an exact update to the BNF grammar and docs in `README.md` if syntax changed.
 
 ---

@@ -384,21 +384,7 @@ func (s *Service) DebugPort() int {
 }
 
 func normalizeDebugChunk(chunk string) string {
-	lines := strings.Split(strings.ReplaceAll(chunk, "\r\n", "\n"), "\n")
-	out := make([]string, 0, len(lines)*3)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "to ") {
-			if arrowIdx := strings.Index(trimmed, " -> "); arrowIdx > 0 {
-				header := strings.TrimSpace(trimmed[:arrowIdx])
-				bodyExpr := strings.TrimSpace(trimmed[arrowIdx+4:])
-				out = append(out, header, "    "+bodyExpr, "end")
-				continue
-			}
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
+	return strings.ReplaceAll(chunk, "\r\n", "\n")
 }
 
 func chunkFuncHeaderNames(chunk string) map[string]bool {
@@ -526,7 +512,11 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 			if len(fn.Params) > 0 {
 				params = " " + strings.Join(fn.Params, " ")
 			}
-			fmt.Fprintf(&b, "to %s%s\n    0\nend\n", fn.Name, params)
+			if stmtsHaveReturn(fn.Body) {
+				fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
+			} else {
+				fmt.Fprintf(&b, "to %s%s\nend\n", fn.Name, params)
+			}
 		}
 	}
 
@@ -543,7 +533,11 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 		if len(fn.Params) > 0 {
 			params = " " + strings.Join(fn.Params, " ")
 		}
-		fmt.Fprintf(&b, "to %s%s\n    0\nend\n", fn.Name, params)
+		if stmtsHaveReturn(fn.Body) {
+			fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
+		} else {
+			fmt.Fprintf(&b, "to %s%s\nend\n", fn.Name, params)
+		}
 	}
 
 	bindings := s.ev.global.SnapshotBindings()

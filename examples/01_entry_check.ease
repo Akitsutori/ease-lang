@@ -12,20 +12,17 @@ to allow_entry name age
         age > 120         -> "Ungültiges Alter"
     end
 
-    "Willkommen {name}, du darfst rein!"
+    -> "Willkommen {name}, du darfst rein!"
 end
 
 to validate_vip code age
     check
-        code is text
-        code is "VIP2026"
-        age is number
-        age >= 18
-    else
-        "invalid"
+        code is not text      -> "invalid"
+        code is not "VIP2026" -> "invalid"
+        age is not number     -> "invalid"
+        age < 18              -> "invalid"
+        else                  -> "valid"
     end
-
-    "valid"
 end
 
 test "Einlassregeln & VIP-Prüfung"
@@ -46,10 +43,10 @@ end
 say "--- Einlasskontrolle ---"
 user_name = ask "Wie heißt du?"
 raw_age   = ask "Wie alt bist du?"
-check
-    raw_age is "" -> say (allow_entry user_name raw_age)
-    else
-        user_age = raw_age as number
-        result = allow_entry user_name user_age
-        say result
+check raw_age is ""
+    say (allow_entry user_name raw_age)
+else
+    user_age = raw_age as number
+    result = allow_entry user_name user_age
+    say result
 end

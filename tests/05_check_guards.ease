@@ -1,4 +1,4 @@
-# Feature 05: Check-Guards (Pfeil-Checkliste ->, Sammel-else & Einzeiler)
+# Feature 05: Check-Guards (Einzeiler ->, Effekt-Block & Verdict-Tabelle)
 
 to validate_score name score
     check
@@ -7,23 +7,23 @@ to validate_score name score
         score is not number -> "Punktzahl muss Zahl sein"
         score < 0           -> "Punktzahl darf nicht negativ sein"
     end
-    "OK: {name} hat {score} Punkte"
+    -> "OK: {name} hat {score} Punkte"
 end
 
 to review_article title words
     check
-        title is text
-        title is not ""
-        words is number
-        words >= 100
-    else
-        "rejected"
+        title is not text   -> "rejected"
+        title is ""         -> "rejected"
+        words is not number -> "rejected"
+        words < 100         -> "rejected"
+        else                -> "published"
     end
-    "published"
 end
 
 status_msg = "init"
-check status_msg is text -> status_msg = "checked"
+check status_msg is text
+    status_msg = "checked"
+end
 
 test "Check-Guards"
     validate_score 42 10 is "Name muss Text sein"

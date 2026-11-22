@@ -62,9 +62,7 @@ func TestStdNetworkImportAndHTTPCall(t *testing.T) {
 	src := fmt.Sprintf(`
 import network
 
-to parse_age raw
-    raw as number
-end
+to parse_age raw -> raw as number
 
 to validate_age age
     check
@@ -72,7 +70,7 @@ to validate_age age
         age < 0           -> "Alter kann nicht negativ sein"
         age > 130         -> "Alter ist unrealistisch"
     end
-    age
+    -> age
 end
 
 test "std/network real HTTP GET/POST & Form/Inhalt"
@@ -184,9 +182,7 @@ def my_record
     second = ""
 end
 
-to make_pair a b
-    decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
-end
+to make_pair a b -> decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
 
 x = make_pair "a" "b" as my_record
 `
@@ -530,19 +526,17 @@ def Config
   lvl = "INFO" | "WARN" | "ERROR"
 end
 
-to fallback_port
-  9090
-end
+to fallback_port -> 9090
 
 to check_guard raw flag
   check raw as number or 0 > 5 -> "big"
   check raw as number or 0 > 2 or flag is "force" -> "medium_or_forced"
-  "small"
+  -> "small"
 end
 
 to test_logical_or a b
   check a is 1 or b is 2 -> "ok"
-  "no"
+  -> "no"
 end
 
 test "cast fallback comprehensive behavior"
@@ -635,7 +629,7 @@ end
 		src := `
 to make_default tag
   say "CALLED:{tag}"
-  -1
+  -> -1
 end
 
 a = "42" as number or make_default "scalar_ok"
@@ -681,13 +675,9 @@ say "{p1}|{p2}"
 		src := `
 def Level = "INFO" | "WARN"
 
-to dyn_num raw fb
-  raw as number or fb
-end
+to dyn_num raw fb -> raw as number or fb
 
-to dyn_lvl raw fb
-  raw as Level or fb
-end
+to dyn_lvl raw fb -> raw as Level or fb
 
 good1 = dyn_num "nope" 99
 good2 = dyn_lvl "nope" "WARN"
@@ -702,9 +692,7 @@ say "{good1}|{good2}"
 		}
 
 		badDynNum := `
-to dyn_num raw fb
-  raw as number or fb
-end
+to dyn_num raw fb -> raw as number or fb
 say dyn_num "nope" "still-bad"
 `
 		if _, err := EvalProgram(badDynNum, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Fallback for 'as number' must be number") {
@@ -713,9 +701,7 @@ say dyn_num "nope" "still-bad"
 
 		badDynLvl := `
 def Level = "INFO" | "WARN"
-to dyn_lvl raw fb
-  raw as Level or fb
-end
+to dyn_lvl raw fb -> raw as Level or fb
 say dyn_lvl "nope" "TYPO"
 `
 		if _, err := EvalProgram(badDynLvl, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "is not valid for union \"Level\"") {

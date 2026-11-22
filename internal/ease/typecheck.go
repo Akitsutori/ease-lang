@@ -318,12 +318,40 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 			return ce.Callee, true
 		case "synth_play":
 			return "synth:play", true
+		case "screen_open":
+			return "screen:open", true
+		case "net_reply_text":
+			return "network:reply_text", true
+		case "net_reply_json":
+			return "network:reply_json", true
+		case "net_send":
+			return "network:tcp_send", true
 		default:
+			if fn, ok := v.funcDecls[ce.Callee]; ok && !stmtsHaveReturn(fn.Body) {
+				return ce.Callee, true
+			}
 			return "", false
 		}
 	}
-	if mod, ok := v.modules[ce.Module]; ok && mod.origName == "synth" && ce.Callee == "play" {
-		return "synth:play", true
+	if mod, ok := v.modules[ce.Module]; ok {
+		switch mod.origName {
+		case "synth":
+			if ce.Callee == "play" {
+				return "synth:play", true
+			}
+		case "screen":
+			if ce.Callee == "open" {
+				return "screen:open", true
+			}
+		case "network":
+			switch ce.Callee {
+			case "reply_text", "reply_json", "tcp_send":
+				return "network:" + ce.Callee, true
+			}
+		}
+		if fn, ok := mod.funcs[ce.Callee]; ok && !stmtsHaveReturn(fn.Body) {
+			return ce.Module + ":" + ce.Callee, true
+		}
 	}
 	return "", false
 }
@@ -331,6 +359,17 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 func (v *typeValidator) checkNotVoidValue(e Expr) error {
 	if v.inErrorTestExpr || e == nil {
 		return nil
+	}
+	if sl, isSwarm := e.(*SwarmLoopExpr); isSwarm && !stmtsHaveReturn(sl.Body) {
+		line, col := sl.Pos()
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			"'swarm loop' without '-> <value>' does not return a value",
+			"Use '-> <value>' inside 'swarm loop' to return an item per iteration, or run it as a statement.",
+		)
 	}
 	name, isVoid := v.voidBuiltinCallName(e)
 	if !isVoid {
@@ -340,6 +379,28 @@ func (v *typeValidator) checkNotVoidValue(e Expr) error {
 	hint := fmt.Sprintf("Call '%s ...' as a statement instead of using it as a value.", name)
 	if name == "synth:play" {
 		hint = "Call 'synth:play <melody>' as a statement (or with 'spawn synth:play <melody>')."
+	} else if ce, ok := e.(*CallExpr); ok {
+		if ce.Module == "" {
+			if _, isUser := v.funcDecls[ce.Callee]; isUser {
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					fmt.Sprintf("'%s' is a procedure (void) and does not return a value", name),
+					fmt.Sprintf("Call '%s ...' as a statement, or add '-> <value>' inside 'to %s' to return a value.", name, name),
+				)
+			}
+		} else if mod, ok := v.modules[ce.Module]; ok && mod.origName == "" {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("'%s' is a procedure (void) and does not return a value", name),
+				fmt.Sprintf("Call '%s ...' as a statement instead of using it as a value.", name),
+			)
+		}
 	}
 	return newError(
 		"TypeError",
@@ -356,59 +417,62 @@ func (v *typeValidator) isVoidCallStmt(s Stmt) bool {
 	if !ok {
 		return false
 	}
-	ce, ok := es.Expression.(*CallExpr)
-	if !ok {
-		return false
-	}
-	if ce.Module == "" {
-		switch ce.Callee {
-		case "close", "put", "synth_play":
-			return true
-		default:
-			return false
-		}
-	}
-	if mod, ok := v.modules[ce.Module]; ok && mod.origName == "synth" && ce.Callee == "play" {
-		return true
-	}
-	return false
+	_, isVoid := v.voidBuiltinCallName(es.Expression)
+	return isVoid
 }
 
-func (v *typeValidator) stmtEndsWithExpr(stmts []Stmt) bool {
+func (v *typeValidator) stmtAlwaysReturnsExpr(stmts []Stmt) bool {
 	if len(stmts) == 0 {
 		return false
 	}
-	last := stmts[len(stmts)-1]
-	switch st := last.(type) {
-	case *ExprStmt:
-		return !v.isVoidCallStmt(st)
-	case *LoopStmt:
-		// An infinite `loop ... end` (no iterable) cannot fall through normally.
-		return st.Iterable == nil
-	case *MatchStmt:
-		if len(st.ElseBody) > 0 && v.stmtEndsWithExpr(st.ElseBody) {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case *ReturnStmt:
 			return true
-		}
-		for _, arm := range st.Arms {
-			if arm.Action != nil && v.stmtEndsWithExpr([]Stmt{arm.Action}) {
+		case *LoopStmt:
+			if st.Iterable == nil {
 				return true
 			}
 		}
-		return false
-	case *CheckGuardStmt:
-		if len(st.ElseBody) > 0 {
-			return v.stmtEndsWithExpr(st.ElseBody)
+	}
+	last := stmts[len(stmts)-1]
+	switch st := last.(type) {
+	case *MatchStmt:
+		if len(st.ElseBody) == 0 || !v.stmtAlwaysReturnsExpr(st.ElseBody) {
+			return false
 		}
-		// Exhaustive multi-branch `check ... end` where every rule returns an expression.
-		if len(st.Rules) >= 2 {
-			allExpr := true
+		for _, arm := range st.Arms {
+			if arm.Action != nil {
+				if !v.stmtAlwaysReturnsExpr([]Stmt{arm.Action}) {
+					return false
+				}
+			} else if !v.stmtAlwaysReturnsExpr(arm.Body) {
+				return false
+			}
+		}
+		return true
+	case *CheckGuardStmt:
+		if st.IsEffectBlock {
+			return len(st.ElseBody) > 0 && v.stmtAlwaysReturnsExpr(st.Body) && v.stmtAlwaysReturnsExpr(st.ElseBody)
+		}
+		if len(st.ElseBody) > 0 {
+			if !v.stmtAlwaysReturnsExpr(st.ElseBody) {
+				return false
+			}
 			for _, r := range st.Rules {
-				if r.Action == nil || !v.stmtEndsWithExpr([]Stmt{r.Action}) {
-					allExpr = false
-					break
+				if r.Action == nil || !v.stmtAlwaysReturnsExpr([]Stmt{r.Action}) {
+					return false
 				}
 			}
-			return allExpr
+			return true
+		}
+		if len(st.Rules) >= 2 {
+			for _, r := range st.Rules {
+				if r.Action == nil || !v.stmtAlwaysReturnsExpr([]Stmt{r.Action}) {
+					return false
+				}
+			}
+			return true
 		}
 		return false
 	default:
@@ -416,37 +480,45 @@ func (v *typeValidator) stmtEndsWithExpr(stmts []Stmt) bool {
 	}
 }
 
-func (v *typeValidator) findGuardReturn(stmts []Stmt) (int, int, bool) {
+func (v *typeValidator) findFirstReturn(stmts []Stmt) (int, int, bool) {
 	for _, s := range stmts {
 		switch st := s.(type) {
+		case *ReturnStmt:
+			return st.Line, st.Col, true
 		case *CheckGuardStmt:
+			if line, col, ok := v.findFirstReturn(st.Body); ok {
+				return line, col, true
+			}
 			for _, r := range st.Rules {
-				if r.Action != nil && !v.isVoidCallStmt(r.Action) {
-					if _, isExpr := r.Action.(*ExprStmt); isExpr {
-						return r.Line, r.Col, true
+				if r.Action != nil {
+					if line, col, ok := v.findFirstReturn([]Stmt{r.Action}); ok {
+						return line, col, true
 					}
 				}
 			}
-			if line, col, ok := v.findGuardReturn(st.ElseBody); ok {
+			if line, col, ok := v.findFirstReturn(st.ElseBody); ok {
 				return line, col, true
 			}
 		case *LoopStmt:
-			if line, col, ok := v.findGuardReturn(st.Body); ok {
+			if line, col, ok := v.findFirstReturn(st.Body); ok {
 				return line, col, true
 			}
 		case *TakeStmt:
-			if line, col, ok := v.findGuardReturn(st.Body); ok {
+			if line, col, ok := v.findFirstReturn(st.Body); ok {
 				return line, col, true
 			}
 		case *MatchStmt:
 			for _, arm := range st.Arms {
 				if arm.Action != nil {
-					if line, col, ok := v.findGuardReturn([]Stmt{arm.Action}); ok {
+					if line, col, ok := v.findFirstReturn([]Stmt{arm.Action}); ok {
 						return line, col, true
 					}
 				}
+				if line, col, ok := v.findFirstReturn(arm.Body); ok {
+					return line, col, true
+				}
 			}
-			if line, col, ok := v.findGuardReturn(st.ElseBody); ok {
+			if line, col, ok := v.findFirstReturn(st.ElseBody); ok {
 				return line, col, true
 			}
 		}
@@ -454,26 +526,30 @@ func (v *typeValidator) findGuardReturn(stmts []Stmt) (int, int, bool) {
 	return 0, 0, false
 }
 
-// checkFuncReturnConsistency rejects functions that return a value on a guard branch
-// (`check ... -> <expr>`) but fall through without a final return expression.
+// checkFuncReturnConsistency ensures functions that return a value via `-> <expr>`
+// return a value on every execution path (while functions without `->` are `void` procedures).
 func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
 	if fn == nil {
 		return nil
 	}
-	if v.stmtEndsWithExpr(fn.Body) {
+	if !stmtsHaveReturn(fn.Body) {
 		return nil
 	}
-	if line, col, hasGuard := v.findGuardReturn(fn.Body); hasGuard {
-		return newError(
-			"TypeError",
-			line,
-			col,
-			v.source,
-			fmt.Sprintf("Function '%s' returns a value on a 'check' branch but falls through without a return value at the end", fn.Name),
-			"Use '-> end' to exit a loop or take block, or return a consistent value at the end of the function.",
-		)
+	if v.stmtAlwaysReturnsExpr(fn.Body) {
+		return nil
 	}
-	return nil
+	line, col, hasRet := v.findFirstReturn(fn.Body)
+	if !hasRet {
+		line, col = fn.Pos()
+	}
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		fmt.Sprintf("Function '%s' returns a value on some paths via '->' but can finish without returning a value", fn.Name),
+		"Ensure every execution path in the function ends with '-> <value>'.",
+	)
 }
 
 type typeValidator struct {
@@ -542,6 +618,10 @@ func (v *typeValidator) stmtsContainSpawn(stmts []Stmt, visited map[string]bool)
 			if v.exprContainsSpawn(st.Expression, visited) {
 				return true
 			}
+		case *ReturnStmt:
+			if v.exprContainsSpawn(st.Value, visited) {
+				return true
+			}
 		case *LoopStmt:
 			if v.exprContainsSpawn(st.Iterable, visited) || v.stmtsContainSpawn(st.Body, visited) {
 				return true
@@ -551,6 +631,9 @@ func (v *typeValidator) stmtsContainSpawn(stmts []Stmt, visited map[string]bool)
 				return true
 			}
 		case *CheckGuardStmt:
+			if v.exprContainsSpawn(st.Cond, visited) || v.stmtsContainSpawn(st.Body, visited) {
+				return true
+			}
 			for _, r := range st.Rules {
 				if v.exprContainsSpawn(r.Cond, visited) || (r.Action != nil && v.stmtsContainSpawn([]Stmt{r.Action}, visited)) {
 					return true
@@ -564,7 +647,7 @@ func (v *typeValidator) stmtsContainSpawn(stmts []Stmt, visited map[string]bool)
 				return true
 			}
 			for _, arm := range st.Arms {
-				if arm.Action != nil && v.stmtsContainSpawn([]Stmt{arm.Action}, visited) {
+				if (arm.Action != nil && v.stmtsContainSpawn([]Stmt{arm.Action}, visited)) || v.stmtsContainSpawn(arm.Body, visited) {
 					return true
 				}
 			}
@@ -756,6 +839,10 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 		for _, s := range stmts {
 			switch st := s.(type) {
 			case *CheckGuardStmt:
+				if st.Cond != nil {
+					collectFromExpr(st.Cond)
+				}
+				collectFromStmts(st.Body)
 				for _, r := range st.Rules {
 					collectFromExpr(r.Cond)
 					if r.Action != nil {
@@ -763,6 +850,8 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 					}
 				}
 				collectFromStmts(st.ElseBody)
+			case *ReturnStmt:
+				collectFromExpr(st.Value)
 			case *LoopStmt:
 				collectFromStmts(st.Body)
 			case *TakeStmt:
@@ -772,6 +861,7 @@ func (v *typeValidator) inferFuncUnionParams(fn *FuncDecl, fnScope *typeScope) {
 					if arm.Action != nil {
 						collectFromStmts([]Stmt{arm.Action})
 					}
+					collectFromStmts(arm.Body)
 				}
 				collectFromStmts(st.ElseBody)
 			}
@@ -863,16 +953,17 @@ func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 			if directLoop {
 				return true
 			}
+		case *ReturnStmt:
+			if inFunction {
+				return true
+			}
 		case *CheckGuardStmt:
+			if hasLoopExit(st.Body, inFunction, directLoop) {
+				return true
+			}
 			for _, r := range st.Rules {
 				if r.Action == nil {
 					continue
-				}
-				if _, isEnd := r.Action.(*LoopEndStmt); isEnd && directLoop {
-					return true
-				}
-				if _, isExpr := r.Action.(*ExprStmt); isExpr && inFunction {
-					return true
 				}
 				if hasLoopExit([]Stmt{r.Action}, inFunction, directLoop) {
 					return true
@@ -986,6 +1077,25 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 			)
 		}
 		return nil
+
+	case *ReturnStmt:
+		if !inFunction && !v.inErrorTestExpr {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"Cannot use '-> <value>' at top level",
+				"Return values with '-> <value>' only inside 'to' functions or 'swarm loop'.",
+			)
+		}
+		if err := v.checkExpr(st.Value); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(st.Value); err != nil {
+			return err
+		}
+		return v.checkNotVoidValue(st.Value)
 
 	case *LoopStmt:
 		if st.Iterable != nil {
@@ -1135,6 +1245,29 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 }
 
 func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *CheckGuardStmt, inFunction bool) error {
+	if st.IsEffectBlock {
+		if err := v.checkExpr(st.Cond); err != nil {
+			return err
+		}
+		bodyScope := v.pushScope()
+		v.applyCondNarrowing(bodyScope, st.Cond, true)
+		err := v.checkStmts(st.Body, inFunction)
+		v.popScope()
+		if err != nil {
+			return err
+		}
+		if len(st.ElseBody) > 0 {
+			elseScope := v.pushScope()
+			v.applyCondNarrowing(elseScope, st.Cond, false)
+			err := v.checkStmts(st.ElseBody, inFunction)
+			v.popScope()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	inCheckScope := v.pushScope()
 	for _, r := range st.Rules {
 		if err := v.checkExpr(r.Cond); err != nil {
@@ -1142,22 +1275,6 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 			return err
 		}
 		if r.Action != nil {
-			if !inFunction {
-				if es, isExpr := r.Action.(*ExprStmt); isExpr {
-					if _, isCall := es.Expression.(*CallExpr); !isCall {
-						v.popScope()
-						line, col := es.Pos()
-						return newError(
-							"TypeError",
-							line,
-							col,
-							v.source,
-							"Cannot return a value from 'check' at top level; use 'say' or 'fail' instead.",
-							"Top-level 'check' rules can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-						)
-					}
-				}
-			}
 			actionScope := v.pushScope()
 			v.applyCondNarrowing(actionScope, r.Cond, true)
 			err := v.checkStmt(r.Action, inFunction)
@@ -1167,9 +1284,6 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 				return err
 			}
 			v.applyCondNarrowing(inCheckScope, r.Cond, false)
-		} else {
-			// Assertion precondition rule: if control reaches subsequent rules/after-check, Cond was true.
-			v.applyCondNarrowing(inCheckScope, r.Cond, true)
 		}
 	}
 
@@ -1184,9 +1298,7 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 	// Narrow post-check outer scope when early-exiting guards rule out non-record cases.
 	if len(st.ElseBody) == 0 {
 		for _, r := range st.Rules {
-			if r.Action == nil {
-				v.applyCondNarrowing(v.scope, r.Cond, true)
-			} else if stmtAlwaysExits(r.Action, inFunction) {
+			if stmtAlwaysExits(r.Action, inFunction) {
 				v.applyCondNarrowing(v.scope, r.Cond, false)
 			}
 		}
@@ -1200,13 +1312,8 @@ func stmtAlwaysExits(s Stmt, inFunction bool) bool {
 	if s == nil {
 		return false
 	}
-	if es, ok := s.(*ExprStmt); ok {
-		if call, isCall := es.Expression.(*CallExpr); isCall && call.Callee == "fail" {
-			return true
-		}
-		return inFunction
-	}
-	return false
+	_, ok := s.(*ReturnStmt)
+	return ok && inFunction
 }
 
 func allRulesReturnExpr(rules []CheckRule) bool {
@@ -1214,10 +1321,7 @@ func allRulesReturnExpr(rules []CheckRule) bool {
 		return false
 	}
 	for _, r := range rules {
-		if r.Action == nil {
-			return false
-		}
-		if _, isExpr := r.Action.(*ExprStmt); !isExpr {
+		if _, isRet := r.Action.(*ReturnStmt); !isRet {
 			return false
 		}
 	}
@@ -2338,11 +2442,6 @@ func (v *typeValidator) checkNotCondition(e Expr) error {
 	)
 }
 
-func isFailCallExpr(e Expr) bool {
-	call, ok := e.(*CallExpr)
-	return ok && call.Module == "" && call.Callee == "fail"
-}
-
 func (v *typeValidator) staticConcreteType(st varTypeState) string {
 	if st.exactBaseType != "" {
 		return st.exactBaseType
@@ -2532,7 +2631,7 @@ func (v *typeValidator) validateAndBindMatchPattern(pat MatchPattern, scope *typ
 }
 
 func (v *typeValidator) checkMatchListResultExpr(expectedType *string, expr Expr, inElse bool) error {
-	if v.inErrorTestExpr || expr == nil || isFailCallExpr(expr) {
+	if v.inErrorTestExpr || expr == nil {
 		return nil
 	}
 	ct := v.staticConcreteType(v.inferExprTypeState(expr))
@@ -2581,105 +2680,25 @@ func (v *typeValidator) checkMatchStmt(st *MatchStmt, inFunction bool) error {
 	}
 
 	if isList {
-		if !inFunction && !v.inErrorTestExpr {
-			return newError(
-				"TypeError",
-				st.Line,
-				st.Col,
-				v.source,
-				"Cannot use list 'match' without assigning its result at top level",
-				"Assign the result (e.g. 'result = match items ... end') or return it from a 'to' function.",
-			)
-		}
-		matchScope := v.pushScope()
-		matchScope.vars["it"] = varTypeState{exactNonRecord: true, exactBaseType: "text"}
-		v.loopDepth++
-		defer func() {
-			v.loopDepth--
-			v.popScope()
-		}()
-
-		var expectedType string
-		for _, arm := range st.Arms {
-			es, isExpr := arm.Action.(*ExprStmt)
-			if !isExpr {
-				return newError(
-					"TypeError",
-					arm.Line,
-					arm.Col,
-					v.source,
-					"List 'match' transforms items with expressions and cannot execute statements",
-					"Use 'loop items ... end' with 'match it ... end' to run statements for each item.",
-				)
-			}
-			armScope := v.pushScope()
-			if err := v.validateAndBindMatchPattern(arm.Pattern, armScope); err != nil {
-				v.popScope()
-				return err
-			}
-			err := v.checkExpr(es.Expression)
-			if err == nil {
-				err = v.checkNotCondition(es.Expression)
-			}
-			if err == nil {
-				err = v.checkMatchListResultExpr(&expectedType, es.Expression, false)
-			}
-			v.popScope()
-			if err != nil {
-				return err
-			}
-		}
-
-		if len(st.ElseBody) > 0 {
-			lastStmt := st.ElseBody[len(st.ElseBody)-1]
-			lastEs, isExpr := lastStmt.(*ExprStmt)
-			if !isExpr {
-				elLine, elCol := lastStmt.Pos()
-				return newError(
-					"TypeError",
-					elLine,
-					elCol,
-					v.source,
-					"List 'match' 'else' branch must end with an expression",
-					"End 'else' with a result expression (or write 'else -> <expr>').",
-				)
-			}
-			v.pushScope()
-			err := v.checkStmts(st.ElseBody, false)
-			if err == nil {
-				err = v.checkNotCondition(lastEs.Expression)
-			}
-			if err == nil {
-				err = v.checkMatchListResultExpr(&expectedType, lastEs.Expression, true)
-			}
-			v.popScope()
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		return newError(
+			"TypeError",
+			st.Line,
+			st.Col,
+			v.source,
+			"List 'match' is a transformation expression and cannot be used as a standalone statement",
+			"Return or assign the result (e.g. '-> match items ... end' or 'result = match items ... end').",
+		)
 	}
 
 	for _, arm := range st.Arms {
-		if !inFunction && !v.inErrorTestExpr {
-			if es, isExpr := arm.Action.(*ExprStmt); isExpr {
-				if _, isCall := es.Expression.(*CallExpr); !isCall {
-					line, col := es.Pos()
-					return newError(
-						"TypeError",
-						line,
-						col,
-						v.source,
-						"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
-						"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-					)
-				}
-			}
-		}
 		armScope := v.pushScope()
 		err := v.validateAndBindMatchPattern(arm.Pattern, armScope)
 		if err == nil {
-			err = v.checkStmt(arm.Action, inFunction)
+			if len(arm.Body) > 0 {
+				err = v.checkStmts(arm.Body, inFunction)
+			} else {
+				err = v.checkStmt(arm.Action, inFunction)
+			}
 		}
 		v.popScope()
 		if err != nil {
@@ -2688,22 +2707,6 @@ func (v *typeValidator) checkMatchStmt(st *MatchStmt, inFunction bool) error {
 	}
 
 	if len(st.ElseBody) > 0 {
-		if !inFunction && !v.inErrorTestExpr {
-			lastStmt := st.ElseBody[len(st.ElseBody)-1]
-			if es, isExpr := lastStmt.(*ExprStmt); isExpr {
-				if _, isCall := es.Expression.(*CallExpr); !isCall {
-					line, col := es.Pos()
-					return newError(
-						"TypeError",
-						line,
-						col,
-						v.source,
-						"Cannot return a value from 'match' at top level; use 'say' or 'fail' instead.",
-						"Top-level 'match' branches can run statements like 'say \"...\"', assignments, or 'fail \"...\"'.",
-					)
-				}
-			}
-		}
 		v.pushScope()
 		err := v.checkStmts(st.ElseBody, inFunction)
 		v.popScope()
@@ -2869,9 +2872,6 @@ func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
 
 	var states []varTypeState
 	for _, arm := range ex.Arms {
-		if isFailCallExpr(arm.Value) {
-			continue
-		}
 		armScope := v.pushScope()
 		v.bindMatchPatternTypes(arm.Pattern, armScope)
 		states = append(states, v.inferExprTypeState(arm.Value))
@@ -2885,7 +2885,7 @@ func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
 				if as, ok := s.(*AssignStmt); ok {
 					elseScope.vars[as.Name] = v.inferExprTypeState(as.Value)
 				}
-			} else if es, ok := s.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
+			} else if es, ok := s.(*ExprStmt); ok {
 				states = append(states, v.inferExprTypeState(es.Expression))
 			}
 		}
@@ -2917,35 +2917,30 @@ func (v *typeValidator) collectSwarmReturnExprs(stmts []Stmt) []Expr {
 		return nil
 	}
 	var out []Expr
-	for i, s := range stmts {
-		isLast := i == len(stmts)-1
+	for _, s := range stmts {
 		switch st := s.(type) {
+		case *ReturnStmt:
+			out = append(out, st.Value)
 		case *CheckGuardStmt:
+			out = append(out, v.collectSwarmReturnExprs(st.Body)...)
 			for _, r := range st.Rules {
 				if r.Action != nil {
-					if es, ok := r.Action.(*ExprStmt); ok {
-						out = append(out, es.Expression)
+					if rs, ok := r.Action.(*ReturnStmt); ok {
+						out = append(out, rs.Value)
 					}
 				}
 			}
-			if len(st.ElseBody) > 0 {
-				out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
-			}
+			out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
 		case *MatchStmt:
 			for _, arm := range st.Arms {
 				if arm.Action != nil {
-					if es, ok := arm.Action.(*ExprStmt); ok {
-						out = append(out, es.Expression)
+					if rs, ok := arm.Action.(*ReturnStmt); ok {
+						out = append(out, rs.Value)
 					}
 				}
+				out = append(out, v.collectSwarmReturnExprs(arm.Body)...)
 			}
-			if len(st.ElseBody) > 0 {
-				out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
-			}
-		case *ExprStmt:
-			if isLast {
-				out = append(out, st.Expression)
-			}
+			out = append(out, v.collectSwarmReturnExprs(st.ElseBody)...)
 		}
 	}
 	return out
@@ -3013,10 +3008,20 @@ func (v *typeValidator) checkSwarmLoopExpr(ex *SwarmLoopExpr) error {
 	}
 
 	if !v.inErrorTestExpr {
+		if stmtsHaveReturn(ex.Body) && !v.stmtAlwaysReturnsExpr(ex.Body) {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"'swarm loop' returns a value on some paths via '->' but can finish without returning a value",
+				"Ensure every execution path in 'swarm loop' ends with '-> <value>'.",
+			)
+		}
 		retExprs := v.collectSwarmReturnExprs(ex.Body)
 		expectedType := ""
 		for _, re := range retExprs {
-			if re == nil || isFailCallExpr(re) {
+			if re == nil {
 				continue
 			}
 			if err := v.checkNotCondition(re); err != nil {
@@ -3059,16 +3064,20 @@ func (v *typeValidator) inferSwarmLoopTypeState(ex *SwarmLoopExpr) varTypeState 
 	var states []varTypeState
 	var walkBody func(stmts []Stmt, inScope *typeScope)
 	walkBody = func(stmts []Stmt, inScope *typeScope) {
-		for i, s := range stmts {
-			isLast := i == len(stmts)-1
+		for _, s := range stmts {
 			switch st := s.(type) {
 			case *AssignStmt:
 				inScope.vars[st.Name] = v.inferExprTypeState(st.Value)
+			case *ReturnStmt:
+				states = append(states, v.inferExprTypeState(st.Value))
 			case *CheckGuardStmt:
+				if len(st.Body) > 0 {
+					walkBody(st.Body, inScope)
+				}
 				for _, r := range st.Rules {
 					if r.Action != nil {
-						if es, ok := r.Action.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
-							states = append(states, v.inferExprTypeState(es.Expression))
+						if rs, ok := r.Action.(*ReturnStmt); ok {
+							states = append(states, v.inferExprTypeState(rs.Value))
 						}
 					}
 				}
@@ -3078,17 +3087,16 @@ func (v *typeValidator) inferSwarmLoopTypeState(ex *SwarmLoopExpr) varTypeState 
 			case *MatchStmt:
 				for _, arm := range st.Arms {
 					if arm.Action != nil {
-						if es, ok := arm.Action.(*ExprStmt); ok && !isFailCallExpr(es.Expression) {
-							states = append(states, v.inferExprTypeState(es.Expression))
+						if rs, ok := arm.Action.(*ReturnStmt); ok {
+							states = append(states, v.inferExprTypeState(rs.Value))
 						}
+					}
+					if len(arm.Body) > 0 {
+						walkBody(arm.Body, inScope)
 					}
 				}
 				if len(st.ElseBody) > 0 {
 					walkBody(st.ElseBody, inScope)
-				}
-			case *ExprStmt:
-				if isLast && !isFailCallExpr(st.Expression) {
-					states = append(states, v.inferExprTypeState(st.Expression))
 				}
 			}
 		}

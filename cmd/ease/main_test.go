@@ -200,7 +200,7 @@ func TestCmdBuildMultiFileCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	modPath := filepath.Join(subDir, "mod.ease")
-	if err := os.WriteFile(modPath, []byte("def tax = 1.19\nto gross x\n  x * tax\nend\n"), 0o644); err != nil {
+	if err := os.WriteFile(modPath, []byte("def tax = 1.19\nto gross x -> x * tax\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mainPath := filepath.Join(subDir, "main.ease")

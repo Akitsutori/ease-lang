@@ -53,12 +53,12 @@ client = network.network with url = %q, timeout = 5
 
 to fetch_item idx
   raw = network:fetch client "/item/{idx}"
-  (decode_json raw) as ItemResp
+  -> (decode_json raw) as ItemResp
 end
 
 items = swarm loop range 0 3
   say "say:{it}"
-  fetch_item it
+  -> fetch_item it
 end
 
 say "count={count items}"
@@ -86,32 +86,30 @@ def Order
 end
 
 to calc_shipping orders
-  swarm loop orders
+  -> swarm loop orders
     check it.amount >= 50 -> 0
-    check
-      it.amount <= 0 -> fail "invalid amount"
-    end
-    5.90
+    check it.amount <= 0  -> -1
+    -> 5.90
   end
 end
 
 to nested_sums n
-  swarm loop range 1 n
+  -> swarm loop range 1 n
     row = swarm loop range 1 3
-      it * 10
+      -> it * 10
     end
-    sum row + it
+    -> sum row + it
   end
 end
 
 to inner_seq_loop items
-  swarm loop items
+  -> swarm loop items
     acc = 0
     loop range 1 it
       check it > 3 -> end
       acc = acc + it
     end
-    acc
+    -> acc
   end
 end
 
@@ -126,19 +124,19 @@ test "guards, nesting, and fast paths"
 
   # Parenthesized expression + postfix where
   big = (swarm loop range 1 5
-    it * it
+    -> it * it
   end) where it > 10
   big is list 16, 25
 
   # Empty and single-element fast paths
   empty_res = swarm loop (list as number)
-    it + 1
+    -> it + 1
   end
   count empty_res is 0
 
   one_res = swarm loop (list 7)
     check it is 7 -> 70
-    0
+    -> 0
   end
   one_res is list 70
 
@@ -170,9 +168,13 @@ import network
 client = network.network with url = %q, timeout = 5
 res = swarm loop range 0 5
   txt = network:fetch client "/{it}"
-  check txt is "4" -> fail "err-at-4"
-  check txt is "2" -> fail "err-at-2"
-  txt
+  check txt is "4"
+    bad4 = "err-at-4" as number
+  end
+  check txt is "2"
+    bad2 = "err-at-2" as number
+  end
+  -> txt
 end
 `, srv.URL)
 		_, err := EvalProgram(src, &bytes.Buffer{})
@@ -194,13 +196,13 @@ to transform n base_list
   xs = append base_list n
   p = Point with x = sum xs, label = "n={n}"
   raw = encode_json p
-  (decode_json raw) as Point
+  -> (decode_json raw) as Point
 end
 
 out = swarm loop range 1 200
   local_xs = append shared it
   check it % 2 is 0 -> transform it local_xs
-  Point with x = it, label = "odd"
+  -> Point with x = it, label = "odd"
 end
 
 say "{count out}|{out.1.x}|{out.2.label}|{count shared}"
@@ -248,12 +250,12 @@ func TestSwarmLoopStaticAndRuntimeErrors(t *testing.T) {
 		},
 		{
 			name:    "mixed static return types rejected",
-			src:     "xs = swarm loop range 1 3\n  check it is 1 -> \"one\"\n  it\nend\n",
+			src:     "xs = swarm loop range 1 3\n  check it is 1 -> \"one\"\n  -> it\nend\n",
 			wantSub: "Mixed result types in 'swarm loop': expected text, got number",
 		},
 		{
 			name:    "condition returned in swarm loop rejected",
-			src:     "xs = swarm loop range 1 3\n  it > 1\nend\n",
+			src:     "xs = swarm loop range 1 3\n  -> it > 1\nend\n",
 			wantSub: "Conditions cannot be stored or printed",
 		},
 		{
@@ -263,7 +265,7 @@ def Item
   code = 0
 end
 res = swarm loop range 1 3
-  Item with code = it
+  -> Item with code = it
 end
 bad = res where it.missing is 1
 `,
@@ -273,7 +275,7 @@ bad = res where it.missing is 1
 			name: "downstream inferred text list rejected by sum",
 			src: `
 res = swarm loop range 1 3
-  "{it}"
+  -> "{it}"
 end
 s = sum res
 `,
@@ -295,12 +297,10 @@ s = sum res
 
 	// Dynamic mixed return types via untyped helper
 	dynMixed := `
-to id x
-  x
-end
+to id x -> x
 res = swarm loop range 1 2
   check it is 1 -> id 10
-  id "two"
+  -> id "two"
 end
 `
 	if _, err := EvalProgram(dynMixed, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Mixed result types in 'swarm loop'") {

@@ -1,4 +1,4 @@
-# Feature 08: Denken ohne Booleans & die sprachliche Rollenverteilung (def / to / do)
+# Feature 08: Denken ohne Booleans & die sprachliche Rollenverteilung (def / to / ->)
 #
 # 1. Warum Ease auf `bool` (`true`/`false`) verzichtet:
 #    - Bedingungen wie `amount >= 50` bleiben direkt im Kontrollfluss (`check`, `if`, `test`).
@@ -23,7 +23,7 @@ end
 # Statt `to can_ship amount` (-> klingt falsch!) zwingt `to` zu einer klaren Handlung:
 to decide_if_to_ship amount
     check amount >= 50 -> decision with answer = "yes"
-    decision with answer = "no"
+    -> decision with answer = "no"
 end
 
 test "Rollenverteilung def (Substantiv) / to (Infinitiv) / (Imperativ)"
@@ -52,7 +52,7 @@ to plan_shipment amount risk_level
         risk_level is "high" -> shipping_plan with status = "manual_review", reason = "high risk"
         amount < 50          -> shipping_plan with status = "below_minimum", reason = "minimum 50"
     end
-    shipping_plan with status = "ship", reason = "ready"
+    -> shipping_plan with status = "ship", reason = "ready"
 end
 
 test "Ohne Booleans: sprechende Zustände statt kryptischer Flags"

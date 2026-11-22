@@ -14,9 +14,7 @@ def api_user
     role = "member" | "admin"
 end
 
-to bad_interp val
-    "Wert: {val}"
-end
+to bad_interp val -> "Wert: {val}"
 
 raw_ok = "42" as number
 num_as_text = 123 as text

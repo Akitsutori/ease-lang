@@ -121,16 +121,18 @@ func (ev *Evaluator) evalSwarmLoop(e *SwarmLoopExpr, env *Env) (Value, error) {
 	results := make([]Value, n)
 	outs := make([]bytes.Buffer, n)
 
+	hasReturn := stmtsHaveReturn(e.Body)
 	runItem := func(idx int) error {
 		worker := ev.forkWorker(&outs[idx])
 		workerEnv := NewWorkerEnv(env, assigned)
 		workerEnv.Define("it", lv.Elements[idx], false)
 		workerEnv.SetLoopIndex(float64(idx + 1))
 
-		val, sig, execErr := worker.execBlock(e.Body, workerEnv)
+		_, sig, execErr := worker.execBlock(e.Body, workerEnv)
 		if execErr != nil {
 			return execErr
 		}
+		var val Value
 		if sig != nil {
 			if sig.loopEnd {
 				return newError(
@@ -139,13 +141,24 @@ func (ev *Evaluator) evalSwarmLoop(e *SwarmLoopExpr, env *Env) (Value, error) {
 					e.Col,
 					ev.source,
 					"'-> end' cannot be used inside 'swarm loop'",
-					"Use 'check <cond> -> <value>' to return early from a 'swarm loop' iteration.",
+					"Use '-> <value>' or 'check <cond> -> <value>' to return from a 'swarm loop' iteration.",
 				)
 			}
 			val = sig.val
+		} else if hasReturn {
+			return newError(
+				"RuntimeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				"'swarm loop' iteration finished without returning a value via '->'",
+				"End each path in 'swarm loop' with '-> <value>'.",
+			)
 		}
-		if err := worker.checkNotConditionValue(val, e.Line, e.Col); err != nil {
-			return err
+		if hasReturn {
+			if err := worker.checkNotConditionValue(val, e.Line, e.Col); err != nil {
+				return err
+			}
 		}
 		results[idx] = val
 		return nil
@@ -204,6 +217,10 @@ func (ev *Evaluator) evalSwarmLoop(e *SwarmLoopExpr, env *Env) (Value, error) {
 		if outs[i].Len() > 0 {
 			ev.writeOutString(outs[i].String())
 		}
+	}
+
+	if !hasReturn {
+		return nil, nil
 	}
 
 	firstType := structuredTypeName(results[0])

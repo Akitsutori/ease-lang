@@ -13,9 +13,7 @@ import (
 
 func TestDiagnoseSourceValidAndInvalid(t *testing.T) {
 	valid := `
-to greet name
-    "Hello {name}"
-end
+to greet name -> "Hello {name}"
 
 test
     greet "World" is "Hello World"
@@ -259,7 +257,7 @@ func TestLSPDiagnoseRelativeModuleImportInSubdir(t *testing.T) {
 		t.Fatal(err)
 	}
 	billingPath := filepath.Join(srcDir, "billing.ease")
-	billingSrc := "def invoice\n  net = 0\nend\nto total inv\n  inv.net * 1.19\nend\n"
+	billingSrc := "def invoice\n  net = 0\nend\nto total inv -> inv.net * 1.19\n"
 	if err := os.WriteFile(billingPath, []byte(billingSrc), 0o644); err != nil {
 		t.Fatal(err)
 	}

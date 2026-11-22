@@ -6,7 +6,7 @@ import screen
 
 to lantern_sway tick
     phase = (tick % 120) - 60
-    (abs phase) - 30
+    -> (abs phase) - 30
 end
 
 to build_hotel_scene tick note_text
@@ -37,7 +37,7 @@ to build_hotel_scene tick note_text
     shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 12, color = "orange", filled = "yes")
     shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 18, color = "yellow", filled = "no", stroke = 2)
 
-    screen.scene with
+    -> screen.scene with
         background = "midnight"
         shapes     = shapes
         labels     = notes
@@ -50,7 +50,7 @@ to render_hotel win updates
         sc = build_hotel_scene it.index note_text
         raw = screen:present win sc
         st = decode_json raw as screen.frame_state
-        check st.status is "closed" -> "closed"
+        check st.status is "closed" -> end
     end
 end
 
@@ -58,10 +58,12 @@ to handle_hotel_events win events
     seen = list as text
     take events
         seen = append seen it.kind
-        check it.kind is "key" and it.key is "escape" -> close events
+        check it.kind is "key" and it.key is "escape"
+            close events
+        end
         check it.kind is "close" -> end
     end
-    seen
+    -> seen
 end
 
 to run_haunted_hotel
@@ -69,7 +71,7 @@ to run_haunted_hotel
     events = inbox as screen.event
     screen:open win events
     spawn render_hotel win "quiet"
-    handle_hotel_events win events
+    -> handle_hotel_events win events
 end
 
 test "haunted hotel animation and headless event stream behave deterministically"

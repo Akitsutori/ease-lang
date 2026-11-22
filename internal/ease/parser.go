@@ -208,6 +208,16 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 				}
 			}
 		case TOK_TO:
+			hasArrowOnLine := false
+			for k := i + 1; k < len(p.tokens); k++ {
+				if p.tokens[k].Type == TOK_NEWLINE || p.tokens[k].Type == TOK_EOF {
+					break
+				}
+				if p.tokens[k].Type == TOK_ARROW {
+					hasArrowOnLine = true
+					break
+				}
+			}
 			if blockDepth == 0 && i+1 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT {
 				fnName := p.tokens[i+1].Lexeme
 				paramCount := 0
@@ -220,7 +230,9 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 					arities[fnName] = paramCount
 				}
 			}
-			blockDepth++
+			if !hasArrowOnLine {
+				blockDepth++
+			}
 		case TOK_LOOP, TOK_MATCH, TOK_TEST, TOK_TAKE:
 			blockDepth++
 		case TOK_DEF:
@@ -228,8 +240,17 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 				blockDepth++
 			}
 		case TOK_CHECK:
-			if i+1 < len(p.tokens) && (p.tokens[i+1].Type == TOK_NEWLINE ||
-				(p.tokens[i+1].Type == TOK_STRING && i+2 < len(p.tokens) && p.tokens[i+2].Type == TOK_NEWLINE)) {
+			hasArrowOnLine := false
+			for k := i + 1; k < len(p.tokens); k++ {
+				if p.tokens[k].Type == TOK_NEWLINE || p.tokens[k].Type == TOK_EOF {
+					break
+				}
+				if p.tokens[k].Type == TOK_ARROW {
+					hasArrowOnLine = true
+					break
+				}
+			}
+			if !hasArrowOnLine {
 				blockDepth++
 			}
 		case TOK_WITH, TOK_WHERE:
@@ -466,6 +487,30 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 				fmt.Sprintf("Write parameters separated by spaces: to %s param1 param2", nameTok.Lexeme),
 			)
 		}
+	}
+
+	if arrowTok := p.current(); p.match(TOK_ARROW) {
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				fmt.Sprintf("Expected return expression after '->' in 'to %s'", nameTok.Lexeme),
+				fmt.Sprintf("Example: to %s %s -> <expr>", nameTok.Lexeme, strings.Join(params, " ")),
+			)
+		}
+		retStmt, err := p.parseArrowReturnValueOnly(arrowTok)
+		if err != nil {
+			return nil, err
+		}
+		return &FuncDecl{
+			posInfo: posInfo{Line: toTok.Line, Col: toTok.Col},
+			Name:    nameTok.Lexeme,
+			Params:  params,
+			Body:    []Stmt{retStmt},
+		}, nil
 	}
 
 	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_END) {
@@ -913,6 +958,9 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		return p.parseSwarmLoopStmt()
 	case TOK_SPAWN:
 		return p.parseSpawnStmt()
+	case TOK_ARROW:
+		arrowTok := p.advance()
+		return p.parseArrowAction(arrowTok)
 	case TOK_TAKE:
 		return p.parseTakeStmt()
 	case TOK_TO:
@@ -944,6 +992,26 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		)
 	default:
 		if tok.Type == TOK_IDENT && p.peekNext().Type != TOK_ASSIGN {
+			if tok.Lexeme == "fail" {
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'fail' has been removed from Ease",
+					"'fail' was removed; return an explicit error union/record with '-> ...' instead.",
+				)
+			}
+			if tok.Lexeme == "return" {
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'return' is not a keyword in Ease",
+					"Use '-> <value>' to return values in Ease.",
+				)
+			}
 			if tok.Lexeme == "for" {
 				return nil, newError(
 					"SyntaxError",
@@ -1346,47 +1414,116 @@ func (p *Parser) parseInboxExpr() (Expr, error) {
 func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	chkTok := p.advance() // consume `check`
 
-	// Single-line guard: `check <cond> -> <stmt>`
+	// Form 1 (single-line) or Form 2 (multi-line effect block): `check <cond> ...`
 	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) {
 		cond, err := p.parseExpr()
 		if err != nil {
 			return nil, err
 		}
-		if !p.match(TOK_ARROW) {
-			tok := p.current()
-			return nil, newError(
-				"SyntaxError",
-				tok.Line,
-				tok.Col,
-				p.source,
-				"Expected '->' after condition in single-line 'check'",
-				"Write: check <condition> -> <action>, or put conditions on new lines inside 'check ... end'.",
-			)
+		if arrowTok := p.current(); p.match(TOK_ARROW) {
+			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+				tok := p.current()
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"Single-line 'check <cond> -> <value | end>' cannot span multiple lines",
+					"Put a value expression or 'end' on the same line, or omit '->' for a multi-line 'check <cond> ... end' effect block.",
+				)
+			}
+			action, err := p.parseArrowAction(arrowTok)
+			if err != nil {
+				return nil, err
+			}
+			return &CheckGuardStmt{
+				posInfo: posInfo{Line: chkTok.Line, Col: chkTok.Col},
+				Rules: []CheckRule{
+					{Line: chkTok.Line, Col: chkTok.Col, Cond: cond, Action: action},
+				},
+			}, nil
 		}
-		if p.check(TOK_NEWLINE) {
-			tok := p.current()
-			return nil, newError(
-				"SyntaxError",
-				tok.Line,
-				tok.Col,
-				p.source,
-				"Single-line 'check <cond> -> <action>' cannot span multiple lines",
-				"Put the action on the same line without 'end' (e.g. 'check cond -> x = x + 1'), or use a 'check ... end' block.",
-			)
+
+		// Form 2: Multi-line effect block: `check <cond>\n  stmts...\n  [else\n  stmts...]\nend`
+		if err := p.expectStmtEnd("'check <condition>'"); err != nil {
+			return nil, err
 		}
-		action, err := p.parseCheckArrowAction()
-		if err != nil {
+		p.skipNewlines()
+		var body []Stmt
+		for !p.check(TOK_END) && !p.check(TOK_ELSE) {
+			if p.check(TOK_EOF) {
+				return nil, newError(
+					"SyntaxError",
+					chkTok.Line,
+					chkTok.Col,
+					p.source,
+					"'check' block is missing 'end'",
+					"Close every 'check' block with 'end'.",
+				)
+			}
+			s, err := p.parseStmt()
+			if err != nil {
+				return nil, err
+			}
+			body = append(body, s)
+			p.skipNewlines()
+		}
+
+		var elseBody []Stmt
+		if p.match(TOK_ELSE) {
+			if p.match(TOK_ARROW) {
+				tok := p.current()
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'else ->' is not used in a 'check <condition>' effect block",
+					"Put 'else' on its own line followed by statements, or use 'check' alone on the first line for a verdict table.",
+				)
+			}
+			if err := p.expectStmtEnd("'else'"); err != nil {
+				return nil, err
+			}
+			p.skipNewlines()
+			for !p.check(TOK_END) {
+				if p.check(TOK_EOF) {
+					return nil, newError(
+						"SyntaxError",
+						chkTok.Line,
+						chkTok.Col,
+						p.source,
+						"'check ... else' block is missing 'end'",
+						"Close every 'check ... else' block with 'end'.",
+					)
+				}
+				s, err := p.parseStmt()
+				if err != nil {
+					return nil, err
+				}
+				elseBody = append(elseBody, s)
+				p.skipNewlines()
+			}
+		}
+
+		if !p.match(TOK_END) {
+			tok := p.current()
+			return nil, newError("SyntaxError", tok.Line, tok.Col, p.source, "Expected 'end' to close 'check' block", "Add 'end' after your 'check' block.")
+		}
+		if err := p.expectStmtEnd("'check' block"); err != nil {
 			return nil, err
 		}
 		return &CheckGuardStmt{
-			posInfo: posInfo{Line: chkTok.Line, Col: chkTok.Col},
-			Rules: []CheckRule{
-				{Line: chkTok.Line, Col: chkTok.Col, Cond: cond, Action: action},
-			},
+			posInfo:       posInfo{Line: chkTok.Line, Col: chkTok.Col},
+			IsBlock:       true,
+			IsEffectBlock: true,
+			Cond:          cond,
+			Body:          body,
+			ElseBody:      elseBody,
 		}, nil
 	}
 
-	// Multi-line guard block: `check\n ...\n [else\n ...]\n end`
+	// Form 3: Multi-line verdict table: `check\n  cond -> <value | end>\n  [else ...]\nend`
 	p.skipNewlines()
 	var rules []CheckRule
 	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
@@ -1405,16 +1542,21 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		var action Stmt
-		if p.match(TOK_ARROW) {
-			action, err = p.parseCheckArrowAction()
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			if err := p.expectStmtEnd("check condition"); err != nil {
-				return nil, err
-			}
+		arrowTok := p.current()
+		if !p.match(TOK_ARROW) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				"Every rule inside a 'check ... end' verdict table must have '-> <value | end>'",
+				"Write '<condition> -> <value>' (or put the condition on the 'check' header line for an effect block).",
+			)
+		}
+		action, err := p.parseArrowAction(arrowTok)
+		if err != nil {
+			return nil, err
 		}
 		rules = append(rules, CheckRule{Line: ruleTok.Line, Col: ruleTok.Col, Cond: cond, Action: action})
 		p.skipNewlines()
@@ -1422,8 +1564,8 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 
 	var elseBody []Stmt
 	if p.match(TOK_ELSE) {
-		if p.match(TOK_ARROW) {
-			action, err := p.parseCheckArrowAction()
+		if arrowTok := p.current(); p.match(TOK_ARROW) {
+			action, err := p.parseArrowAction(arrowTok)
 			if err != nil {
 				return nil, err
 			}
@@ -1460,21 +1602,14 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		return nil, err
 	}
 
-	hasArrow := false
-	for _, r := range rules {
-		if r.Action != nil {
-			hasArrow = true
-			break
-		}
-	}
-	if !hasArrow && len(elseBody) == 0 {
+	if len(rules) == 0 && len(elseBody) == 0 {
 		return nil, newError(
 			"SyntaxError",
 			chkTok.Line,
 			chkTok.Col,
 			p.source,
-			"'check' block requires '->' actions or an 'else' branch",
-			"Add '-> <action>' to each rule, or add an 'else' branch (e.g. 'check x <= 0 -> fail \"...\"').",
+			"'check' block requires at least one 'cond -> <value | end>' rule",
+			"Write '<condition> -> <value>' inside 'check ... end'.",
 		)
 	}
 
@@ -1486,7 +1621,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	}, nil
 }
 
-func (p *Parser) parseCheckArrowAction() (Stmt, error) {
+func (p *Parser) parseArrowAction(arrowTok Token) (Stmt, error) {
 	if p.check(TOK_END) {
 		endTok := p.advance()
 		if err := p.expectStmtEnd("'-> end'"); err != nil {
@@ -1494,7 +1629,70 @@ func (p *Parser) parseCheckArrowAction() (Stmt, error) {
 		}
 		return &LoopEndStmt{posInfo: posInfo{Line: endTok.Line, Col: endTok.Col}}, nil
 	}
-	return p.parseStmt()
+	return p.parseArrowReturnValueOnly(arrowTok)
+}
+
+func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) {
+	tok := p.current()
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected value expression or 'end' after '->'",
+			"Write '-> <value>' or '-> end'.",
+		)
+	}
+	switch tok.Type {
+	case TOK_SAY, TOK_LOOP, TOK_CHECK, TOK_SPAWN, TOK_TAKE, TOK_TO, TOK_DEF, TOK_TEST, TOK_END:
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Statements and side effects are not allowed after '->'",
+			"Put only a value expression after '->' (or use a multi-line block without '->' for side effects).",
+		)
+	}
+	if tok.Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Assignments are not allowed after '->'",
+			"Put only a value expression after '->' (or use a multi-line block without '->' for assignments).",
+		)
+	}
+	if tok.Type == TOK_IDENT && tok.Lexeme == "fail" {
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'fail' has been removed from Ease",
+			"'fail' was removed; return an explicit error union/record with '-> ...' instead.",
+		)
+	}
+	if tok.Type == TOK_IDENT && tok.Lexeme == "return" {
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'return' is not a keyword in Ease",
+			"Put the return expression directly after '->'.",
+		)
+	}
+	val, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectStmtEnd("'->' return value"); err != nil {
+		return nil, err
+	}
+	return &ReturnStmt{posInfo: posInfo{Line: arrowTok.Line, Col: arrowTok.Col}, Value: val}, nil
 }
 
 func isMatchVarLengthSeg(seg MatchSegment) bool {
@@ -1765,39 +1963,78 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !p.match(TOK_ARROW) {
+		if arrowTok := p.current(); p.match(TOK_ARROW) {
+			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					"'match' branch '-> <value | end>' cannot be empty",
+					"Put a value expression or 'end' on the same line as '->', or start an effect block on the next line without '->'.",
+				)
+			}
+			action, err := p.parseArrowAction(arrowTok)
+			if err != nil {
+				return nil, err
+			}
+			arms = append(arms, MatchArmStmt{
+				Line:    armTok.Line,
+				Col:     armTok.Col,
+				Pattern: pat,
+				Action:  action,
+			})
+			p.skipNewlines()
+		} else if p.match(TOK_NEWLINE) {
+			p.skipNewlines()
+			var armBody []Stmt
+			for !p.check(TOK_STRING) && !p.check(TOK_INTERP_STRING) && !p.check(TOK_ELSE) && !p.check(TOK_END) {
+				if p.check(TOK_EOF) {
+					return nil, newError(
+						"SyntaxError",
+						matchTok.Line,
+						matchTok.Col,
+						p.source,
+						"'match' block is missing 'end'",
+						"Close every 'match' block with 'end'.",
+					)
+				}
+				s, err := p.parseStmt()
+				if err != nil {
+					return nil, err
+				}
+				armBody = append(armBody, s)
+				p.skipNewlines()
+			}
+			if len(armBody) == 0 {
+				cur := p.current()
+				return nil, newError(
+					"SyntaxError",
+					cur.Line,
+					cur.Col,
+					p.source,
+					"Effect arm in 'match' cannot be empty",
+					"Add one or more statements below the pattern, or use '-> <value | end>'.",
+				)
+			}
+			arms = append(arms, MatchArmStmt{
+				Line:    armTok.Line,
+				Col:     armTok.Col,
+				Pattern: pat,
+				Body:    armBody,
+			})
+		} else {
 			cur := p.current()
 			return nil, newError(
 				"SyntaxError",
 				cur.Line,
 				cur.Col,
 				p.source,
-				fmt.Sprintf("Expected '->' after match pattern, got %q", cur.Lexeme),
-				"Write '\"pattern\" -> action' on each branch.",
+				fmt.Sprintf("Expected '->' or newline after match pattern, got %q", cur.Lexeme),
+				"Write '\"pattern\" -> <value | end>' or put statements on the next line without '->'.",
 			)
 		}
-		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
-			cur := p.current()
-			return nil, newError(
-				"SyntaxError",
-				cur.Line,
-				cur.Col,
-				p.source,
-				"'match' branch '-> <action>' cannot be empty",
-				"Put the action on the same line as '->' (e.g. '\"PING\" -> \"PONG\"').",
-			)
-		}
-		action, err := p.parseCheckArrowAction()
-		if err != nil {
-			return nil, err
-		}
-		arms = append(arms, MatchArmStmt{
-			Line:    armTok.Line,
-			Col:     armTok.Col,
-			Pattern: pat,
-			Action:  action,
-		})
-		p.skipNewlines()
 	}
 
 	if len(arms) == 0 {
@@ -1807,13 +2044,13 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 			matchTok.Col,
 			p.source,
 			"'match' block requires at least one pattern branch",
-			"Add at least one '\"pattern\" -> action' branch before 'end'.",
+			"Add at least one pattern branch before 'end'.",
 		)
 	}
 
 	var elseBody []Stmt
 	if p.match(TOK_ELSE) {
-		if p.match(TOK_ARROW) {
+		if arrowTok := p.current(); p.match(TOK_ARROW) {
 			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
 				cur := p.current()
 				return nil, newError(
@@ -1821,11 +2058,11 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 					cur.Line,
 					cur.Col,
 					p.source,
-					"'match' 'else -> <action>' branch cannot be empty",
-					"Write 'else -> <action>' on one line or use a multi-line 'else ... end' block.",
+					"'match' 'else -> <value | end>' branch cannot be empty",
+					"Write 'else -> <value>' on one line or use a multi-line 'else ... end' block.",
 				)
 			}
-			action, err := p.parseCheckArrowAction()
+			action, err := p.parseArrowAction(arrowTok)
 			if err != nil {
 				return nil, err
 			}

@@ -9,16 +9,20 @@ to step_particle p dt
     next_life = p.life - 10 * dt
     next_x = p.x + p.vx * dt
     check next_life <= 0 -> p with x = next_x, life = 0, state = "dead"
-    p with x = next_x, life = next_life
+    -> p with x = next_x, life = next_life
 end
 
 to update_particles items dt
     out = list as particle
     loop items
-        check it.state is "dead" -> out = append out it
-        check it.state is "active" -> out = append out step_particle it dt
+        check it.state is "dead"
+            out = append out it
+        end
+        check it.state is "active"
+            out = append out step_particle it dt
+        end
     end
-    out
+    -> out
 end
 
 test

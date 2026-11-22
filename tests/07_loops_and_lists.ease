@@ -12,7 +12,7 @@ to sum_squares xs
     loop xs
         total = total + (it * it)
     end
-    total
+    -> total
 end
 
 to count_down start
@@ -22,7 +22,7 @@ to count_down start
         out = append out cur
         cur = cur - 1
     end
-    out
+    -> out
 end
 
 to classify n
