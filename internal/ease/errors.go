@@ -1,18 +1,25 @@
 package ease
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
 
 // EaseError provides human-friendly diagnostics with source context and an actionable hint.
 type EaseError struct {
-	Stage   string // e.g. "SyntaxError", "RuntimeError", "TestError"
-	Message string
-	Hint    string
-	Line    int
-	Col     int
-	Source  string
+	Stage    string // e.g. "SyntaxError", "RuntimeError", "TestError"
+	Message  string
+	Hint     string
+	Line     int
+	Col      int
+	Source   string
+	isAskEOF bool
+}
+
+func isAskEOFError(err error) bool {
+	var easeErr *EaseError
+	return errors.As(err, &easeErr) && easeErr.isAskEOF
 }
 
 func (e *EaseError) Error() string {

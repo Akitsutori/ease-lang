@@ -207,11 +207,11 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     items = append items "OK"
     items = append items err_rec
     count items is 2
-    items.1 is ErrorMessage
+    items.2 is ErrorMessage
 
     json_items = (decode_json '["OK", {"code": 404, "message": "Missing"}]') as outcome
-    json_items.0 is "OK"
-    json_items.1 is ErrorMessage
+    json_items.1 is "OK"
+    json_items.2 is ErrorMessage
 
     # Early-exit guard narrowing & compound 'and' narrowing
     unwrap_err_guard err_rec is "guard:404"
@@ -738,7 +738,7 @@ items = append items ErrorMessage
 errs = items where
     it is ErrorMessage
     it.code >= 500
-    it.index >= 0
+    it.index >= 1
 end
 say count errs
 `
@@ -1061,15 +1061,15 @@ def Entry
 end
 
 to loop_with_match_exit cmds
-  i = 0
+  i = 1
   loop
-    check i >= count cmds -> end
+    check i > count cmds -> end
     match cmds.(i)
       "quit" -> end
       else -> i = i + 1
     end
   end
-  i
+  i - 1
 end
 
 lines = list "INFO: ok", "10"
@@ -1416,5 +1416,106 @@ end
 		if _, err := ParseProgram(privSrc); err == nil || !strings.Contains(err.Error(), "cannot be called directly") {
 			t.Fatalf("expected internal built-in TypeError for %q, got: %v", privSrc, err)
 		}
+	}
+}
+
+func TestOneBasedIndexingAndListWithUpdates(t *testing.T) {
+	// 1. Static SyntaxError on literal `.0` in index access and `with .0 = ...`, plus mixed `with` and `list as ... with .1`
+	badSyntax := []struct {
+		src     string
+		wantSub string
+	}{
+		{"xs = list 10, 20\nsay xs.0\n", "List indices in Ease are 1-based; use '.1' for the first element"},
+		{"xs = list 10, 20\nys = xs with .0 = 99\n", "List indices in Ease are 1-based; use '.1' for the first element"},
+		{"xs = list 10, 20\nys = xs with .1 = 99, x = 2\n", "Cannot mix record field updates and list index updates"},
+		{"def p\n  x = 0\nend\nxs = list as p with\n  .1 = 5\nend\n", "Expected field name after 'with'"},
+	}
+	for _, tc := range badSyntax {
+		if _, err := ParseProgram(tc.src); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+			t.Fatalf("expected SyntaxError %q for %q, got: %v", tc.wantSub, tc.src, err)
+		}
+	}
+
+	// 2. Static TypeError checks for `with .<index> = <val>`
+	badTypes := []struct {
+		src     string
+		wantSub string
+	}{
+		{"x = 42\ny = x with .1 = 5\n", "'with .<index> = <val>' requires a list"},
+		{"xs = list 10, 20\npos = \"1\"\ny = xs with .pos = 99\n", "List index in 'with' must be a number"},
+		{"xs = list 10, 20\ny = xs with .1 = \"bad\"\n", "Cannot assign text into list of number"},
+		{"def Seat = \"free\" | \"taken\"\nseats = list as Seat\ny = seats with .1 = \"typo\"\n", "Value \"typo\" is not valid for list union \"Seat\""},
+	}
+	for _, tc := range badTypes {
+		if _, err := ParseProgram(tc.src); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+			t.Fatalf("expected TypeError %q for %q, got: %v", tc.wantSub, tc.src, err)
+		}
+	}
+
+	// 3. Runtime checks: 1-based indexing, out-of-range hints, immutable `with .<pos>`, computed expr, vector arithmetic
+	src := `def Seat = "free" | "taken"
+
+seats = list "free", "free", "free", "free"
+pos = 2
+row = 0
+seat = 4
+updated = seats with .1 = "taken", .pos = "taken"
+computed = updated with .(row * 8 + seat) = "taken"
+
+typed_seats = seats as Seat
+typed_next = typed_seats with .3 = "taken"
+
+multi = seats with
+    .1 = "taken"
+    .4 = "taken"
+end
+
+listA = list 1, 2, 3
+listB = list 4, 0, 6
+avg_vec = (listA + listB with .2 = 8) / 2
+
+empty_nums = list as number
+zero_idx = 0
+
+test "1-based indexing and immutable list with updates"
+    seats.1 is "free"
+    updated.1 is "taken"
+    updated.2 is "taken"
+    updated.3 is "free"
+    computed.4 is "taken"
+    typed_next.3 is "taken"
+    multi.1 is "taken"
+    multi.4 is "taken"
+    avg_vec is list 2.5, 5, 4.5
+
+    "äöü".1 is "ä"
+    "äöü".3 is "ü"
+
+    seats.(zero_idx) ->
+        error.type is "RuntimeError"
+        error.message is "List index 0 out of range (1..4)"
+    end
+    empty_nums.1 ->
+        error.type is "RuntimeError"
+        error.message is "List index 1 out of range (list is empty)"
+    end
+    "ä".(zero_idx) ->
+        error.type is "RuntimeError"
+        error.message is "String index 0 out of range (1..1)"
+    end
+    (seats with .(zero_idx) = "taken") ->
+        error.type is "RuntimeError"
+        error.message is "List index 0 out of range (1..4)"
+    end
+    (seats with .5 = "taken") is error
+    (empty_nums with .1 = 10) is error
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 21 {
+		t.Fatalf("expected 21 passed / 0 failed, got %+v", report)
 	}
 }

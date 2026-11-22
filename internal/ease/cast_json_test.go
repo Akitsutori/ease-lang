@@ -372,9 +372,9 @@ test "Rule 1 & 2: strict list types and 'as' validation"
     (decode_json '["a", "b"]') as text is list "a", "b"
     users = (decode_json '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]') as user
     count users is 2
-    users.0 is user
-    users.0.name is "Ada"
-    users.1.id is 2
+    users.1 is user
+    users.1.name is "Ada"
+    users.2.id is 2
 
     t = (decode_json '{"title": "Red", "scores": [10, 20]}') as team
     t is team
@@ -408,17 +408,17 @@ test "Rule 4: batch-with on record lists"
     end
     moved = cloud with x = it.x + it.vx
     count moved is 2
-    moved.0 is particle
-    moved.0.x is 5
-    moved.1.x is 12
-    cloud.0.x is 0
+    moved.1 is particle
+    moved.1.x is 5
+    moved.2.x is 12
+    cloud.1.x is 0
 
     p1 = particle with x = 1, vx = 3
     p2 = particle with x = 4, vx = 6
     moved2 = (list p1, p2) with x = it.x + it.vx
-    moved2.0.x is 4
-    moved2.1.x is 10
-    (append moved2 (list p1)).2.x is 1
+    moved2.1.x is 4
+    moved2.2.x is 10
+    (append moved2 (list p1)).3.x is 1
 
     ((list 1, 2) with x = 1) is error
 end
@@ -643,7 +643,7 @@ b = "bad" as number or make_default "scalar_bad"
 c = (list "1", "2", "3") as number or make_default "list_ok"
 d = (list "1", "x", "y", "z") as number or make_default "list_bad"
 
-say "{a}|{b}|{count c}|{d.0},{d.1},{d.2},{d.3}"
+say "{a}|{b}|{count c}|{d.1},{d.2},{d.3},{d.4}"
 `
 		var out bytes.Buffer
 		if _, err := EvalProgram(src, &out); err != nil {

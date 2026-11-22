@@ -86,7 +86,7 @@ end
 That pneumatic tube is the whole concurrency model of Ease:
 - **`inbox as guest_note`** is a typed tube. Nothing enters unless it matches `guest_note`, and once dropped inside with `put`, the value is frozen so two goroutines can never race over the same record.
 - **`spawn` starts any normal `to` function** in the background — no `async`/`await` keywords, no split function ecosystem.
-- **`take ... end`** sits at the other end receiving `it` and 0-based `it.index` one slip at a time, then exits the instant `close` shuts the chute and the remaining slips drain out.
+- **`take ... end`** sits at the other end receiving `it` and 1-based `it.index` one slip at a time, then exits the instant `close` shuts the chute and the remaining slips drain out.
 
 ---
 
@@ -116,7 +116,7 @@ end
 say "Room fees in arrival order: {encode_json charges}, total: {sum charges}"
 ```
 
-`swarm loop` spins up isolated workers over any list or `range`, keeps outer variables strictly read-only, lets any worker return early with `check ... -> <value>`, and guarantees `charges` comes back in `0..N-1` order so `sum charges` is always deterministic.
+`swarm loop` spins up isolated workers over any list or `range`, keeps outer variables strictly read-only, lets any worker return early with `check ... -> <value>`, and guarantees `charges` comes back in `1..N` order so `sum charges` is always deterministic.
 
 ---
 
@@ -158,9 +158,9 @@ test "late-night HTTP switchboard handles parallel callers cleanly"
         network:fetch phone it
     end
 
-    replies.0 is (encode_json desk_status)
-    replies.1 is "Wake-up call set for room 402 in 15m"
-    replies.2 is ""
+    replies.1 is (encode_json desk_status)
+    replies.2 is "Wake-up call set for room 402 in 15m"
+    replies.3 is ""
     close requests
 end
 ```

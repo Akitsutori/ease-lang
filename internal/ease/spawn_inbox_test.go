@@ -39,7 +39,7 @@ say "done:{seen}"
 		if _, err := EvalProgram(src, &out); err != nil {
 			t.Fatalf("EvalProgram failed: %v", err)
 		}
-		want := "0:join:Ada:hi\n1:msg:Ada:hello\ndone:2\n"
+		want := "1:join:Ada:hi\n2:msg:Ada:hello\ndone:2\n"
 		if out.String() != want {
 			t.Fatalf("unexpected output:\ngot:\n%q\nwant:\n%q", out.String(), want)
 		}

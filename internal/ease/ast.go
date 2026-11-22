@@ -360,11 +360,20 @@ type WithFieldUpdate struct {
 	Value Expr
 }
 
-// WithExpr clones a record/prototype and overrides one or more fields (`player with x = 10`).
+// WithIndexUpdate represents one `.<index> = value` element override inside a list `with` expression.
+type WithIndexUpdate struct {
+	Line  int
+	Col   int
+	Index Expr
+	Value Expr
+}
+
+// WithExpr clones a record/prototype or list and overrides fields or indexed elements.
 type WithExpr struct {
 	posInfo
-	Base    Expr
-	Updates []WithFieldUpdate
+	Base         Expr
+	Updates      []WithFieldUpdate
+	IndexUpdates []WithIndexUpdate
 }
 
 func (*WithExpr) exprNode() {}

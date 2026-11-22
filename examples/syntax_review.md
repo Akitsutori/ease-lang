@@ -107,10 +107,10 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Wrong JSON shape / field type (`decode_json '[1, 2]' as api_user`, `decode_json '{"id": "abc", ...}' as api_user` -> `is error` in `.ease`)
 
 ## 8. Lists, Dot Indexing, `where` Filters, Batch `with` & Loops (`README.md`)
-- **Happy Path**: `list 10, 25, 40`, `scores.0`, `scores.(it.index)`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|csv|bytes]`, `save path data`, `row.0`, `row.("Header")`, `cloud with x = it.x + it.vx`, `loop ... end` (`it.index`, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
+- **Happy Path**: `list 10, 25, 40`, `scores.1`, `scores.(it.index)`, `scores with .1 = 99`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|csv|bytes]`, `save path data`, `row.1`, `row.("Header")`, `cloud with x = it.x + it.vx`, `loop ... end` (`it.index` 1-based, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
 - **10 Negative Cases**:
   1. Legacy list literal `[1, 2, 3]`
-  2. Legacy indexing `scores[0]`
+  2. Legacy indexing `scores[0]` or 0-based `.0` (`scores.0`, `scores with .0 = 1` -> `SyntaxError`)
   3. `list as bool`
   4. `list as unknown_type`
   5. `list as number with x = 1 end`
@@ -118,7 +118,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   7. `loop` missing `end`
   8. Legacy `for` / `repeat` (`for xs ... end`, `repeat 3 ... end`)
   9. Named loop variable (`loop x in xs ... end`) or `def` field named `index`
-  10. Runtime errors (`xs.99`, `"hi".0`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `loop\n  say it.index\nend` without exit `TypeError`, `xs.(1.5)`, `x as csv`, `save p (list 256)`, malformed/duplicate CSV -> `is error` in `.ease`)
+  10. Runtime errors (`xs.99`, `"hi".99`, `xs.(0)`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `loop\n  say it.index\nend` without exit `TypeError`, `xs.(1.5)`, `x as csv`, `save p (list 256)`, malformed/duplicate CSV -> `is error` in `.ease`)
 
 ## 9. Built-in Tests (`test`) & Imports (`import`) (`README.md`)
 - **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network` (`network:fetch`, `network:send`, `network.network`), `import screen` (`screen:present`, `screen.screen`, `screen.frame_state`), `import "./file.ease" as mod` (`mod:verb`, `mod.def`, `mod.const`, `as mod.def`, `is mod.def`)

@@ -545,12 +545,13 @@ test
     count empty_cloud is 0
     stepped is 1
     count cloud is 2
-    cloud.0.vx is 5
-    cloud.0.state is "active"
-    cloud.1.x is 10
-    cloud.1.life is 5
+    cloud.1.vx is 5
+    cloud.1.state is "active"
+    cloud.2.x is 10
+    cloud.2.life is 5
     scores is list 10, 25, 40
-    names.1 is "Ben"
+    names.1 is "Aria"
+    names.2 is "Ben"
     sum_x is 10
 end
 `
@@ -558,8 +559,8 @@ end
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Passed != 12 || report.Failed != 0 {
-		t.Fatalf("expected 12 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	if report.Passed != 13 || report.Failed != 0 {
+		t.Fatalf("expected 13 passed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
 	}
 
 	// Mixed types in `list` must fail
@@ -1431,7 +1432,7 @@ say "{count items1}-{count b2.items}-{count bag.items}"
 }
 
 func TestUnifiedLoopItIndexBreakEndAndDynamicIndexing(t *testing.T) {
-	// 1. it.index (0-based) on range and records, plus dynamic indexing xs.(expr) & Fibonacci with `-> end`
+	// 1. it.index (1-based) on range and records, plus dynamic indexing xs.(expr) & Fibonacci with `-> end`
 	happySrc := `
 def item
     label = ""
@@ -1450,7 +1451,7 @@ end
 seq = list 0, 1
 loop range 1 100
     check
-        it.index < 2 -> say "seed:{seq.(it.index)}"
+        it.index <= 2 -> say "seed:{seq.(it.index)}"
         else
             next = seq.(it.index - 1) + seq.(it.index - 2)
             check next > 25 -> end
@@ -1458,13 +1459,13 @@ loop range 1 100
     end
 end
 say count seq
-say seq.((count seq) - 1)
+say seq.(count seq)
 `
 	var out bytes.Buffer
 	if _, err := EvalProgram(happySrc, &out); err != nil {
 		t.Fatalf("expected happy loop program to succeed, got: %v", err)
 	}
-	want := "0:a\n1:b\nseed:0\nseed:1\n9\n21"
+	want := "1:a\n2:b\nseed:0\nseed:1\n9\n21"
 	if got := strings.TrimSpace(out.String()); got != want {
 		t.Fatalf("unexpected output:\ngot:  %q\nwant: %q", got, want)
 	}
@@ -1498,14 +1499,14 @@ loop range 1 2
     end
 end
 say count pairs
-say pairs.0
 say pairs.1
+say pairs.2
 `
 	var out2 bytes.Buffer
 	if _, err := EvalProgram(nestedAndFnSrc, &out2); err != nil {
 		t.Fatalf("expected nested loop & check -> end in function to succeed, got: %v", err)
 	}
-	want2 := "small:1\n108\n2\n1:10:0\n2:10:0"
+	want2 := "small:1\n108\n2\n1:10:1\n2:10:1"
 	if got := strings.TrimSpace(out2.String()); got != want2 {
 		t.Fatalf("unexpected nested output:\ngot:  %q\nwant: %q", got, want2)
 	}
@@ -1693,7 +1694,7 @@ say (list 10, 7) % (list 3, 4)
 
 seq = list 1, 1
 loop range 1 3
-    next = seq.((count seq) - 1) + seq.((count seq) - 2)
+    next = seq.(count seq) + seq.((count seq) - 1)
     seq = append seq next
 end
 say seq
@@ -1985,10 +1986,10 @@ test "where filters and batch-with using it"
     # Multi-line where block with it.index
     tail_paid = orders where
         it.status is "paid"
-        it.index >= 3
+        it.index >= 4
     end
     count tail_paid is 1
-    tail_paid.0.id is 4
+    tail_paid.1.id is 4
 
     # Union narrowing inside where
     e1 = ErrorMessage with code = 404, message = "Not Found"
@@ -2000,7 +2001,7 @@ test "where filters and batch-with using it"
 
     server_errs = items where it is ErrorMessage and it.code >= 500
     count server_errs is 1
-    server_errs.0 is e2
+    server_errs.1 is e2
 
     # Batch-with using it and it.index
     cloud = list as particle with
@@ -2008,13 +2009,13 @@ test "where filters and batch-with using it"
         x = 20, vx = -3
     end
     moved = cloud with x = it.x + it.vx
-    moved.0.x is 15
-    moved.1.x is 17
-    cloud.0.x is 10
+    moved.1.x is 15
+    moved.2.x is 17
+    cloud.1.x is 10
 
     indexed = cloud with x = it.index * 100
-    indexed.0.x is 0
     indexed.1.x is 100
+    indexed.2.x is 200
 end
 `
 	report, err := RunChecks(src)
@@ -2073,7 +2074,7 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 		"    nfc = \"ä\"\n" +
 		"    nfd is nfc\n" +
 		"    count nfd is 1\n" +
-		"    nfd.0 is \"ä\"\n\n" +
+		"    nfd.1 is \"ä\"\n\n" +
 		"    # contains as condition in check, where, and test (including is error)\n" +
 		"    classify_msg \"status: ok\" is \"accepted\"\n" +
 		"    classify_msg \"status: fail\" is \"rejected\"\n" +
@@ -2086,7 +2087,7 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 		"    end\n" +
 		"    matched = users where contains it.email \"@example.com\"\n" +
 		"    count matched is 1\n" +
-		"    matched.0.email is \"ada@example.com\"\n\n" +
+		"    matched.1.email is \"ada@example.com\"\n\n" +
 		"    replace \"abc\" \"\" \"x\" is error\n" +
 		"    join (list 1, 2) \",\" is error\n" +
 		"end\n"
@@ -2228,29 +2229,29 @@ test "load, save, bytes, and CSV boundary mapping"
     # 3. CSV boundary mapping with mixed/non-ASCII headers (index + dynamic key)
     raw_rows = load %q as csv
     count raw_rows is 2
-    raw_rows.0.("Product Name") is "Mechanical Keyboard"
-    raw_rows.0.("单价 (EUR)") is "89.50"
+    raw_rows.1.("Product Name") is "Mechanical Keyboard"
+    raw_rows.1.("单价 (EUR)") is "89.50"
 
     entries = list as sales_entry
     loop raw_rows
         entry = sales_entry with
-            product = it.0
-            price   = it.1 as number
-            status  = it.2 as sale_status
+            product = it.1
+            price   = it.2 as number
+            status  = it.3 as sale_status
         end
         entries = append entries entry
     end
 
     paid = entries where it.status is "paid"
     count paid is 1
-    paid.0.product is "Mechanical Keyboard"
-    paid.0.price is 89.5
+    paid.1.product is "Mechanical Keyboard"
+    paid.1.price is 89.5
 
     # 4. Direct CSV cast (`+"`as sales_entry`"+`) converts CSV numeric cells
     clean_rows = load %q as csv
     direct_entries = clean_rows as sales_entry
     count direct_entries is 2
-    direct_entries.0.price is 89.5
+    direct_entries.1.price is 89.5
 
     # 5. Negative runtime assertions
     load %q is error
@@ -2259,8 +2260,8 @@ test "load, save, bytes, and CSV boundary mapping"
     load %q as csv is error
     load %q as csv is error
     (load %q as csv) as sales_entry is error
-    raw_rows.0.99 is error
-    raw_rows.0.("missing") is error
+    raw_rows.1.99 is error
+    raw_rows.1.("missing") is error
     save %q (list -1) is error
     save %q (list 256) is error
     save %q (list 1.5) is error
@@ -2372,7 +2373,7 @@ inv2 = billing.invoice with id = "INV-1", net = 100
 
 raw = decode_json '[{"id": "INV-2", "net": 200, "state": "paid"}]'
 typed_list = raw as billing.invoice
-first = typed_list.0
+first = typed_list.1
 
 res = (billing.invoice with id = "INV-3", net = 50) as billing.outcome
 res_label = ""
@@ -2557,13 +2558,18 @@ test "math, text, and slice built-ins"
   (round 3.4) is 3
   (upper "hello äöü") is "HELLO ÄÖÜ"
   (lower "HELLO ÄÖÜ") is "hello äöü"
-  (slice nums 1 3) is (list 20, 30)
+  (slice nums 1 3) is (list 10, 20, 30)
+  (slice nums 1 1) is (list 10)
   (slice nums -5 2) is (list 10, 20)
-  (slice nums 2 99) is (list 30, 40)
+  (slice nums 2 99) is (list 20, 30, 40)
   (slice nums 3 1) is (list 0) where it > 0
-  (slice txt 1 4) is "öü€"
+  (slice nums 0 0) is (list 0) where it > 0
+  (slice nums 5 9) is (list 0) where it > 0
+  (slice txt 1 4) is "äöü€"
+  (slice txt 1 1) is "ä"
   (slice txt -1 2) is "äö"
-  (slice txt 3 10) is "€!"
+  (slice txt 3 10) is "ü€!"
+  (slice "" 1 3) is ""
   (slice "abc" 1.5 2) is error
   (floor "x") is error
   (upper 123) is error
@@ -2573,8 +2579,8 @@ end
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Failed != 0 || report.Passed != 16 {
-		t.Fatalf("expected 16 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	if report.Failed != 0 || report.Passed != 21 {
+		t.Fatalf("expected 21 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
 	}
 
 	// Did you mean hints for variables, functions, and record fields
@@ -2678,7 +2684,7 @@ say "bye"
 	if _, err := EvalProgramWithInput(cmdSrc, strings.NewReader("look\nfight\nquit\n"), &out); err != nil {
 		t.Fatalf("EvalProgramWithInput failed: %v", err)
 	}
-	if out.String() != "> 0:look\n> 1:fight\n> bye\n" {
+	if out.String() != "> 1:look\n> 2:fight\n> bye\n" {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
 
@@ -2687,7 +2693,7 @@ say "bye"
   n = 1
   loop
     check n > limit -> n
-    n = n + it.index + 1
+    n = n + it.index
   end
 end
 
@@ -2708,6 +2714,53 @@ end
 		!strings.Contains(err.Error(), "Infinite 'loop' has no exit condition") ||
 		!strings.Contains(err.Error(), "check <condition> -> end") {
 		t.Fatalf("expected infinite loop exit condition TypeError, got: %v", err)
+	}
+}
+
+func TestAskEOFLoopPreventionAndTestChecks(t *testing.T) {
+	interactiveSrc := `def prompt_label = "> "
+
+to format_cmd c
+  "{prompt_label}{c}"
+end
+
+loop
+  cmd = ask prompt_label
+  check cmd is "quit" -> end
+  say format_cmd cmd
+end
+
+test "interactive loop does not hang ease test and ask EOF is RuntimeError"
+  format_cmd "help" is "> help"
+  (ask "?") ->
+    error.type is "RuntimeError"
+    error.message is "Unexpected end of input (EOF) in 'ask'"
+  end
+end
+`
+	// 1. `ease test` stops top-level setup cleanly at `ask` EOF and runs all test blocks.
+	report, err := RunChecks(interactiveSrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed on interactive ask loop: %v", err)
+	}
+	if report.Passed != 3 || report.Failed != 0 {
+		t.Fatalf("expected 3 passed / 0 failed, got %+v", report)
+	}
+
+	// 2. `ease run --check` (headless) exits cleanly at `ask` EOF without hanging or failing.
+	var headlessOut bytes.Buffer
+	if _, err := EvalProgramHeadlessWithTrace(interactiveSrc, strings.NewReader(""), &headlessOut, nil); err != nil {
+		t.Fatalf("EvalProgramHeadlessWithTrace failed on interactive ask loop: %v", err)
+	}
+
+	// 3. Regular `ease run` aborts cleanly with RuntimeError when stdin reaches EOF inside a loop.
+	var runOut bytes.Buffer
+	_, runErr := EvalProgramWithInput(interactiveSrc, strings.NewReader("look\n"), &runOut)
+	if runErr == nil || !strings.Contains(runErr.Error(), "Unexpected end of input (EOF) in 'ask'") {
+		t.Fatalf("expected RuntimeError on EOF in regular run, got: %v", runErr)
+	}
+	if runOut.String() != "> > look\n> " {
+		t.Fatalf("expected single iteration output before EOF, got %q", runOut.String())
 	}
 }
 
@@ -2928,15 +2981,15 @@ end
 
 test "list extraction and transformations"
   count entries is 3
-  entries.0.idx is 0
-  entries.1.idx is 2
-  entries.1.level is "ERR"
-  entries.1.msg is "disk full"
-  bumped.0.idx is 102
+  entries.1.idx is 1
+  entries.2.idx is 3
+  entries.2.level is "ERR"
+  entries.2.msg is "disk full"
+  bumped.1.idx is 103
   count errs is 1
   count labeled is 4
-  labeled.1 is "skip:1"
-  labeled.2 is "2:ERR: disk full=>disk full"
+  labeled.2 is "skip:2"
+  labeled.3 is "3:ERR: disk full=>disk full"
   count only_missing is 0
 end
 `

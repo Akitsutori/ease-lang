@@ -31,9 +31,9 @@ test "concurrent HTTP server via inbox handles multiple routes"
         network:fetch api it
     end
 
-    responses.0 is (encode_json (ping_reply))
-    responses.1 is "Hello Ease"
-    responses.2 is ""
+    responses.1 is (encode_json (ping_reply))
+    responses.2 is "Hello Ease"
+    responses.3 is ""
 
     close requests
 end

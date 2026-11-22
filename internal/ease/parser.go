@@ -2274,14 +2274,24 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				parts := strings.Split(numTok.Lexeme, ".")
 				for _, part := range parts {
 					idx, err := strconv.Atoi(part)
-					if err != nil || idx < 0 {
+					if err != nil || idx < 1 {
+						if err == nil && idx == 0 {
+							return nil, newError(
+								"SyntaxError",
+								numTok.Line,
+								numTok.Col,
+								p.source,
+								"List indices in Ease are 1-based; use '.1' for the first element",
+								"Replace '.0' with '.1' (or use '.(expr)' for computed indices).",
+							)
+						}
 						return nil, newError(
 							"SyntaxError",
 							numTok.Line,
 							numTok.Col,
 							p.source,
 							fmt.Sprintf("Invalid list index %q after '.'", numTok.Lexeme),
-							"Use non-negative integer indices after '.', e.g. cloud.0.vx",
+							"Use 1-based integer indices after '.', e.g. cloud.1.vx",
 						)
 					}
 					line, col := expr.Pos()
@@ -2306,7 +2316,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 						tok.Col,
 						p.source,
 						"Expected ')' after index expression",
-						"Example: xs.(it.index - 1)",
+						"Example: xs.(it.index)",
 					)
 				}
 				line, col := expr.Pos()
@@ -2324,13 +2334,46 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				tok.Col,
 				p.source,
 				fmt.Sprintf("Expected field name or list index after '.', got %q", tok.Lexeme),
-				"Example: player.x or cloud.0.vx",
+				"Example: player.x or cloud.1.vx",
 			)
 		}
 
 		if p.match(TOK_WITH) {
 			var updates []WithFieldUpdate
+			var indexUpdates []WithIndexUpdate
 			line, col := expr.Pos()
+			appendWithEntry := func() error {
+				isIdx, fUpd, iUpd, err := p.parseWithEntry()
+				if err != nil {
+					return err
+				}
+				if isIdx {
+					if len(updates) > 0 {
+						return newError(
+							"SyntaxError",
+							iUpd.Line,
+							iUpd.Col,
+							p.source,
+							"Cannot mix record field updates and list index updates in the same 'with' expression",
+							"Use either 'rec with field = val' or 'list with .index = val'.",
+						)
+					}
+					indexUpdates = append(indexUpdates, iUpd)
+				} else {
+					if len(indexUpdates) > 0 {
+						return newError(
+							"SyntaxError",
+							fUpd.Line,
+							fUpd.Col,
+							p.source,
+							"Cannot mix record field updates and list index updates in the same 'with' expression",
+							"Use either 'rec with field = val' or 'list with .index = val'.",
+						)
+					}
+					updates = append(updates, fUpd)
+				}
+				return nil
+			}
 			if p.match(TOK_NEWLINE) {
 				p.skipNewlines()
 				for !p.check(TOK_END) {
@@ -2344,11 +2387,9 @@ func (p *Parser) parsePostfix() (Expr, error) {
 							"Close every multiline 'with' block with 'end'.",
 						)
 					}
-					upd, err := p.parseWithFieldUpdate()
-					if err != nil {
+					if err := appendWithEntry(); err != nil {
 						return nil, err
 					}
-					updates = append(updates, upd)
 					if err := p.expectStmtEnd("'with' field"); err != nil {
 						return nil, err
 					}
@@ -2357,17 +2398,15 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				p.advance() // consume `end`
 			} else {
 				for {
-					upd, err := p.parseWithFieldUpdate()
-					if err != nil {
+					if err := appendWithEntry(); err != nil {
 						return nil, err
 					}
-					updates = append(updates, upd)
 					if !p.match(TOK_COMMA) {
 						break
 					}
 				}
 			}
-			expr = &WithExpr{posInfo: posInfo{Line: line, Col: col}, Base: expr, Updates: updates}
+			expr = &WithExpr{posInfo: posInfo{Line: line, Col: col}, Base: expr, Updates: updates, IndexUpdates: indexUpdates}
 			continue
 		}
 
@@ -2545,6 +2584,97 @@ func (p *Parser) isCallArgBoundary() bool {
 	default:
 		return false
 	}
+}
+
+func (p *Parser) parseWithEntry() (bool, WithFieldUpdate, WithIndexUpdate, error) {
+	if !p.match(TOK_DOT) {
+		upd, err := p.parseWithFieldUpdate()
+		return false, upd, WithIndexUpdate{}, err
+	}
+	dotTok := p.tokens[p.pos-1]
+	var idxExpr Expr
+	switch {
+	case p.check(TOK_NUMBER):
+		numTok := p.advance()
+		if strings.Contains(numTok.Lexeme, ".") {
+			return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+				"SyntaxError",
+				numTok.Line,
+				numTok.Col,
+				p.source,
+				fmt.Sprintf("Invalid list index %q after '.' in 'with'", numTok.Lexeme),
+				"Use 1-based positive whole-number indices, e.g. xs with .1 = val.",
+			)
+		}
+		idx, err := strconv.Atoi(numTok.Lexeme)
+		if err != nil || idx < 1 {
+			if err == nil && idx == 0 {
+				return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+					"SyntaxError",
+					numTok.Line,
+					numTok.Col,
+					p.source,
+					"List indices in Ease are 1-based; use '.1' for the first element",
+					"Replace '.0' with '.1' (or use '.(expr)' for computed indices).",
+				)
+			}
+			return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+				"SyntaxError",
+				numTok.Line,
+				numTok.Col,
+				p.source,
+				fmt.Sprintf("Invalid list index %q after '.' in 'with'", numTok.Lexeme),
+				"Use 1-based integer indices, e.g. xs with .1 = val.",
+			)
+		}
+		idxExpr = &NumberExpr{posInfo: posInfo{Line: numTok.Line, Col: numTok.Col}, Value: float64(idx), Raw: numTok.Lexeme}
+	case p.check(TOK_IDENT):
+		idTok := p.advance()
+		idxExpr = &IdentExpr{posInfo: posInfo{Line: idTok.Line, Col: idTok.Col}, Name: idTok.Lexeme}
+	case p.match(TOK_LPAREN):
+		var err error
+		idxExpr, err = p.parseExpr()
+		if err != nil {
+			return false, WithFieldUpdate{}, WithIndexUpdate{}, err
+		}
+		if !p.match(TOK_RPAREN) {
+			tok := p.current()
+			return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Expected ')' after index expression in 'with'",
+				"Example: xs with .(row * 8 + seat) = \"taken\"",
+			)
+		}
+	default:
+		tok := p.current()
+		return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			fmt.Sprintf("Expected list index after '.' in 'with', got %q", tok.Lexeme),
+			"Example: xs with .1 = val, xs with .pos = val, or xs with .(i + 1) = val.",
+		)
+	}
+	if !p.match(TOK_ASSIGN) {
+		tok := p.current()
+		return false, WithFieldUpdate{}, WithIndexUpdate{}, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected '=' after list index in 'with'",
+			"Example: xs with .1 = <value>",
+		)
+	}
+	valExpr, err := p.parseExpr()
+	if err != nil {
+		return false, WithFieldUpdate{}, WithIndexUpdate{}, err
+	}
+	return true, WithFieldUpdate{}, WithIndexUpdate{Line: dotTok.Line, Col: dotTok.Col, Index: idxExpr, Value: valExpr}, nil
 }
 
 func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {

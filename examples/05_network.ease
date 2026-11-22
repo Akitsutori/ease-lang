@@ -72,8 +72,8 @@ test "import network, fetch/send interface & form vs. content"
         kind = "unknown"
     end
     count events is 3
-    describe_event events.0 is "click@120,240"
-    describe_event events.1 is "key:Enter"
+    describe_event events.1 is "click@120,240"
+    describe_event events.2 is "key:Enter"
 
     # Expliziter zweistufiger Weg: JSON-Parsing -> strikte Strukturprüfung (Pflichtfelder)
     raw_map = decode_json '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}'

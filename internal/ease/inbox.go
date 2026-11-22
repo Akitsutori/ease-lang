@@ -696,7 +696,7 @@ func (ev *Evaluator) execTakeStmt(s *TakeStmt, env *Env) (Value, *reportSignal, 
 		}
 		takeEnv := NewEnv(env)
 		takeEnv.Define("it", item, false)
-		takeEnv.SetLoopIndex(float64(idx))
+		takeEnv.SetLoopIndex(float64(idx + 1))
 		val, sig, execErr := ev.execBlock(s.Body, takeEnv)
 		if execErr != nil {
 			return nil, nil, execErr

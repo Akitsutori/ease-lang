@@ -92,6 +92,18 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if err != nil && err != io.EOF {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "Failed to read input: "+err.Error(), "")
 		}
+		if err == io.EOF && inputLine == "" {
+			eofErr := newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"Unexpected end of input (EOF) in 'ask'",
+				"Provide interactive stdin input or handle end-of-input before calling 'ask'.",
+			)
+			eofErr.isAskEOF = true
+			return nil, true, eofErr
+		}
 		if !utf8.ValidString(inputLine) {
 			return nil, true, newError(
 				"RuntimeError",
@@ -599,36 +611,38 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		startNum, ok1 := args[1].(float64)
 		endNum, ok2 := args[2].(float64)
 		if !ok1 || !ok2 {
-			return nil, true, newError("TypeError", line, col, ev.source, "slice start and end must be numbers", "Example: slice items 0 2")
+			return nil, true, newError("TypeError", line, col, ev.source, "slice start and end must be numbers", "Example: slice items 1 3")
 		}
 		if math.IsNaN(startNum) || math.IsInf(startNum, 0) || math.Trunc(startNum) != startNum ||
 			math.IsNaN(endNum) || math.IsInf(endNum, 0) || math.Trunc(endNum) != endNum {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "slice start and end must be whole numbers", "Use integer indices such as 0, 1, 2.")
+			return nil, true, newError("RuntimeError", line, col, ev.source, "slice start and end must be whole numbers", "Use 1-based integer indices such as 1, 2, 3.")
 		}
-		clampBounds := func(length int) (int, int) {
+		clampInclusiveBounds := func(length int) (int, int) {
+			if length == 0 || endNum < 1 || startNum > float64(length) || startNum > endNum {
+				return 0, 0
+			}
 			s := int(startNum)
 			e := int(endNum)
-			if s < 0 {
-				s = 0
-			} else if s > length {
-				s = length
+			if s < 1 {
+				s = 1
 			}
-			if e < s {
-				e = s
-			} else if e > length {
+			if e > length {
 				e = length
 			}
-			return s, e
+			if s > e {
+				return 0, 0
+			}
+			return s - 1, e
 		}
 		switch target := args[0].(type) {
 		case *ListValue:
-			s, e := clampBounds(len(target.Elements))
+			s, e := clampInclusiveBounds(len(target.Elements))
 			out := make([]Value, e-s)
 			copy(out, target.Elements[s:e])
 			return &ListValue{ElemType: target.ElemType, Elements: out}, true, nil
 		case string:
 			runes := []rune(target)
-			s, e := clampBounds(len(runes))
+			s, e := clampInclusiveBounds(len(runes))
 			return string(runes[s:e]), true, nil
 		default:
 			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("slice requires a list or text, got %s", TypeName(args[0])), "Example: slice \"hello\" 1 4")
@@ -702,7 +716,7 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 						line,
 						col,
 						ev.source,
-						fmt.Sprintf("Byte value at index %d must be an integer in 0..255, got %s", i, FormatValue(el)),
+						fmt.Sprintf("Byte value at index %d must be an integer in 0..255, got %s", i+1, FormatValue(el)),
 						"Pass a list of integer byte values (0..255) to save binary files.",
 					)
 				}

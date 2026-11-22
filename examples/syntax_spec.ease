@@ -115,7 +115,7 @@ test "Happy Paths gemäß README"
     decode_json '{"id": 7, "msg": "hi\n{raw}"}' is not text
 
     scores = list 10, 25, 40
-    scores.0 is 10
+    scores.1 is 10
     5 % 0.5 is 0
     empty_nums = list as number
     count empty_nums is 0
@@ -183,7 +183,7 @@ test "Listen, Schleifen & Built-ins: 10 Negativtests"
     xs = list 10, 20
     typed = list as number
     xs.99 is error
-    (42).0 is error
+    (42).1 is error
     (list 10, "hi") is error
     append typed "bad" is error
     bad_loop 42 is error

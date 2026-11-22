@@ -33,11 +33,11 @@ test "swarm loop transforms, guards, scoping, and downstream type inference"
 
   summaries = shipping_costs orders
   count summaries is 3
-  summaries.0.id is 10
-  summaries.0.cost is 5.9
-  summaries.1.id is 20
-  summaries.1.cost is 0
+  summaries.1.id is 10
+  summaries.1.cost is 5.9
+  summaries.2.id is 20
   summaries.2.cost is 0
+  summaries.3.cost is 0
 
   free = summaries where it.cost is 0
   count free is 2

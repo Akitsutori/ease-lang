@@ -62,7 +62,7 @@ items = swarm loop range 0 3
 end
 
 say "count={count items}"
-say "ids={items.0.id},{items.1.id},{items.2.id},{items.3.id}"
+say "ids={items.1.id},{items.2.id},{items.3.id},{items.4.id}"
 `, srv.URL)
 
 		var out bytes.Buffer
@@ -203,7 +203,7 @@ out = swarm loop range 1 200
   Point with x = it, label = "odd"
 end
 
-say "{count out}|{out.0.x}|{out.1.label}|{count shared}"
+say "{count out}|{out.1.x}|{out.2.label}|{count shared}"
 `
 		var out bytes.Buffer
 		if _, err := EvalProgram(src, &out); err != nil {

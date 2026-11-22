@@ -220,7 +220,7 @@ func parseMelodyRecord(val Value, line, col int, src string) (*synthMelody, erro
 				line,
 				col,
 				src,
-				fmt.Sprintf("synth:play requires text note tokens, got %s at index %d", TypeName(elem), i),
+				fmt.Sprintf("synth:play requires text note tokens, got %s at index %d", TypeName(elem), i+1),
 				"Use note tokens like 'E4/8', 'C#5/4', 'Bb3/4', or 'REST/8'.",
 			)
 		}
@@ -231,7 +231,7 @@ func parseMelodyRecord(val Value, line, col int, src string) (*synthMelody, erro
 				line,
 				col,
 				src,
-				fmt.Sprintf("synth:play invalid note token %q at index %d: %v", tok, i, err),
+				fmt.Sprintf("synth:play invalid note token %q at index %d: %v", tok, i+1, err),
 				"Use '<pitch>/<length>' tokens like 'E4/8', 'F#4/4', 'Bb3/8', or 'REST/8' with length > 0.",
 			)
 		}

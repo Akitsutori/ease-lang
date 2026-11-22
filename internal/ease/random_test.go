@@ -98,7 +98,7 @@ chosen = r:pick deck
 say chosen.suit
 
 mixed = r:shuffle deck
-say mixed.0.value
+say mixed.1.value
 
 nums = r:shuffle (list 1, 2, 3)
 rolled = r:roll 1 10
@@ -134,7 +134,7 @@ def card
 end
 deck = list (card with value = 1)
 mixed = r:shuffle deck
-say mixed.0.missing
+say mixed.1.missing
 `,
 			wantSub: `card has no field "missing"`,
 		},

@@ -730,6 +730,13 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
 	res, execErr := ev.ExecStatements(prog.Body, ev.global)
 	if execErr != nil {
+		if headless && isAskEOFError(execErr) {
+			ev.logTrace("headless execution stopped on interactive 'ask' (EOF)")
+			if wErr := ev.WaitWorkers(); wErr != nil {
+				return nil, wErr
+			}
+			return nil, nil
+		}
 		ev.Close()
 		return nil, execErr
 	}
@@ -863,7 +870,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 			var last Value
 			for idx := 0; ; idx++ {
 				loopEnv := NewEnv(env)
-				loopEnv.SetLoopIndex(float64(idx))
+				loopEnv.SetLoopIndex(float64(idx + 1))
 				val, sig, err := ev.execBlock(s.Body, loopEnv)
 				if err != nil {
 					return val, nil, err
@@ -908,7 +915,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		for idx, item := range lv.Elements {
 			loopEnv := NewEnv(env)
 			loopEnv.Define("it", item, false)
-			loopEnv.SetLoopIndex(float64(idx))
+			loopEnv.SetLoopIndex(float64(idx + 1))
 			val, sig, err := ev.execBlock(s.Body, loopEnv)
 			if err != nil {
 				return val, nil, err
@@ -1416,32 +1423,32 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				return val, nil
 			}
 			idxFloat, ok := idxVal.(float64)
-			if !ok || idxFloat != math.Trunc(idxFloat) {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Map index must be an integer column index or text key, got %s", FormatValue(idxVal)), "Example: row.0 or row.(\"Product Name\")")
+			if !ok || math.IsNaN(idxFloat) || math.IsInf(idxFloat, 0) || math.Trunc(idxFloat) != idxFloat {
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Map index must be an integer column index or text key, got %s", FormatValue(idxVal)), "Example: row.1 or row.(\"Product Name\")")
 			}
 			idx := int(idxFloat)
-			if idx < 0 || idx >= len(mv.Order) {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Column index %d out of range (columns: %d)", idx, len(mv.Order)), fmt.Sprintf("Valid column indices are 0 to %d.", len(mv.Order)-1))
+			if idx < 1 || idx > len(mv.Order) {
+				return nil, indexOutOfRangeError("Column", "no columns", idx, len(mv.Order), e.Line, e.Col, ev.source)
 			}
-			return mv.Fields[mv.Order[idx]], nil
+			return mv.Fields[mv.Order[idx-1]], nil
 		}
 		idxFloat, ok := idxVal.(float64)
-		if !ok || idxFloat != math.Trunc(idxFloat) {
-			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Index must be an integer, got %s", FormatValue(idxVal)), "Use integer indices starting at 0, e.g. xs.0.")
+		if !ok || math.IsNaN(idxFloat) || math.IsInf(idxFloat, 0) || math.Trunc(idxFloat) != idxFloat {
+			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Index must be an integer, got %s", FormatValue(idxVal)), "Use 1-based integer indices starting at 1, e.g. xs.1.")
 		}
 		idx := int(idxFloat)
 		switch container := targetVal.(type) {
 		case *ListValue:
-			if idx < 0 || idx >= len(container.Elements) {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("List index %d out of range (length %d)", idx, len(container.Elements)), "Valid indices are 0 to len(list) - 1.")
+			if idx < 1 || idx > len(container.Elements) {
+				return nil, indexOutOfRangeError("List", "list is empty", idx, len(container.Elements), e.Line, e.Col, ev.source)
 			}
-			return container.Elements[idx], nil
+			return container.Elements[idx-1], nil
 		case string:
 			runes := []rune(container)
-			if idx < 0 || idx >= len(runes) {
-				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("String index %d out of range (length %d)", idx, len(runes)), "")
+			if idx < 1 || idx > len(runes) {
+				return nil, indexOutOfRangeError("String", "string is empty", idx, len(runes), e.Line, e.Col, ev.source)
 			}
-			return string(runes[idx]), nil
+			return string(runes[idx-1]), nil
 		default:
 			return nil, newError("RuntimeError", e.Line, e.Col, ev.source, fmt.Sprintf("Cannot index into %s", TypeName(targetVal)), "Only lists, maps, and strings support '.<index>' access.")
 		}
@@ -1567,6 +1574,20 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(e.IndexUpdates) > 0 {
+			lv, isList := baseVal.(*ListValue)
+			if !isList {
+				return nil, newError(
+					"TypeError",
+					e.Line,
+					e.Col,
+					ev.source,
+					fmt.Sprintf("Cannot use 'with .index' on %s", TypeName(baseVal)),
+					"'with .<index> = <val>' only updates lists; use 'rec with field = val' for records.",
+				)
+			}
+			return ev.cloneListWithIndexUpdates(lv, e.IndexUpdates, env)
+		}
 		if lv, isList := baseVal.(*ListValue); isList {
 			return ev.cloneRecordListWithUpdates(lv, e.Updates, env, e.Line, e.Col)
 		}
@@ -1617,7 +1638,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		for idx, el := range lv.Elements {
 			iterEnv := NewEnv(env)
 			iterEnv.Define("it", el, false)
-			iterEnv.SetLoopIndex(float64(idx))
+			iterEnv.SetLoopIndex(float64(idx + 1))
 			keep := true
 			for _, cond := range e.Conditions {
 				condVal, err := ev.EvalExpr(cond, iterEnv)
@@ -1769,13 +1790,13 @@ func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse b
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("'match' on a list requires text items, got %s at index %d", TypeName(el), idx),
+				fmt.Sprintf("'match' on a list requires text items, got %s at index %d", TypeName(el), idx+1),
 				"Ensure every item in the target list is text.",
 			)
 		}
 		itemEnv := NewEnv(env)
 		itemEnv.Define("it", textItem, false)
-		itemEnv.SetLoopIndex(float64(idx))
+		itemEnv.SetLoopIndex(float64(idx + 1))
 
 		matchedAny := false
 		for _, arm := range arms {
@@ -1923,7 +1944,7 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 		}
 		itemEnv := NewEnv(env)
 		itemEnv.Define("it", rec, false)
-		itemEnv.SetLoopIndex(float64(idx))
+		itemEnv.SetLoopIndex(float64(idx + 1))
 		inst, err := ev.cloneRecordWithUpdates(rec, updates, itemEnv)
 		if err != nil {
 			return nil, err
@@ -1931,6 +1952,77 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 		out = append(out, inst)
 	}
 	return &ListValue{ElemType: elemType, Elements: out}, nil
+}
+
+func indexOutOfRangeError(kind, emptyLabel string, idx, length, line, col int, source string) error {
+	var msg string
+	if length == 0 {
+		msg = fmt.Sprintf("%s index %d out of range (%s)", kind, idx, emptyLabel)
+	} else {
+		msg = fmt.Sprintf("%s index %d out of range (1..%d)", kind, idx, length)
+	}
+	hint := fmt.Sprintf("Valid indices are 1 to %d.", length)
+	if length == 0 {
+		hint = fmt.Sprintf("Cannot index into an empty %s.", strings.ToLower(kind))
+		if kind == "Column" {
+			hint = "The row has no columns."
+		}
+	}
+	if idx == 0 {
+		hint = fmt.Sprintf("%s indices in Ease are 1-based; use 1 for the first element.", kind)
+	}
+	return newError("RuntimeError", line, col, source, msg, hint)
+}
+
+func (ev *Evaluator) cloneListWithIndexUpdates(lv *ListValue, updates []WithIndexUpdate, env *Env) (*ListValue, error) {
+	elems := slices.Clone(lv.Elements)
+	if elems == nil {
+		elems = []Value{}
+	}
+	for _, upd := range updates {
+		idxVal, err := ev.EvalExpr(upd.Index, env)
+		if err != nil {
+			return nil, err
+		}
+		idxFloat, ok := idxVal.(float64)
+		if !ok || math.IsNaN(idxFloat) || math.IsInf(idxFloat, 0) || math.Trunc(idxFloat) != idxFloat {
+			return nil, newError(
+				"RuntimeError",
+				upd.Line,
+				upd.Col,
+				ev.source,
+				fmt.Sprintf("Index must be an integer, got %s", FormatValue(idxVal)),
+				"Use 1-based integer indices, e.g. xs with .1 = val.",
+			)
+		}
+		if idxFloat < 1 || idxFloat > float64(len(elems)) {
+			idxInt := int(idxFloat)
+			if idxFloat < float64(math.MinInt) || idxFloat > float64(math.MaxInt) {
+				idxInt = math.MaxInt
+			}
+			return nil, indexOutOfRangeError("List", "list is empty", idxInt, len(elems), upd.Line, upd.Col, ev.source)
+		}
+		idx := int(idxFloat)
+		newVal, err := ev.EvalExpr(upd.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		if err := ev.checkNotConditionValue(newVal, upd.Line, upd.Col); err != nil {
+			return nil, err
+		}
+		if lv.ElemType != "" && !matchesListElemType(newVal, lv.ElemType, ev.global) {
+			return nil, newError(
+				"TypeError",
+				upd.Line,
+				upd.Col,
+				ev.source,
+				fmt.Sprintf("Cannot assign %s to element %d of list of %s", structuredTypeName(newVal), idx, lv.ElemType),
+				fmt.Sprintf("This list requires elements of type %q.", lv.ElemType),
+			)
+		}
+		elems[idx-1] = newVal
+	}
+	return &ListValue{ElemType: lv.ElemType, Elements: elems}, nil
 }
 
 func (ev *Evaluator) cloneRecordWithUpdates(rec *RecordValue, updates []WithFieldUpdate, env *Env) (*RecordValue, error) {

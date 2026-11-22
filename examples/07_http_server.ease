@@ -37,10 +37,10 @@ test "concurrent HTTP routes respond cleanly via inbox on ephemeral port"
         network:fetch client it
     end
 
-    replies.0 is "Welcome to Ease HTTP!"
-    replies.1 is (encode_json (server_status))
-    replies.2 is "Hello, Ada!"
-    replies.3 is ""
+    replies.1 is "Welcome to Ease HTTP!"
+    replies.2 is (encode_json (server_status))
+    replies.3 is "Hello, Ada!"
+    replies.4 is ""
 
     close requests
 end

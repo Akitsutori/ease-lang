@@ -26,7 +26,7 @@ end
 
 to parse_logs lines
   match lines
-    "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with line_no = it.index + 1, level = lvl, message = msg
+    "[{lvl as LogLevel}] {msg} ({...})" -> LogRecord with line_no = it.index, level = lvl, message = msg
   end
 end
 
@@ -56,15 +56,15 @@ test "list extraction, sieve semantics, rune widths, and backreferences"
   lines = list "[INFO] server started (0ms)", "skip debug line", "[ERROR] disk full (99ms)", "[WARN] high load (12ms)"
   records = parse_logs lines
   count records is 3
-  records.0.line_no is 1
-  records.0.level is "INFO"
-  records.1.line_no is 3
-  records.1.level is "ERROR"
-  records.1.message is "disk full"
+  records.1.line_no is 1
+  records.1.level is "INFO"
+  records.2.line_no is 3
+  records.2.level is "ERROR"
+  records.2.message is "disk full"
 
   urgent = records where it.level is "ERROR"
   count urgent is 1
-  urgent.0.message is "disk full"
+  urgent.1.message is "disk full"
 
   # Fixed rune width (UTF-8 runes) and 0+ minimum capture length
   (match "2026-11-19"
@@ -104,9 +104,9 @@ end
 
 to count_until_quit cmds
   steps = 0
-  idx = 0
+  idx = 1
   loop
-    check idx >= count cmds -> end
+    check idx > count cmds -> end
     match cmds.(idx)
       "quit" -> end
       "step" -> steps = steps + 1

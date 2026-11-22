@@ -127,8 +127,8 @@ Shorthand: `ease <file.ease>` is equivalent to `ease run <file.ease>`.
 
 Ease intentionally optimizes for cognitive simplicity and syntactic uniformity. Please uphold these invariants across all contributions:
 
-1. **Uniform Bracket-Free, Comma-Free Arity-Based Calls**: Call verbs directly by name (`add 2 3`, `sum_squares range 1 5`) and declare parameters with `to <verb> param1 param2` — never introduce `fn(...)` call syntax, commas between arguments/parameters, or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping and compound arguments (e.g., `add (1 + 2) 3`, `fib (n - 1)`). Commas are reserved for `list` literals (`list 1, 2, 3`) and single-line `with` updates.
-2. **Dot Notation Only for Lists and Records**: Index lists and access fields consistently with `.` (`cloud.0.vx`, `player.hp`). Build lists with `list 1, 2, 3` or `list as <type>`.
+1. **Uniform Bracket-Free, Comma-Free Arity-Based Calls**: Call verbs directly by name (`add 2 3`, `sum_squares range 1 5`) and declare parameters with `to <verb> param1 param2` — never introduce `fn(...)` call syntax, commas between arguments/parameters, or `[params]` parameter lists. Parentheses `(...)` are strictly for expression grouping and compound arguments (e.g., `add (1 + 2) 3`, `fib (n - 1)`). Commas are reserved for `list` literals (`list 1, 2, 3`) and single-line `with` updates (both record fields and list `.index` updates).
+2. **1-Based Dot Notation Only for Lists and Records**: Index lists 1-based (`1..N`) and access fields consistently with `.` (`cloud.1.vx`, `player.hp`, `xs with .1 = 99`). Build lists with `list 1, 2, 3` or `list as <type>`.
 3. **Logic-Free Data Blueprints (`def`)**: Keep `def` declarations pure data structures with defaults and union constraints (`"a" | "b"`). Behavior belongs exclusively in verbs (`to ... end`).
 4. **Strict Boundary Between Parsing, Shape & Meaning (Zero Implicit Magic)**:
    - Explicit JSON parsing/serialization (`decode_json` / `encode_json`) is strictly separated from `as <type>` validation.

@@ -130,11 +130,12 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 	switch elemType {
 	case "number", "text":
 		for idx, item := range elems {
+			pos := idx + 1
 			if !matchesEaseType(item, elemType) {
 				if pathPrefix == "" {
-					return nil, fmt.Errorf("element %d expected %s, got %s (%s)", idx, elemType, structuredTypeName(item), FormatValue(item))
+					return nil, fmt.Errorf("element %d expected %s, got %s (%s)", pos, elemType, structuredTypeName(item), FormatValue(item))
 				}
-				return nil, fmt.Errorf("Element '%s.%d' expected %s, got %s", pathPrefix, idx, elemType, structuredTypeName(item))
+				return nil, fmt.Errorf("Element '%s.%d' expected %s, got %s", pathPrefix, pos, elemType, structuredTypeName(item))
 			}
 			out = append(out, item)
 		}
@@ -146,9 +147,10 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 		}
 		if union, isUnion := protoVal.(*UnionValue); isUnion {
 			for idx, item := range elems {
-				coerced, cErr := coerceToUnionOptions(item, union.Values, env, fmt.Sprintf("%s.%d", pathPrefix, idx))
+				pos := idx + 1
+				coerced, cErr := coerceToUnionOptions(item, union.Values, env, fmt.Sprintf("%s.%d", pathPrefix, pos))
 				if cErr != nil {
-					return nil, fmt.Errorf("Invalid value %s at element %d of union %q: %s", FormatValue(item), idx, elemType, cErr.Error())
+					return nil, fmt.Errorf("Invalid value %s at element %d of union %q: %s", FormatValue(item), pos, elemType, cErr.Error())
 				}
 				out = append(out, coerced)
 			}
@@ -159,17 +161,18 @@ func coerceTypedListElements(elems []Value, elemType string, env *Env, pathPrefi
 			return nil, fmt.Errorf("%q is not a 'def' blueprint or built-in type", elemType)
 		}
 		for idx, item := range elems {
-			elemPath := fmt.Sprintf("%s.%d", pathPrefix, idx)
+			pos := idx + 1
+			elemPath := fmt.Sprintf("%s.%d", pathPrefix, pos)
 			if rec, ok := item.(*RecordValue); ok {
 				if rec.TypeName != proto.TypeName {
-					return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, idx, rec.TypeName)
+					return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, pos, rec.TypeName)
 				}
 				out = append(out, rec)
 				continue
 			}
 			mv, isMap := item.(*MapValue)
 			if !isMap || mv == nil {
-				return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, idx, structuredTypeName(item))
+				return nil, fmt.Errorf("expected structured map or %s record (element %d is %s)", elemType, pos, structuredTypeName(item))
 			}
 			mapped, mapErr := mapToRecord(mv.Fields, proto, env, elemPath, mv.FromCSV)
 			if mapErr != nil {
@@ -844,7 +847,7 @@ func coerceToTemplate(val Value, template Value, env *Env, path string, fromCSV 
 		elems := make([]Value, 0, len(lv.Elements))
 		outElemType := tmpl.ElemType
 		for idx, item := range lv.Elements {
-			elemPath := fmt.Sprintf("%s.%d", path, idx)
+			elemPath := fmt.Sprintf("%s.%d", path, idx+1)
 			et := structuredTypeName(item)
 			if idx == 0 {
 				outElemType = et

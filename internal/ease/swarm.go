@@ -125,7 +125,7 @@ func (ev *Evaluator) evalSwarmLoop(e *SwarmLoopExpr, env *Env) (Value, error) {
 		worker := ev.forkWorker(&outs[idx])
 		workerEnv := NewWorkerEnv(env, assigned)
 		workerEnv.Define("it", lv.Elements[idx], false)
-		workerEnv.SetLoopIndex(float64(idx))
+		workerEnv.SetLoopIndex(float64(idx + 1))
 
 		val, sig, execErr := worker.execBlock(e.Body, workerEnv)
 		if execErr != nil {

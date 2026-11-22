@@ -74,6 +74,10 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 	ev.logTrace("running top-level setup (%d statement(s))", len(prog.Body))
 	for _, stmt := range prog.Body {
 		if _, _, err := ev.execStmt(stmt, ev.global); err != nil {
+			if isAskEOFError(err) {
+				ev.logTrace("top-level setup stopped on interactive 'ask' (EOF)")
+				break
+			}
 			return nil, err
 		}
 	}
@@ -174,7 +178,7 @@ func (r *testRunner) runStmts(items []Stmt, env *Env) bool {
 			for idx, el := range lv.Elements {
 				loopEnv := NewEnv(env)
 				loopEnv.Define("it", el, false)
-				loopEnv.SetLoopIndex(float64(idx))
+				loopEnv.SetLoopIndex(float64(idx + 1))
 				r.runStmts(c.Body, loopEnv)
 			}
 			r.contextLines = r.contextLines[:len(r.contextLines)-1]
@@ -389,6 +393,10 @@ func (r *testRunner) buildVarsDetail(exprs []Expr, suffix string, env *Env) stri
 		case *WithExpr:
 			walk(ex.Base)
 			for _, upd := range ex.Updates {
+				walk(upd.Value)
+			}
+			for _, upd := range ex.IndexUpdates {
+				walk(upd.Index)
 				walk(upd.Value)
 			}
 		case *WhereExpr:
