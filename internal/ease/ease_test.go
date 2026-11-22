@@ -2315,3 +2315,108 @@ end
 		t.Fatalf("expected consistent return at end to pass, got: %v", err)
 	}
 }
+
+func TestKeywordFieldNamesNumberTextList(t *testing.T) {
+	src := `
+def Seat
+    number = 1
+    state  = "free" | "occupied"
+end
+
+def Message
+    text = ""
+end
+
+def Todo
+    list = list as number
+end
+
+s = Seat with number = 4, state = "occupied"
+m = Message with text = "hello"
+td = Todo with list = list 10, 20
+
+raw_seat = '{"number": 7, "state": "free"}' as json
+decoded_seat = raw_seat as Seat
+raw_msg = '{"text": "from json"}' as json
+decoded_msg = raw_msg as Message
+
+test "number, text, list work as record field names"
+    s.number is 4
+    s.state is "occupied"
+    m.text is "hello"
+    td.list is list 10, 20
+    decoded_seat.number is 7
+    decoded_seat.state is "free"
+    decoded_msg.text is "from json"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 7 || report.Failed != 0 {
+		t.Fatalf("expected 7 passed / 0 failed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Variables named `number` or `text` must remain rejected.
+	for _, bad := range []string{"number = 5\n", "text = \"hi\"\n"} {
+		if _, err := ParseProgram(bad); err == nil {
+			t.Fatalf("expected parse error for reserved type name as variable %q, got nil", bad)
+		}
+	}
+}
+
+func TestCheckEffectBlockAndUnionNarrowingInTestBlocks(t *testing.T) {
+	src := `
+def CinemaHall
+    rows = list as number
+end
+
+def BookingRejected
+    reason = ""
+end
+
+def BookingResult = CinemaHall | BookingRejected
+
+to book_seat ok
+    check ok is 1 -> CinemaHall with rows = list 10, 20
+    -> BookingRejected with reason = "full"
+end
+
+to first_row hall
+    -> hall.rows.1
+end
+
+test "check effect blocks and union narrowing in test blocks"
+    r1 = book_seat 1
+    r1 is CinemaHall
+    first_row r1 is 10
+    r1.rows.2 is 20
+
+    r2 = book_seat 0
+    check r2 is BookingRejected
+        r2.reason is "full"
+    else
+        1 is 0
+    end
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 4 || report.Failed != 0 {
+		t.Fatalf("expected 4 passed / 0 failed checks, got %d passed / %d failed: %+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Single-line `check` or verdict table inside `test` must report a clear SyntaxError.
+	wantMsg := "Single-line 'check' is not used in 'test'"
+	for _, bad := range []string{
+		"test \"bad\"\n  check 1 is 1 -> 2\nend\n",
+		"test \"bad\"\n  check\n    1 is 1 -> 2\n  end\nend\n",
+	} {
+		if _, err := ParseProgram(bad); err == nil || !strings.Contains(err.Error(), wantMsg) {
+			t.Fatalf("expected error containing %q for %q, got: %v", wantMsg, bad, err)
+		}
+	}
+}

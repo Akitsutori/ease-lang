@@ -435,7 +435,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Actual); err != nil {
 			return err
 		}
-		return v.checkExpr(st.Expected)
+		if err := v.checkExpr(st.Expected); err != nil {
+			return err
+		}
+		v.applyCondNarrowing(v.scope, &BinaryExpr{
+			posInfo: posInfo{Line: st.Line, Col: st.Col},
+			Left:    st.Actual,
+			Op:      "is",
+			Right:   st.Expected,
+		}, true)
+		return nil
 
 	case *CheckIsNotStmt:
 		if err := v.checkExpr(st.Actual); err != nil {

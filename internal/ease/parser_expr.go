@@ -210,8 +210,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 
 	for {
 		if p.match(TOK_DOT) {
-			if p.check(TOK_IDENT) {
-				fieldTok := p.advance()
+			if fieldTok, ok := p.matchFieldIdent(); ok {
 				line, col := expr.Pos()
 				expr = &FieldExpr{posInfo: posInfo{Line: line, Col: col}, Target: expr, Field: fieldTok.Lexeme}
 				continue
@@ -625,7 +624,8 @@ func (p *Parser) parseWithEntry() (bool, WithFieldUpdate, WithIndexUpdate, error
 }
 
 func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {
-	if !p.check(TOK_IDENT) {
+	fieldTok, ok := p.matchFieldIdent()
+	if !ok {
 		tok := p.current()
 		return WithFieldUpdate{}, newError(
 			"SyntaxError",
@@ -636,7 +636,6 @@ func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {
 			"Example: player with x = 10",
 		)
 	}
-	fieldTok := p.advance()
 	if !p.match(TOK_ASSIGN) {
 		tok := p.current()
 		return WithFieldUpdate{}, newError(

@@ -196,6 +196,31 @@ func (r *testRunner) runStmts(items []Stmt, env *Env) bool {
 			}
 			r.contextLines = r.contextLines[:len(r.contextLines)-1]
 
+		case *CheckGuardStmt:
+			if !c.IsEffectBlock {
+				r.recordFail(c.Line, "", "Single-line 'check' is not used in 'test'; write assertions directly without 'check'.")
+				return false
+			}
+			condVal, err := r.ev.EvalExpr(c.Cond, env)
+			if err != nil {
+				r.recordFail(c.Line, r.buildVarsDetail([]Expr{c.Cond}, errMessage(err), env), fmt.Sprintf("Line %d ('check'): %v", c.Line, err))
+				return false
+			}
+			condBool, ok := condVal.(bool)
+			if !ok {
+				r.recordFail(c.Line, "", fmt.Sprintf("Line %d ('check'): condition must evaluate to a condition, got %s", c.Line, TypeName(condVal)))
+				return false
+			}
+			if condBool {
+				r.contextLines = append(r.contextLines, c.Line)
+				r.runStmts(c.Body, NewEnv(env))
+				r.contextLines = r.contextLines[:len(r.contextLines)-1]
+			} else if len(c.ElseBody) > 0 {
+				r.contextLines = append(r.contextLines, c.Line)
+				r.runStmts(c.ElseBody, NewEnv(env))
+				r.contextLines = r.contextLines[:len(r.contextLines)-1]
+			}
+
 		case *CheckIsStmt:
 			actual, errA := r.ev.EvalExpr(c.Actual, env)
 			if errA != nil {

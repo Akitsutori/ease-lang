@@ -107,6 +107,15 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 	return prog, nil
 }
 
+func (p *Parser) matchFieldIdent() (Token, bool) {
+	switch p.current().Type {
+	case TOK_IDENT, TOK_NUMBER_KW, TOK_TEXT, TOK_LIST_KW:
+		return p.advance(), true
+	default:
+		return Token{}, false
+	}
+}
+
 func (p *Parser) current() Token {
 	if p.pos >= len(p.tokens) {
 		return p.tokens[len(p.tokens)-1]
@@ -700,7 +709,13 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 					"Close every 'check' block with 'end'.",
 				)
 			}
-			s, err := p.parseStmt()
+			var s Stmt
+			var err error
+			if p.inTestBlock {
+				s, err = p.parseTestItem()
+			} else {
+				s, err = p.parseStmt()
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -736,7 +751,13 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 						"Close every 'check ... else' block with 'end'.",
 					)
 				}
-				s, err := p.parseStmt()
+				var s Stmt
+				var err error
+				if p.inTestBlock {
+					s, err = p.parseTestItem()
+				} else {
+					s, err = p.parseStmt()
+				}
 				if err != nil {
 					return nil, err
 				}

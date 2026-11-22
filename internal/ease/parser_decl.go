@@ -497,7 +497,8 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 				"Close every 'def' block with 'end'.",
 			)
 		}
-		if !p.check(TOK_IDENT) {
+		fieldTok, ok := p.matchFieldIdent()
+		if !ok {
 			tok := p.current()
 			return nil, nil, nil, newError(
 				"SyntaxError",
@@ -508,7 +509,6 @@ func (p *Parser) parseDefOrUnion() (*DefDecl, *UnionDecl, Stmt, error) {
 				"Write one 'field = default_value' per line.",
 			)
 		}
-		fieldTok := p.advance()
 		if fieldTok.Lexeme == "index" {
 			return nil, nil, nil, newError(
 				"SyntaxError",
@@ -625,14 +625,31 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 		return p.parseStmt()
 	case TOK_CHECK:
 		tok := p.current()
-		return nil, newError(
-			"SyntaxError",
-			tok.Line,
-			tok.Col,
-			p.source,
-			"'check' guards are not needed inside 'test'",
-			"Write conditions directly as assertions inside 'test ... end'.",
-		)
+		if p.peekNext().Type == TOK_NEWLINE {
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Single-line 'check' is not used in 'test'; write assertions directly without 'check' (e.g. 'x is 1'), or use a multi-line 'check <cond> ... end' block.",
+				"Write assertions directly inside 'test ... end', or put a condition on the 'check' header line for a multi-line effect block.",
+			)
+		}
+		stmt, err := p.parseCheckGuardStmt()
+		if err != nil {
+			return nil, err
+		}
+		if chk, ok := stmt.(*CheckGuardStmt); ok && !chk.IsEffectBlock {
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Single-line 'check' is not used in 'test'; write assertions directly without 'check' (e.g. 'x is 1'), or use a multi-line 'check <cond> ... end' block.",
+				"Write assertions directly inside 'test ... end', or use a multi-line 'check <cond> ... end' block.",
+			)
+		}
+		return stmt, nil
 	}
 	if p.current().Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
 		return p.parseStmt()
