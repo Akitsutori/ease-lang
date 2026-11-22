@@ -131,7 +131,7 @@ end
 
 ## 3. Built-in Verbs, Modules & CLI
 - **Built-in Verbs (by domain)**:
-  - **I/O & Control**: `say val` (appends `\n`, void), `ask prompt -> text` (`RuntimeError` on EOF), `fail msg` (aborts), `type val -> text`, `fields rec_or_map -> list<text>`
+  - **I/O & Control**: `say val` (appends `\n`, void), `ask prompt -> text` (`RuntimeError` on EOF; skipped on EOF during `ease test` / `--check` setup), `fail msg` (aborts), `type val -> text`, `fields rec_or_map -> list<text>`
   - **Math**: `abs n`, `floor n`, `round n`, `min a b`, `max a b` (**no** `ceil` or `mod` verb — use `-floor (-x)` or `%`)
   - **Text & Lists**: `count list_or_text` (runes for `text`), `range start end` (inclusive, empty if `start > end`), `append xs item_or_list` (returns new list), `slice list_or_text start end` (1-based, both bounds inclusive, runes for `text`, clamps bounds to `1..len`, empty if out of order), `split txt sep`, `join text_list sep`, `trim txt`, `upper txt`, `lower txt`, `replace txt old new` (`old` != `""`), `contains txt sub` (condition), `sum num_list`, `avg num_list` (errors if empty), `sort num_or_text_list`
   - **JSON & Files**: `decode_json txt`, `encode_json val`, `load path [as text|csv|bytes]` (50 MB max; `csv` -> `list<map>` with `it.1` / `it.("Col")` / `it as <def>`; `bytes` -> `0..255` list), `save path text_or_byte_list -> number` (`csv`/`bytes` valid only with `load`)

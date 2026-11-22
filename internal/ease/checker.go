@@ -72,17 +72,28 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 	ev.logTrace("parsed %d def(s), %d function(s), %d test block(s), %d top-level statement(s)",
 		len(prog.Defs), len(prog.Functions), len(prog.Checks), len(prog.Body))
 	ev.logTrace("running top-level setup (%d statement(s))", len(prog.Body))
-	for _, stmt := range prog.Body {
+	stoppedOnAskEOF := false
+	for i, stmt := range prog.Body {
 		if _, _, err := ev.execStmt(stmt, ev.global); err != nil {
 			if isAskEOFError(err) {
 				ev.logTrace("top-level setup stopped on interactive 'ask' (EOF)")
+				stoppedOnAskEOF = true
+				for _, rem := range prog.Body[i+1:] {
+					if cs, ok := rem.(*ConstDeclStmt); ok {
+						if _, _, cErr := ev.execStmt(cs, ev.global); cErr != nil {
+							return nil, cErr
+						}
+					}
+				}
 				break
 			}
 			return nil, err
 		}
 	}
-	if err := ev.WaitWorkers(); err != nil {
-		return nil, err
+	if !stoppedOnAskEOF {
+		if err := ev.WaitWorkers(); err != nil {
+			return nil, err
+		}
 	}
 	ev.SetHeadlessNet(false)
 
@@ -104,8 +115,10 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 		runner.runStmts(blk.Body, scopeEnv)
 	}
 
-	if err := ev.WaitWorkers(); err != nil {
-		return nil, err
+	if !stoppedOnAskEOF {
+		if err := ev.WaitWorkers(); err != nil {
+			return nil, err
+		}
 	}
 
 	return report, nil

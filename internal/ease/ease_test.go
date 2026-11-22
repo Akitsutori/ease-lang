@@ -2762,6 +2762,57 @@ end
 	if runOut.String() != "> > look\n> " {
 		t.Fatalf("expected single iteration output before EOF, got %q", runOut.String())
 	}
+
+	// 4. Trailing `def` constants after an `ask` EOF and pre-`ask` spawned workers do not break or hang `RunChecks` / headless `--check`.
+	spawnAndTrailingConstSrc := `to drain box
+  take box
+    say it
+  end
+end
+
+box = inbox as text
+spawn drain box
+
+loop
+  cmd = ask "> "
+  check cmd is "q" -> end
+  put box cmd
+end
+close box
+
+def cap = 40
+
+test "trailing const visible and worker does not hang"
+  cap is 40
+  (ask "?") ->
+    error.type is "RuntimeError"
+  end
+end
+`
+	report2, err := RunChecks(spawnAndTrailingConstSrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed with spawned worker + trailing const: %v", err)
+	}
+	if report2.Passed != 2 || report2.Failed != 0 {
+		t.Fatalf("expected 2 passed / 0 failed, got %+v", report2)
+	}
+	if _, err := EvalProgramHeadlessWithTrace(spawnAndTrailingConstSrc, strings.NewReader(""), &bytes.Buffer{}, nil); err != nil {
+		t.Fatalf("EvalProgramHeadlessWithTrace failed with spawned worker: %v", err)
+	}
+
+	// 5. Final line without trailing newline is read normally by `ask`; only the subsequent `ask` triggers EOF.
+	noNewlineSrc := `first = ask ""
+say first
+second = ask ""
+`
+	var noNLOut bytes.Buffer
+	_, noNLErr := EvalProgramWithInput(noNewlineSrc, strings.NewReader("Ada"), &noNLOut)
+	if noNLErr == nil || !strings.Contains(noNLErr.Error(), "Unexpected end of input (EOF) in 'ask'") {
+		t.Fatalf("expected RuntimeError on second ask after non-newline EOF line, got: %v", noNLErr)
+	}
+	if noNLOut.String() != "Ada\n" {
+		t.Fatalf("expected first ask without trailing newline to yield Ada, got %q", noNLOut.String())
+	}
 }
 
 func TestStandaloneBundleMultiFileRoundTrip(t *testing.T) {

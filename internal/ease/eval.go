@@ -732,9 +732,7 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	if execErr != nil {
 		if headless && isAskEOFError(execErr) {
 			ev.logTrace("headless execution stopped on interactive 'ask' (EOF)")
-			if wErr := ev.WaitWorkers(); wErr != nil {
-				return nil, wErr
-			}
+			ev.Close()
 			return nil, nil
 		}
 		ev.Close()

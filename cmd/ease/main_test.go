@@ -302,3 +302,27 @@ spawn handle requests
 		t.Fatalf("cmdServeWithContext did not shut down within 3s")
 	}
 }
+
+func TestCmdRunCheckSkipsTopLevelAskEOF(t *testing.T) {
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "interactive.ease")
+	src := `def cap = 40
+loop
+  cmd = ask "> "
+  check cmd is "q" -> end
+end
+
+test "smoke"
+  cap is 40
+end
+`
+	if err := os.WriteFile(srcFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cmdRunWithWriters([]string{srcFile, "--check"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for --check on interactive ask EOF, got %d; stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}

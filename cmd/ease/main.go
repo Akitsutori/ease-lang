@@ -347,7 +347,7 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	}
 	var errEval error
 	if runCheckFirst {
-		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, os.Stdin, out, traceOut)
+		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, strings.NewReader(""), out, traceOut)
 	} else {
 		_, errEval = ease.EvalProgramWithTraceFromFile(string(src), file, os.Stdin, out, traceOut)
 	}
