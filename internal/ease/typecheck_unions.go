@@ -236,16 +236,6 @@ func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, modP
 		}
 
 		if subUnion, ok := v.unions[e.Name]; ok {
-			if !owner.Imported && !subUnion.Imported && line > 0 && subUnion.Line > line {
-				return nil, newError(
-					"TypeError",
-					line,
-					col,
-					v.source,
-					fmt.Sprintf("Union %q is used in %q before it is defined (defined on line %d)", e.Name, owner.Name, subUnion.Line),
-					fmt.Sprintf("Move 'def %s' above line %d.", e.Name, line),
-				)
-			}
 			subVariants, err := v.resolveUnion(e.Name, subUnion, resolving)
 			if err != nil {
 				return nil, err
@@ -259,17 +249,7 @@ func (v *typeValidator) expandUnionVariantExpr(expr Expr, owner *UnionDecl, modP
 			return out, nil
 		}
 
-		if defDecl, ok := v.defs[e.Name]; ok {
-			if !owner.Imported && !defDecl.Imported && line > 0 && defDecl.Line > line {
-				return nil, newError(
-					"TypeError",
-					line,
-					col,
-					v.source,
-					fmt.Sprintf("Record %q is used in %q before it is defined (defined on line %d)", e.Name, owner.Name, defDecl.Line),
-					fmt.Sprintf("Move 'def %s' above line %d.", e.Name, line),
-				)
-			}
+		if _, ok := v.defs[e.Name]; ok {
 			return []resolvedUnionVariant{{
 				kind:       variantRecord,
 				recordName: e.Name,
@@ -417,22 +397,121 @@ func (v *typeValidator) validateFlattenedUnion(u *UnionDecl, variants []resolved
 	return nil
 }
 
+func (v *typeValidator) checkRecordCycles(prog *Program) error {
+	state := make(map[string]int, len(prog.Defs)) // 0: unvisited, 1: visiting, 2: visited
+	var visit func(recName string, errLine, errCol int) error
+	visit = func(recName string, errLine, errCol int) error {
+		switch state[recName] {
+		case 1:
+			return newError(
+				"TypeError",
+				errLine,
+				errCol,
+				v.source,
+				fmt.Sprintf("Cyclic record definition involving %q", recName),
+				"Break the cycle or reference records via a list ('items = list as ...').",
+			)
+		case 2:
+			return nil
+		}
+		d, ok := v.defs[recName]
+		if !ok || d.Imported {
+			return nil
+		}
+		state[recName] = 1
+		for _, f := range d.Fields {
+			for _, dep := range v.fieldDirectRecordDeps(f) {
+				if err := visit(dep, f.Line, f.Col); err != nil {
+					return err
+				}
+			}
+		}
+		state[recName] = 2
+		return nil
+	}
+
+	for _, d := range prog.Defs {
+		if d.Imported {
+			continue
+		}
+		if err := visit(d.Name, d.Line, d.Col); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *typeValidator) fieldDirectRecordDeps(f DefField) []string {
+	var deps []string
+	seen := make(map[string]bool)
+	addDep := func(name string) {
+		if d, ok := v.defs[name]; ok && !d.Imported && !seen[name] {
+			seen[name] = true
+			deps = append(deps, name)
+		}
+	}
+	addFromUnion := func(uName string) {
+		for _, vr := range v.resolvedUnions[uName] {
+			if vr.kind == variantRecord {
+				addDep(vr.recordName)
+			}
+		}
+	}
+
+	var walkExpr func(Expr)
+	walkExpr = func(e Expr) {
+		if e == nil {
+			return
+		}
+		switch ex := e.(type) {
+		case *IdentExpr:
+			if _, isUnion := v.resolvedUnions[ex.Name]; isUnion {
+				addFromUnion(ex.Name)
+			} else {
+				addDep(ex.Name)
+			}
+		case *WithExpr:
+			walkExpr(ex.Base)
+			for _, u := range ex.Updates {
+				walkExpr(u.Value)
+			}
+			for _, iu := range ex.IndexUpdates {
+				walkExpr(iu.Value)
+			}
+		case *ListExpr:
+			for _, el := range ex.Elements {
+				walkExpr(el)
+			}
+		case *TypedListExpr:
+			// An empty `list as <def>` has zero element instances and safely breaks cycles;
+			// only `list as <def> with ... end` with explicit rows embeds record defaults.
+			if len(ex.Rows) > 0 {
+				addDep(ex.ElemType)
+				for _, row := range ex.Rows {
+					for _, u := range row {
+						walkExpr(u.Value)
+					}
+				}
+			}
+		case *UnaryExpr:
+			walkExpr(ex.Right)
+		case *BinaryExpr:
+			walkExpr(ex.Left)
+			walkExpr(ex.Right)
+		}
+	}
+
+	for _, opt := range f.Allowed {
+		walkExpr(opt)
+	}
+	walkExpr(f.Default)
+	return deps
+}
+
 func (v *typeValidator) validateDefFields(d *DefDecl) error {
 	for _, f := range d.Fields {
 		if err := v.checkExpr(f.Default); err != nil {
 			return err
-		}
-		if id, ok := f.Default.(*IdentExpr); ok {
-			if info, exists := v.known[id.Name]; exists && !info.imported && f.Line > 0 && info.line > f.Line {
-				return newError(
-					"TypeError",
-					f.Line,
-					f.Col,
-					v.source,
-					fmt.Sprintf("Type %q is used in 'def %s' before it is defined (defined on line %d)", id.Name, d.Name, info.line),
-					fmt.Sprintf("Move 'def %s' above line %d.", id.Name, f.Line),
-				)
-			}
 		}
 		if len(f.Allowed) > 0 {
 			tmpUnion := &UnionDecl{
@@ -958,6 +1037,24 @@ func (v *typeValidator) fieldUnionVariants(recName, fieldName string) ([]resolve
 		}
 	}
 	return nil, "", false
+}
+
+func (v *typeValidator) fieldNamedUnion(recName, fieldName string) string {
+	d, ok := v.defs[recName]
+	if !ok {
+		return ""
+	}
+	for _, f := range d.Fields {
+		if f.Name != fieldName {
+			continue
+		}
+		if id, ok := f.Default.(*IdentExpr); ok {
+			if _, isUnion := v.resolvedUnions[id.Name]; isUnion {
+				return id.Name
+			}
+		}
+	}
+	return ""
 }
 
 func (v *typeValidator) checkUnionLiteralComparison(ex *BinaryExpr) error {

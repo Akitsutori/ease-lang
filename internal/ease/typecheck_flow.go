@@ -472,9 +472,35 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 	return nil
 }
 
+func (v *typeValidator) checkMustBeCondition(cond Expr, ctx string) error {
+	if v.inErrorTestExpr || cond == nil || isConditionExpr(cond) {
+		return nil
+	}
+	line, col := cond.Pos()
+	gotLabel := v.staticConcreteType(v.inferExprTypeState(cond))
+	if gotLabel == "" {
+		gotLabel = "value"
+	}
+	hint := "Ease has no truthiness; write an explicit comparison using 'is', 'is not', '<', '>', or 'contains'."
+	if _, isCast := cond.(*CastExpr); isCast {
+		hint = "Ease has no truthiness and 'as' returns a converted value, not a condition. Write e.g. 'n = raw as number or 0' and check 'n > 0'."
+	}
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		fmt.Sprintf("'%s' requires a condition (e.g. 'x > 0' or 'x is ...'), got %s", ctx, gotLabel),
+		hint,
+	)
+}
+
 func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *CheckGuardStmt, inFunction bool) error {
 	if st.IsEffectBlock {
 		if err := v.checkExpr(st.Cond); err != nil {
+			return err
+		}
+		if err := v.checkMustBeCondition(st.Cond, "check"); err != nil {
 			return err
 		}
 		bodyScope := v.pushScope()
@@ -499,6 +525,10 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 	inCheckScope := v.pushScope()
 	for _, r := range st.Rules {
 		if err := v.checkExpr(r.Cond); err != nil {
+			v.popScope()
+			return err
+		}
+		if err := v.checkMustBeCondition(r.Cond, "check"); err != nil {
 			v.popScope()
 			return err
 		}

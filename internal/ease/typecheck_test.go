@@ -42,12 +42,6 @@ func TestStrictAsRejectsUnknownTypes(t *testing.T) {
 			wantLine: 2,
 		},
 		{
-			name:     "forward declared def rejected",
-			src:      "x = \"\\{\\}\" as late_user\ndef late_user\n    id = 0\nend\n",
-			wantSub:  `Type "late_user" is used after 'as' before it is defined (defined on line 2)`,
-			wantLine: 1,
-		},
-		{
 			name:     "bool is not a built-in type",
 			src:      "x = \"true\" as bool\n",
 			wantSub:  `Boolean ("bool") is not a built-in type in Ease`,
@@ -670,7 +664,7 @@ func TestIssue7NoBoolConditionJsonBoolAndStrictUnionLiteral(t *testing.T) {
 		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
 			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
 		}
-		if !strings.Contains(err.Error(), `Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = "yes" | "no"`) {
+		if !strings.Contains(err.Error(), `Conditions cannot be stored or printed. Use a domain union instead, e.g.: def state = "free" | "occupied"`) {
 			t.Fatalf("%s: unexpected error message: %v", tc.name, err)
 		}
 	}
@@ -719,31 +713,59 @@ say (free as json)
 
 	// 3. Strict union-literal checking at `is` (typo protection) — static & dynamic.
 	staticTypoSrc := `
-def decision
-    answer = "yes" | "no"
+def gate
+    access = "granted" | "denied"
 end
-d = decision with answer = "no"
-check d.answer is "yse"
+g = gate with access = "granted"
+check g.access is "denid"
     say "ok"
 end
 `
-	if _, err := EvalProgram(staticTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
+	if _, err := EvalProgram(staticTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"denid" is not a value of gate.access ("granted" | "denied")`) {
 		t.Fatalf("expected static union literal typo error, got: %v", err)
 	}
 
 	dynamicTypoSrc := `
-def decision
-    answer = "yes" | "no"
+def gate
+    access = "granted" | "denied"
 end
-to inspect_decision dec
-    check dec.answer is "yse" -> "ok"
-    -> "no"
+to inspect_gate g
+    check g.access is "denid" -> "ok"
+    -> "denied"
 end
-d = decision with answer = "no"
-say inspect_decision d
+g = gate with access = "granted"
+say inspect_gate g
 `
-	if _, err := EvalProgram(dynamicTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"yse" is not a value of decision.answer ("yes" | "no")`) {
+	if _, err := EvalProgram(dynamicTypoSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `"denid" is not a value of gate.access ("granted" | "denied")`) {
 		t.Fatalf("expected runtime union literal typo error, got: %v", err)
+	}
+
+	// 4. Static condition enforcement (checkMustBeCondition) rejects non-condition values at compile time.
+	condErrCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "check raw as number",
+			src:  "raw = \"42\"\ncheck raw as number\n    say \"ok\"\nend\n",
+			want: "Ease has no truthiness and 'as' returns a converted value, not a condition",
+		},
+		{
+			name: "check param",
+			src:  "to f x\n    check x -> 1\n    -> 0\nend\n",
+			want: "'check' requires a condition (e.g. 'x > 0' or 'x is ...'), got value",
+		},
+		{
+			name: "where non-condition",
+			src:  "xs = (list 1, 2) where it + 1\n",
+			want: "'where' requires a condition (e.g. 'x > 0' or 'x is ...'), got number",
+		},
+	}
+	for _, tc := range condErrCases {
+		if _, err := ParseProgram(tc.src); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: expected static TypeError containing %q, got: %v", tc.name, tc.want, err)
+		}
 	}
 }
 
@@ -1887,6 +1909,105 @@ x = rows as csv
 			_, err := ParseProgram(tc.src)
 			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("expected error containing %q, got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestTopDownOrderIndependentDefsAndUnions(t *testing.T) {
+	topDownSrc := `
+def BookingOutcome = Hall | BookingRejected
+
+def Hall
+    rows = list as Row
+end
+
+def Row
+    chairs = list as Chair
+end
+
+def Chair
+    state = "free" | "occupied" | "reserved"
+end
+
+def BookingRejected
+    reason = "out_of_bounds" | "already_occupied"
+end
+
+def Parent
+    child = Child
+end
+
+def Child
+    label = "nested"
+end
+
+to book_hall
+    c1 = Chair with state = "free"
+    c2 = Chair with state = "occupied"
+    c3 = Chair with state = "reserved"
+    r1 = Row with chairs = list c1, c2
+    r2 = Row with chairs = list c1, c2, c3
+    -> Hall with rows = list r1, r2
+end
+
+to describe_outcome out
+    check
+        out is Hall            -> out.rows.2.chairs.3.state
+        out is BookingRejected -> out.reason
+    end
+end
+
+p = Parent
+say p.child.label
+h = book_hall
+say describe_outcome h
+
+test "top-down defs and unions work in any declaration order"
+    p.child.label is "nested"
+    h is Hall
+    h.rows.2.chairs.3.state is "reserved"
+    describe_outcome h is "reserved"
+    describe_outcome (BookingRejected with reason = "out_of_bounds") is "out_of_bounds"
+end
+`
+	var out bytes.Buffer
+	if _, err := EvalProgram(topDownSrc, &out); err != nil {
+		t.Fatalf("top-down EvalProgram failed: %v", err)
+	}
+	if got, want := strings.TrimSpace(out.String()), "nested\nreserved"; got != want {
+		t.Fatalf("unexpected output: got %q, want %q", got, want)
+	}
+	report, err := RunChecks(topDownSrc)
+	if err != nil {
+		t.Fatalf("top-down RunChecks failed: %v", err)
+	}
+	if report.Passed != 5 || report.Failed != 0 {
+		t.Fatalf("expected 5 passed / 0 failed checks, got %d passed / %d failed", report.Passed, report.Failed)
+	}
+
+	// Direct record cycles must fail statically without stack overflow.
+	cycleCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "mutual direct record cycle",
+			src:  "def A\n    b = B\nend\ndef B\n    a = A\nend\n",
+			want: "Cyclic record definition",
+		},
+		{
+			name: "self direct record cycle",
+			src:  "def A\n    a = A\nend\n",
+			want: `Cyclic record definition involving "A"`,
+		},
+	}
+	for _, tc := range cycleCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected static TypeError containing %q, got: %v", tc.want, err)
 			}
 		})
 	}

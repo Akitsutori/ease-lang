@@ -1,41 +1,42 @@
 # Feature 08: Denken ohne Booleans & die sprachliche Rollenverteilung (def / to / ->)
 #
 # 1. Warum Ease auf `bool` (`true`/`false`) verzichtet:
-#    - Bedingungen wie `amount >= 50` bleiben direkt im Kontrollfluss (`check`, `if`, `test`).
-#    - Ergebnisse und Zustände nutzen explizite `def`-Unions (`"yes" | "no"`, `"ship" | "hold"`),
-#      statt anonyme Booleans zurückzugeben ("Boolean Blindness" am Aufrufort verschwindet).
+#    - Bedingungen wie `amount >= 50` bleiben direkt im Kontrollfluss (`check`, `where`, `test`).
+#    - Auch versteckte Ersatz-Booleans wie `"yes" | "no"` oder Passiv-Flags wie `taken = "yes" | "no"`
+#      sind „Boolean Pollution“: stattdessen benennt man immer den echten Zustand des Dings selbst
+#      (z. B. `"free" | "occupied"`, `"ready" | "held"`, `"ship" | "below_minimum" | "manual_review"`).
 #
 # 2. Warum `to` als grammatikalisches Geländer wirkt:
 #    - Neutrale Keywords wie `def` (Python) oder `func` (Go) verleiten zu `def user_data()`
 #      oder `def can_ship()` (Frage ohne klare Handlung).
 #    - In Ease klingt `to user_data` ("zu Nutzerdaten") oder `to can_ship` ("zu können verschicken")
 #      beim lauten Lesen sofort falsch und lenkt automatisch auf ein echtes Handlungsverb:
-#        def = Substantiv (passiver Bauplan:  def decision)
-#        to  = Infinitiv  (Absicht/Fähigkeit:  to decide_if_to_ship amount)
-#         = Imperativ  (konkrete Ausführung: decide_if_to_ship 80)
+#        def = Substantiv (passiver Bauplan:  def shipment)
+#        to  = Infinitiv  (Absicht/Fähigkeit:  to prepare_shipment amount)
+#         = Imperativ  (konkrete Ausführung: prepare_shipment 80)
 
-# --- Schritt 1: Explizite Ja/Nein-Entscheidung statt anonymem Boolean ---
+# --- Schritt 1: Echter Ding-Zustand statt anonymem Boolean oder "yes"/"no"-Flag ---
 
-def decision
-    answer = "yes" | "no"
+def shipment
+    state = "ready" | "held"
 end
 
 # Statt `to can_ship amount` (-> klingt falsch!) zwingt `to` zu einer klaren Handlung:
-to decide_if_to_ship amount
-    check amount >= 50 -> decision with answer = "yes"
-    -> decision with answer = "no"
+to prepare_shipment amount
+    check amount >= 50 -> shipment with state = "ready"
+    -> shipment with state = "held"
 end
 
 test "Rollenverteilung def (Substantiv) / to (Infinitiv) / (Imperativ)"
-    d1 = decide_if_to_ship 80
-    d1.answer is "yes"
+    s1 = prepare_shipment 80
+    s1.state is "ready"
 
-    d2 = decide_if_to_ship 20
-    d2.answer is "no"
+    s2 = prepare_shipment 20
+    s2.state is "held"
 
-    # Anders als freier Text prüft `def decision` den Wertebereich strikt:
-    (decision with answer = "maybe") is error
-    (decision with answer = "true") is error
+    # Anders als freier Text prüft `def shipment` den Wertebereich strikt:
+    (shipment with state = "maybe") is error
+    (shipment with state = "true") is error
 end
 
 # --- Schritt 2: Von Ja/Nein nahtlos zu sprechenden Fachzuständen ---

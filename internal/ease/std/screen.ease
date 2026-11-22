@@ -23,7 +23,7 @@ def circle
     y      = 0
     size   = 20
     color  = "red"
-    filled = "yes" | "no"
+    style  = "solid" | "outline"
     stroke = 2
 end
 
@@ -33,7 +33,7 @@ def box
     width  = 40
     height = 40
     color  = "blue"
-    filled = "yes" | "no"
+    style  = "solid" | "outline"
     stroke = 2
 end
 
@@ -54,7 +54,7 @@ def triangle
     x3     = 100
     y3     = 0
     color  = "#ffffff"
-    filled = "yes" | "no"
+    style  = "solid" | "outline"
     stroke = 2
 end
 

@@ -194,7 +194,7 @@ to paint_hotel win
         shapes = append shapes (screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "indigo")
         shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "slate")
         shapes = append shapes (screen.box with x = 265, y = 265, width = 70, height = 75, color = "amber")
-        shapes = append shapes (screen.box with x = 265, y = 265, width = 70, height = 75, color = "black", filled = "no", stroke = 3)
+        shapes = append shapes (screen.box with x = 265, y = 265, width = 70, height = 75, color = "black", style = "outline", stroke = 3)
         shapes = append shapes (screen.line with x1 = 400, y1 = 370, x2 = lx, y2 = 435, width = 3, color = "silver")
         shapes = append shapes (screen.circle with x = lx, y = 435, size = 12, color = "orange")
         shapes = append shapes (screen.label with x = 250, y = 55, content = "MIDNIGHT INN (ESC OR X TO LEAVE)", size = 16, color = "cream")

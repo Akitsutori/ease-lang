@@ -99,7 +99,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   2. Typo suggestion: `x as api_usre` (Parse/TypeError with suggestion)
   3. Alias `as string` (Parse/TypeError hinting `text`)
   4. `as bool` / `as boolean` (Parse/TypeError: boolean is not a built-in type)
-  5. Constant / forward reference after `as`: `x as pi` / `x as late_user`
+  5. Constant after `as`: `x as pi` (forward `def`/union references are allowed)
   6. Raw text passed directly to `as <def>`: `'{"id": 7, ...}' as api_user` (`is error` in `.ease`)
   7. Missing mandatory field on `as <def>` (no silent defaults): `Missing field 'api_user.name'` (`is error` in `.ease`)
   8. Record/list passed to `as text` or `{...}` interpolation (`is error` in `.ease`)

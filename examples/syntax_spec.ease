@@ -41,27 +41,7 @@ to classify n
     -> "non-positive"
 end
 
-to bad_check_cond x
-    check x -> "ok"
-    -> "done"
-end
-
 # 5. Typ- & Logik-Hilfsfunktionen für Negativtests
-to bad_not x
-    check not x -> "ok"
-    -> "done"
-end
-
-to bad_and a b
-    check a and b -> "ok"
-    -> "done"
-end
-
-to bad_or a b
-    check a or b -> "ok"
-    -> "done"
-end
-
 to bad_lt a b
     check a < b -> "ok"
     -> "done"
@@ -147,10 +127,10 @@ test "Records, with & Unions: 10 Negativtests"
 end
 
 test "Guards, Verzweigungen, Logik & Vergleiche: 8 Negativtests"
-    bad_check_cond 42 is error
-    bad_check_cond "yes" is error
-    bad_not 42 is error
-    bad_not "no" is error
+    bad_lt 1 "a" is error
+    bad_lt hero 1 is error
+    (not 42) is error
+    (not "no") is error
     (1 and (1 > 0)) is error
     ((1 < 0) or 1) is error
     bad_lt "a" 1 is error

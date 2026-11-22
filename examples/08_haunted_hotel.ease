@@ -18,24 +18,24 @@ to build_hotel_scene tick note_text
     notes = append notes (screen.label with x = 215, y = 44, content = "THE MIDNIGHT INN (ESC OR X TO CLOSE)", size = 18, color = "cream")
     notes = append notes (screen.label with x = 230, y = 76, content = note_text, size = 15, color = "amber")
 
-    roof = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "indigo", filled = "yes"
-    roof_trim = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "silver", filled = "no", stroke = 3
+    roof = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "indigo", style = "solid"
+    roof_trim = screen.triangle with x1 = 190, y1 = 220, x2 = 400, y2 = 110, x3 = 610, y3 = 220, color = "silver", style = "outline", stroke = 3
 
     shapes = list as screen.shape
-    shapes = append shapes (screen.circle with x = 685, y = 110, size = 34, color = "cream", filled = "yes")
-    shapes = append shapes (screen.circle with x = 685, y = 110, size = 46, color = "amber", filled = "no", stroke = 2)
+    shapes = append shapes (screen.circle with x = 685, y = 110, size = 34, color = "cream", style = "solid")
+    shapes = append shapes (screen.circle with x = 685, y = 110, size = 46, color = "amber", style = "outline", stroke = 2)
     shapes = append shapes roof
     shapes = append shapes roof_trim
-    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "slate", filled = "yes")
-    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "silver", filled = "no", stroke = 3)
-    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "amber", filled = "yes")
-    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "gold", filled = "yes")
-    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "black", filled = "no", stroke = 3)
-    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "black", filled = "no", stroke = 3)
-    shapes = append shapes (screen.box with x = 355, y = 370, width = 90, height = 120, color = "#1f2937", filled = "yes")
+    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "slate", style = "solid")
+    shapes = append shapes (screen.box with x = 220, y = 220, width = 360, height = 270, color = "silver", style = "outline", stroke = 3)
+    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "amber", style = "solid")
+    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "gold", style = "solid")
+    shapes = append shapes (screen.box with x = 260, y = 260, width = 70, height = 80, color = "black", style = "outline", stroke = 3)
+    shapes = append shapes (screen.box with x = 470, y = 260, width = 70, height = 80, color = "black", style = "outline", stroke = 3)
+    shapes = append shapes (screen.box with x = 355, y = 370, width = 90, height = 120, color = "#1f2937", style = "solid")
     shapes = append shapes (screen.line with x1 = 400, y1 = 370, x2 = lantern_x, y2 = lantern_y, width = 3, color = "silver")
-    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 12, color = "orange", filled = "yes")
-    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 18, color = "yellow", filled = "no", stroke = 2)
+    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 12, color = "orange", style = "solid")
+    shapes = append shapes (screen.circle with x = lantern_x, y = lantern_y, size = 18, color = "yellow", style = "outline", stroke = 2)
 
     -> screen.scene with
         background = "midnight"

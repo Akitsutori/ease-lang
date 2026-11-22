@@ -668,7 +668,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 					tok.Col,
 					p.source,
 					"Single-line 'check <cond> -> <value | end>' cannot span multiple lines",
-					"Put a value expression or 'end' on the same line, or omit '->' for a multi-line 'check <cond> ... end' effect block.",
+					"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
 				)
 			}
 			action, err := p.parseArrowAction(arrowTok)
@@ -880,7 +880,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 			tok.Col,
 			p.source,
 			"Expected value expression or 'end' after '->'",
-			"Write '-> <value>' or '-> end'.",
+			"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
 		)
 	}
 	switch tok.Type {

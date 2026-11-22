@@ -307,16 +307,6 @@ func (v *typeValidator) validateTypeTarget(typeName string, line, col int, ctx s
 				fmt.Sprintf("Define a record with 'def %s ... end' to instantiate rows.", typeName),
 			)
 		}
-		if !info.imported && line > 0 && info.line > line {
-			return newError(
-				"TypeError",
-				line,
-				col,
-				v.source,
-				fmt.Sprintf("Type %q is used after '%s' before it is defined (defined on line %d)", typeName, ctx, info.line),
-				fmt.Sprintf("Move 'def %s' above line %d.", typeName, line),
-			)
-		}
 		return nil
 	}
 

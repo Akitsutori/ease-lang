@@ -56,10 +56,10 @@ func TestScreenParseConfigFPSModes(t *testing.T) {
 func TestScreenSceneConversionAllShapesAndPainterOrder(t *testing.T) {
 	src := `import screen
 
-c = screen.circle with x = 10, y = 20, size = 15, color = "#ffaa00", filled = "no", stroke = 3
-b = screen.box with x = 5, y = 6, width = 80, height = 40, color = "slate", filled = "no", stroke = 4
+c = screen.circle with x = 10, y = 20, size = 15, color = "#ffaa00", style = "outline", stroke = 3
+b = screen.box with x = 5, y = 6, width = 80, height = 40, color = "slate", style = "outline", stroke = 4
 ln = screen.line with x1 = 1, y1 = 2, x2 = 30, y2 = 40, width = 5, color = "gold"
-tr = screen.triangle with x1 = 10, y1 = 10, x2 = 20, y2 = 30, x3 = 30, y3 = 10, color = "crimson", filled = "yes"
+tr = screen.triangle with x1 = 10, y1 = 10, x2 = 20, y2 = 30, x3 = 30, y3 = 10, color = "crimson", style = "solid"
 lb = screen.label with x = 12, y = 14, content = "Room 13", size = 18, color = "cream"
 
 mixed = list as screen.shape

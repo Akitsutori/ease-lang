@@ -564,7 +564,7 @@ func parseColor(name string) color.RGBA {
 }
 
 func isFilledField(fields map[string]Value) bool {
-	if s, ok := fields["filled"].(string); ok && strings.EqualFold(strings.TrimSpace(s), "no") {
+	if s, ok := fields["style"].(string); ok && strings.EqualFold(strings.TrimSpace(s), "outline") {
 		return false
 	}
 	return true

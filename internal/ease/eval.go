@@ -184,36 +184,151 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 	}
 	type declItem struct {
 		imported bool
+		name     string
 		line     int
 		seq      int
 		def      *DefDecl
 		union    *UnionDecl
 	}
-	items := make([]declItem, 0, len(prog.Defs)+len(prog.Unions))
+	var importedItems []declItem
+	var localItems []declItem
 	seq := 0
 	for _, d := range prog.Defs {
-		items = append(items, declItem{imported: d.Imported, line: d.Line, seq: seq, def: d})
+		it := declItem{imported: d.Imported, name: d.Name, line: d.Line, seq: seq, def: d}
+		if d.Imported {
+			importedItems = append(importedItems, it)
+		} else {
+			localItems = append(localItems, it)
+		}
 		seq++
 	}
 	for _, u := range prog.Unions {
-		items = append(items, declItem{imported: u.Imported, line: u.Line, seq: seq, union: u})
+		it := declItem{imported: u.Imported, name: u.Name, line: u.Line, seq: seq, union: u}
+		if u.Imported {
+			importedItems = append(importedItems, it)
+		} else {
+			localItems = append(localItems, it)
+		}
 		seq++
 	}
-	slices.SortFunc(items, func(a, b declItem) int {
-		if a.imported != b.imported {
-			if a.imported {
-				return -1
+
+	// Topologically order local defs/unions so top-down declarations work in any order.
+	localByName := make(map[string]int, len(localItems))
+	for i, it := range localItems {
+		localByName[it.name] = i
+	}
+	inDegree := make([]int, len(localItems))
+	dependents := make([][]int, len(localItems))
+	addEdge := func(fromIdx, depIdx int) {
+		if fromIdx == depIdx {
+			return
+		}
+		for _, prev := range dependents[depIdx] {
+			if prev == fromIdx {
+				return
 			}
-			return 1
 		}
-		if a.imported {
-			return a.seq - b.seq
+		dependents[depIdx] = append(dependents[depIdx], fromIdx)
+		inDegree[fromIdx]++
+	}
+	var collectDeps func(expr Expr, ownerIdx int)
+	collectDeps = func(expr Expr, ownerIdx int) {
+		if expr == nil {
+			return
 		}
-		if a.line != b.line {
-			return a.line - b.line
+		switch ex := expr.(type) {
+		case *IdentExpr:
+			if depIdx, ok := localByName[ex.Name]; ok {
+				addEdge(ownerIdx, depIdx)
+			}
+		case *TypedListExpr:
+			if depIdx, ok := localByName[ex.ElemType]; ok {
+				addEdge(ownerIdx, depIdx)
+			}
+			for _, row := range ex.Rows {
+				for _, u := range row {
+					collectDeps(u.Value, ownerIdx)
+				}
+			}
+		case *WithExpr:
+			collectDeps(ex.Base, ownerIdx)
+			for _, u := range ex.Updates {
+				collectDeps(u.Value, ownerIdx)
+			}
+			for _, iu := range ex.IndexUpdates {
+				collectDeps(iu.Value, ownerIdx)
+			}
+		case *ListExpr:
+			for _, el := range ex.Elements {
+				collectDeps(el, ownerIdx)
+			}
+		case *UnaryExpr:
+			collectDeps(ex.Right, ownerIdx)
+		case *BinaryExpr:
+			collectDeps(ex.Left, ownerIdx)
+			collectDeps(ex.Right, ownerIdx)
+		case *CallExpr:
+			for _, a := range ex.Args {
+				collectDeps(a, ownerIdx)
+			}
 		}
-		return a.seq - b.seq
-	})
+	}
+	for i, it := range localItems {
+		if it.def != nil {
+			for _, f := range it.def.Fields {
+				for _, opt := range f.Allowed {
+					collectDeps(opt, i)
+				}
+				collectDeps(f.Default, i)
+			}
+		} else if it.union != nil {
+			for _, ve := range it.union.Variants {
+				collectDeps(ve, i)
+			}
+		}
+	}
+
+	var orderedLocal []declItem
+	placed := make([]bool, len(localItems))
+	var queue []int
+	for i := range localItems {
+		if inDegree[i] == 0 {
+			queue = append(queue, i)
+		}
+	}
+	for len(queue) > 0 {
+		idx := queue[0]
+		queue = queue[1:]
+		placed[idx] = true
+		orderedLocal = append(orderedLocal, localItems[idx])
+		for _, depOf := range dependents[idx] {
+			inDegree[depOf]--
+			if inDegree[depOf] == 0 {
+				queue = append(queue, depOf)
+			}
+		}
+	}
+	// If mutual `list as ...` references form a cycle among remaining items,
+	// pre-register empty record placeholders before evaluating fields.
+	for i, it := range localItems {
+		if !placed[i] && it.def != nil {
+			ev.global.Define(it.def.Name, &RecordValue{
+				TypeName:    it.def.Name,
+				Fields:      make(map[string]Value),
+				Allowed:     make(map[string][]Value),
+				IsPrototype: true,
+			}, false)
+		}
+	}
+	for i, it := range localItems {
+		if !placed[i] {
+			orderedLocal = append(orderedLocal, it)
+		}
+	}
+
+	items := make([]declItem, 0, len(importedItems)+len(orderedLocal))
+	items = append(items, importedItems...)
+	items = append(items, orderedLocal...)
 
 	for _, item := range items {
 		if item.def != nil {

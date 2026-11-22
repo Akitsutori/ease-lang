@@ -6,6 +6,7 @@ import network
 # Then edit `to step_world state ev` (or `chat_prefix`) and save: live state inside `run_world` stays intact.
 
 def event_kind = "move" | "chat" | "status"
+def reply_target = "none" | network.http_request
 
 def room_event
     kind    = event_kind
@@ -13,8 +14,7 @@ def room_event
     x       = 0
     y       = 0
     body    = ""
-    has_req = "no" | "yes"
-    req     = network.http_request
+    reply   = reply_target
 end
 
 def world_state
@@ -45,8 +45,9 @@ to run_world world
     state = world_state
     take world
         state = step_world state it
-        check it.has_req is "yes"
-            network:reply_json it.req 200 state
+        reply_target_val = it.reply
+        check reply_target_val is network.http_request
+            network:reply_json reply_target_val 200 state
         end
     end
     -> state
@@ -55,9 +56,9 @@ end
 to route_http req world
     match "{req.method} {req.path}"
         "GET /status"
-            put world (room_event with kind = "status", has_req = "yes", req = req)
+            put world (room_event with kind = "status", reply = req)
         "POST /chat"
-            put world (room_event with kind = "chat", player = "http", body = req.body, has_req = "yes", req = req)
+            put world (room_event with kind = "chat", player = "http", body = req.body, reply = req)
         else
             network:reply_text req 404 "Not Found"
     end

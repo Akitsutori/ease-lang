@@ -849,7 +849,7 @@ func CheckNotConditionValue(v Value, line, col int, source string) error {
 			line,
 			col,
 			source,
-			"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
+			"Conditions cannot be stored or printed. Use a domain union instead, e.g.: def state = \"free\" | \"occupied\"",
 			"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
 		)
 	}

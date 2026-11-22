@@ -247,6 +247,10 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 		return err
 	}
 
+	if err := v.checkRecordCycles(prog); err != nil {
+		return err
+	}
+
 	for _, d := range prog.Defs {
 		if d.Imported {
 			continue
@@ -794,6 +798,7 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if targetSt.exactRecord != "" {
 			if variants, label, ok := v.fieldUnionVariants(targetSt.exactRecord, ex.Field); ok {
 				return varTypeState{
+					unionName:           v.fieldNamedUnion(targetSt.exactRecord, ex.Field),
 					inlineUnionLabel:    label,
 					inlineUnionVariants: variants,
 				}
@@ -1098,27 +1103,15 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			return err
 		}
 		if ex.Op == "not" {
-			if !v.inErrorTestExpr && !isConditionExpr(ex.Right) {
-				rightSt := v.inferExprTypeState(ex.Right)
-				knownValue := rightSt.exactRecord != "" || rightSt.exactNonRecord || rightSt.unionName != "" || rightSt.listElemType != ""
-				switch rt := ex.Right.(type) {
-				case *NumberExpr, *StringExpr, *InterpStringExpr, *ListExpr, *TypedListExpr, *WithExpr:
-					knownValue = true
-				case *CallExpr:
-					if rt.Callee != "contains" {
-						knownValue = true
-					}
-				}
-				if knownValue {
-					return newError(
-						"TypeError",
-						ex.Line,
-						ex.Col,
-						v.source,
-						"'not' requires a condition",
-						"Example: not (x is 0) or not (contains txt \"a\")",
-					)
-				}
+			if err := v.checkMustBeCondition(ex.Right, "not"); err != nil {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"'not' requires a condition",
+					"Example: not (x is 0) or not (contains txt \"a\")",
+				)
 			}
 			return nil
 		}
@@ -1129,11 +1122,17 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			return err
 		}
 		if ex.Op == "and" || ex.Op == "or" {
+			if err := v.checkMustBeCondition(ex.Left, ex.Op); err != nil {
+				return err
+			}
 			rhsScope := v.pushScope()
 			v.applyCondNarrowing(rhsScope, ex.Left, ex.Op == "and")
 			err := v.checkExpr(ex.Right)
 			v.popScope()
-			return err
+			if err != nil {
+				return err
+			}
+			return v.checkMustBeCondition(ex.Right, ex.Op)
 		}
 		if err := v.checkNotCondition(ex.Left); err != nil {
 			return err
@@ -1503,6 +1502,10 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				condErr = err
 				break
 			}
+			if err := v.checkMustBeCondition(cond, "where"); err != nil {
+				condErr = err
+				break
+			}
 			v.applyCondNarrowing(whereScope, cond, true)
 		}
 		v.loopDepth--
@@ -1722,6 +1725,8 @@ func (v *typeValidator) checkExpr(e Expr) error {
 
 func isConditionExpr(e Expr) bool {
 	switch ex := e.(type) {
+	case *BoolExpr:
+		return true
 	case *TypeCheckExpr:
 		return true
 	case *CallExpr:
@@ -1730,7 +1735,7 @@ func isConditionExpr(e Expr) bool {
 		return ex.Op == "not"
 	case *BinaryExpr:
 		switch ex.Op {
-		case ">", "<", ">=", "<=", "is", "is not", "and", "or":
+		case ">", "<", ">=", "<=", "is", "is not", "is-not", "and", "or":
 			return true
 		}
 	}
@@ -1747,7 +1752,7 @@ func (v *typeValidator) checkNotCondition(e Expr) error {
 		line,
 		col,
 		v.source,
-		"Conditions cannot be stored or printed. Use a union type instead, e.g.: def result = \"yes\" | \"no\"",
+		"Conditions cannot be stored or printed. Use a domain union instead, e.g.: def state = \"free\" | \"occupied\"",
 		"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
 	)
 }

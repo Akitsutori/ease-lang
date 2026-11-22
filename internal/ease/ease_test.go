@@ -1992,7 +1992,7 @@ end
 		{
 			name: "where condition not boolean",
 			src:  "say (list 1, 2) where it + 1\n",
-			want: "'where' condition must evaluate to a condition, got number",
+			want: "'where' requires a condition (e.g. 'x > 0' or 'x is ...'), got number",
 		},
 		{
 			name: "where on non-list",
@@ -2160,7 +2160,7 @@ func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
 	multilineCheck := "x = 1\ncheck x > 0 ->\n  say x\nend\n"
 	if _, err := ParseProgram(multilineCheck); err == nil ||
 		!strings.Contains(err.Error(), "Single-line 'check <cond> -> <value | end>' cannot span multiple lines") ||
-		!strings.Contains(err.Error(), "Put a value expression or 'end' on the same line") {
+		!strings.Contains(err.Error(), "Start the value expression on the same line right after '->'") {
 		t.Fatalf("expected multiline single-line check hint, got: %v", err)
 	}
 
