@@ -92,8 +92,8 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   9. `"a" < 1` (`is error` in `.ease`)
   10. `(1 > 0) < (1 < 0)` (`is error` in `.ease`)
 
-## 7. Strict `as` Contract & Explicit JSON (`decode_json` / `encode_json`) (`README.md`)
-- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `(decode_json '{"id": 7, "name": "Guest", "role": "admin"}') as api_user`, `encode_json u`
+## 7. Strict `as` Contract & Unified Formats (`as json` / `as csv`) (`README.md`)
+- **Happy Path**: `"42" as number`, `42 as text`, `"vip" as ticket`, `raw = '{"id": 7, "name": "Guest", "role": "admin"}' as json; raw as api_user`, `u as json`, `rows as csv`
 - **10 Negative Cases**:
   1. Unknown Unicode type: `x as ö` (Parse/TypeError)
   2. Typo suggestion: `x as api_usre` (Parse/TypeError with suggestion)
@@ -103,11 +103,11 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   6. Raw text passed directly to `as <def>`: `'{"id": 7, ...}' as api_user` (`is error` in `.ease`)
   7. Missing mandatory field on `as <def>` (no silent defaults): `Missing field 'api_user.name'` (`is error` in `.ease`)
   8. Record/list passed to `as text` or `{...}` interpolation (`is error` in `.ease`)
-  9. Invalid number / union / JSON in `decode_json` (`"abc" as number`, `"pending" as ticket`, `decode_json '{broken'` -> `is error` in `.ease`)
-  10. Wrong JSON shape / field type (`decode_json '[1, 2]' as api_user`, `decode_json '{"id": "abc", ...}' as api_user` -> `is error` in `.ease`)
+  9. Invalid number / union / JSON in `as json` (`"abc" as number`, `"pending" as ticket`, `'{broken' as json` -> `is error` in `.ease`)
+  10. Wrong JSON shape / field type (`arr = '[1, 2]' as json; arr as api_user`, `bad = '{"id": "abc", ...}' as json; bad as api_user` -> `is error` in `.ease`)
 
 ## 8. Lists, Dot Indexing, `where` Filters, Batch `with` & Loops (`README.md`)
-- **Happy Path**: `list 10, 25, 40`, `scores.1`, `scores.(it.index)`, `scores with .1 = 99`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|csv|bytes]`, `save path data`, `row.1`, `row.("Header")`, `cloud with x = it.x + it.vx`, `loop ... end` (`it.index` 1-based, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
+- **Happy Path**: `list 10, 25, 40`, `scores.1`, `scores.(it.index)`, `scores with .1 = 99`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|json|csv|bytes]`, `save path data [as text|json|csv|bytes]`, `row.1`, `row.("Header")`, `cloud with x = it.x + it.vx`, `loop ... end` (`it.index` 1-based, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
 - **10 Negative Cases**:
   1. Legacy list literal `[1, 2, 3]`
   2. Legacy indexing `scores[0]` or 0-based `.0` (`scores.0`, `scores with .0 = 1` -> `SyntaxError`)
@@ -118,7 +118,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   7. `loop` missing `end`
   8. Legacy `for` / `repeat` (`for xs ... end`, `repeat 3 ... end`)
   9. Named loop variable (`loop x in xs ... end`) or `def` field named `index`
-  10. Runtime errors (`xs.99`, `"hi".99`, `xs.(0)`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `loop\n  say it.index\nend` without exit `TypeError`, `xs.(1.5)`, `x as csv`, `save p (list 256)`, malformed/duplicate CSV -> `is error` in `.ease`)
+  10. Runtime errors (`xs.99`, `"hi".99`, `xs.(0)`, `list 10, "hi"`, `append typed "bad"`, `loop 42`, `loop "3"`, `loop\n  say it.index\nend` without exit `TypeError`, `xs.(1.5)`, `42 as csv`, `save p (list 256) as bytes`, malformed/duplicate CSV -> `is error` in `.ease`)
 
 ## 9. Built-in Tests (`test`) & Imports (`import`) (`README.md`)
 - **Happy Path**: `test ... end`, `test "label" ... end`, `is error`, `-> error.type / error.message end`, `import network` (`network:fetch`, `network:send`, `network.network`), `import screen` (`screen:present`, `screen.screen`, `screen.frame_state`), `import "./file.ease" as mod` (`mod:verb`, `mod.def`, `mod.const`, `as mod.def`, `is mod.def`)
@@ -158,7 +158,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   5. Condition expression as fallback: `raw as number or (1 > 0)` (`TypeError`)
   6. `def` record contract with `or`: `raw_map as api_user or default_user` (`TypeError`)
   7. Record-only union with `or`: `raw_map as RecUnion or rec` (`TypeError`)
-  8. `load` with `or`: `load "./data.csv" as csv or 0`, `load "./a.txt" as text or ""` (`TypeError`)
+  8. `load` with `or`: `load "./data.csv" as csv or 0`, `load "./a.txt" as text or ""`, or chained `as` (`x as A as B`, `x as number or y as number`) (`TypeError`)
   9. Forbidden target types: `raw as bool or 0`, `raw as string or ""`, `raw as unknown or 0` (`TypeError`)
   10. Runtime non-suppression: bare `"abc" as number`, bare `(list "a", "b") as number`, `(1 / 0) as number or 0` -> `is error` in `.ease`
 

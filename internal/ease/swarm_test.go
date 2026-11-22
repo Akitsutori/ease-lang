@@ -53,7 +53,8 @@ client = network.network with url = %q, timeout = 5
 
 to fetch_item idx
   raw = network:fetch client "/item/{idx}"
-  -> (decode_json raw) as ItemResp
+  parsed = raw as json
+  -> parsed as ItemResp
 end
 
 items = swarm loop range 0 3
@@ -195,8 +196,9 @@ shared = list 10, 20
 to transform n base_list
   xs = append base_list n
   p = Point with x = sum xs, label = "n={n}"
-  raw = encode_json p
-  -> (decode_json raw) as Point
+  raw = p as json
+  parsed = raw as json
+  -> parsed as Point
 end
 
 out = swarm loop range 1 200

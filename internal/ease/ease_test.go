@@ -643,7 +643,8 @@ to run_window
         end
 
         raw_state = screen:present win current
-        state = decode_json raw_state as screen.frame_state
+        decoded_state = raw_state as json
+        state = decoded_state as screen.frame_state
         check state is not screen.frame_state -> "Fensterfehler"
     end
 
@@ -1594,7 +1595,8 @@ say add (1 + 2) 3
 say sum_squares range 1 5
 say fib 7
 raw = '{"id": 1, "name": "Ada"}'
-u = decode_json raw as user
+decoded_u = raw as json
+u = decoded_u as user
 say u.name
 loop range 1 3 say it end
 `
@@ -2192,18 +2194,16 @@ def sales_entry
 end
 
 test "load, save, bytes, and CSV boundary mapping"
-    # 1. Text load (with BOM strip + NFC) & save round-trip
+    # 1. Text load (with BOM strip + NFC) & save round-trip (save is void)
     loaded_txt = load %q
     loaded_txt is "ä"
     (load %q as text) is "ä"
-    written_txt = save %q "hello ä"
-    written_txt is 8
+    save %q "hello ä"
     load %q is "hello ä"
 
     # 2. Binary save & load as bytes (1:1 raw, including 0xFF/0xFE)
     raw_bytes = list 0, 137, 80, 78, 71, 255, 254
-    written_bin = save %q raw_bytes
-    written_bin is 7
+    save %q raw_bytes as bytes
     loaded_bytes = load %q as bytes
     loaded_bytes is raw_bytes
 
@@ -2240,12 +2240,13 @@ test "load, save, bytes, and CSV boundary mapping"
     load %q as csv is error
     load %q as csv is error
     load %q as csv is error
-    (load %q as csv) as sales_entry is error
+    nan_rows = load %q as csv
+    nan_rows as sales_entry is error
     raw_rows.1.99 is error
     raw_rows.1.("missing") is error
-    save %q (list -1) is error
-    save %q (list 256) is error
-    save %q (list 1.5) is error
+    save %q (list -1) as bytes is error
+    save %q (list 256) as bytes is error
+    save %q (list 1.5) as bytes is error
 end
 `, txtPath, txtPath, txtPath, txtPath, binPath, binPath, asiaCSVPath, cleanCSVPath,
 		badUTF8Path, badUTF8Path, badCSVPath, emptyCSVPath, dupCSVPath, nanCSVPath,
@@ -2255,25 +2256,20 @@ end
 	if err != nil {
 		t.Fatalf("RunChecks failed: %v", err)
 	}
-	if report.Failed != 0 || report.Passed != 25 {
-		t.Fatalf("expected 25 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
+	if report.Failed != 0 || report.Passed != 23 {
+		t.Fatalf("expected 23 passed / 0 failed checks, got %d passed / %d failed:\n%+v", report.Passed, report.Failed, report.Results)
 	}
 
-	// Verify static TypeError when `as csv` or `as bytes` is used outside `load`.
-	for _, badCast := range []string{
-		"x = \"abc\" as csv\n",
-		"x = (list 1, 2) as bytes\n",
-	} {
-		if _, err := ParseProgram(badCast); err == nil || !strings.Contains(err.Error(), "can only be used with 'load <path>") {
-			t.Fatalf("expected static TypeError for %q, got: %v", badCast, err)
-		}
+	// Verify static TypeError when `as bytes` is used outside `load`/`save`.
+	if _, err := ParseProgram("x = (list 1, 2) as bytes\n"); err == nil || !strings.Contains(err.Error(), "can only be used with 'load <path> as bytes' or 'save <path> <data> as bytes'") {
+		t.Fatalf("expected static TypeError for bare 'as bytes', got: %v", err)
 	}
 
 	// Verify specific English error messages for duplicate CSV header & NaN CSV cell.
 	if _, err := EvalProgram(fmt.Sprintf("x = load %q as csv\n", dupCSVPath), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Duplicate CSV header") {
 		t.Fatalf("expected Duplicate CSV header error, got: %v", err)
 	}
-	if _, err := EvalProgram(fmt.Sprintf("def s\n  product = \"\"\n  price = 0\n  status = \"paid\"\nend\nx = (load %q as csv) as s\n", nanCSVPath), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "expected number") {
+	if _, err := EvalProgram(fmt.Sprintf("def s\n  product = \"\"\n  price = 0\n  status = \"paid\"\nend\nrows = load %q as csv\nx = rows as s\n", nanCSVPath), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "expected number") {
 		t.Fatalf("expected NaN CSV number error, got: %v", err)
 	}
 }
@@ -2344,7 +2340,7 @@ to tag x -> "L:" + x
 inv = billing.invoice with id = "INV-1", net = 100
 inv2 = billing.invoice with id = "INV-1", net = 100
 
-raw = decode_json '[{"id": "INV-2", "net": 200, "state": "paid"}]'
+raw = '[{"id": "INV-2", "net": 200, "state": "paid"}]' as json
 typed_list = raw as billing.invoice
 first = typed_list.1
 

@@ -910,9 +910,14 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	if _, isSwarm := expr.(*SwarmLoopExpr); isSwarm {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
-	if call, isCall := expr.(*CallExpr); isCall && ((call.Module == "" && (call.Callee == "put" || call.Callee == "close" || call.Callee == "synth_play")) ||
+	if call, isCall := expr.(*CallExpr); isCall && ((call.Module == "" && (call.Callee == "put" || call.Callee == "close" || call.Callee == "save" || call.Callee == "synth_play")) ||
 		(call.Module != "" && p.stdModuleOrigNames[call.Module] == "synth" && call.Callee == "play")) {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
+	}
+	if castExpr, isCast := expr.(*CastExpr); isCast {
+		if call, isCall := castExpr.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "save" {
+			return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
+		}
 	}
 	return &CheckCondStmt{posInfo: posInfo{Line: line, Col: col}, Condition: expr}, nil
 }
@@ -1000,6 +1005,26 @@ func (p *Parser) parseStmt() (Stmt, error) {
 					p.source,
 					"'fail' has been removed from Ease",
 					"'fail' was removed; return an explicit error union/record with '-> ...' instead.",
+				)
+			}
+			if tok.Lexeme == "decode_json" {
+				return nil, newError(
+					"TypeError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'decode_json' was removed from Ease",
+					"Use '<text> as json' or 'load <path> as json' instead.",
+				)
+			}
+			if tok.Lexeme == "encode_json" {
+				return nil, newError(
+					"TypeError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"'encode_json' was removed from Ease",
+					"Use '<value> as json' or 'save <path> <value> as json' instead.",
 				)
 			}
 			if tok.Lexeme == "return" {
@@ -1673,6 +1698,26 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 			p.source,
 			"'fail' has been removed from Ease",
 			"'fail' was removed; return an explicit error union/record with '-> ...' instead.",
+		)
+	}
+	if tok.Type == TOK_IDENT && tok.Lexeme == "decode_json" {
+		return nil, newError(
+			"TypeError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'decode_json' was removed from Ease",
+			"Use '<text> as json' or 'load <path> as json' instead.",
+		)
+	}
+	if tok.Type == TOK_IDENT && tok.Lexeme == "encode_json" {
+		return nil, newError(
+			"TypeError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"'encode_json' was removed from Ease",
+			"Use '<value> as json' or 'save <path> <value> as json' instead.",
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "return" {
@@ -2971,6 +3016,26 @@ func (p *Parser) parsePrimary() (Expr, error) {
 			"Build lists imperatively with 'xs = list as <type>' and 'xs = append xs val' inside 'loop ... end'.",
 		)
 	case TOK_IDENT:
+		if tok.Lexeme == "decode_json" {
+			return nil, newError(
+				"TypeError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"'decode_json' was removed from Ease",
+				"Use '<text> as json' or 'load <path> as json' instead.",
+			)
+		}
+		if tok.Lexeme == "encode_json" {
+			return nil, newError(
+				"TypeError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"'encode_json' was removed from Ease",
+				"Use '<value> as json' or 'save <path> <value> as json' instead.",
+			)
+		}
 		p.advance()
 		return &IdentExpr{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Name: tok.Lexeme}, nil
 	case TOK_LPAREN:

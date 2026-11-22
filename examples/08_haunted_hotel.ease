@@ -49,7 +49,8 @@ to render_hotel win updates
     loop
         sc = build_hotel_scene it.index note_text
         raw = screen:present win sc
-        st = decode_json raw as screen.frame_state
+        parsed_st = raw as json
+        st = parsed_st as screen.frame_state
         check st.status is "closed" -> end
     end
 end
@@ -85,8 +86,9 @@ test "haunted hotel animation and headless event stream behave deterministically
     count sc.shapes is 14
 
     events_seen = run_haunted_hotel
-    encode_json events_seen is '["key","click","close"]'
+    events_seen as json is '["key","click","close"]'
 end
 
 log = run_haunted_hotel
-say "Hotel closed after events: {encode_json log}"
+log_json = log as json
+say "Hotel closed after events: {log_json}"

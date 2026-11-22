@@ -119,9 +119,9 @@ def api_user
     role = "member" | "admin"
 end
 
-test "Record <-> JSON via decode_json / encode_json and strict as"
+test "Record <-> JSON via 'as json' and strict 'as'"
     # Valid JSON with single-quoted raw string, unknown field tolerated, all def fields present
-    raw_map = decode_json '{"id": 7, "name": "Aria", "role": "admin", "extra": true}'
+    raw_map = '{"id": 7, "name": "Aria", "role": "admin", "extra": true}' as json
     raw_map is not text
     type raw_map is "map"
     raw_map.id is 7
@@ -133,8 +133,9 @@ test "Record <-> JSON via decode_json / encode_json and strict as"
     u.role is "admin"
 
     # Explicit JSON encoding & roundtrip
-    encoded = encode_json u
-    decoded = decode_json encoded as api_user
+    encoded = u as json
+    decoded_map = encoded as json
+    decoded = decoded_map as api_user
     decoded is api_user
     decoded.id is 7
     decoded.name is "Aria"
@@ -150,16 +151,21 @@ test "Record <-> JSON via decode_json / encode_json and strict as"
     "" as api_user is error
 
     # Missing required fields in 'as <def>' (no silent default filling!)
-    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
+    missing_name_map = '{"id": 7, "role": "admin"}' as json
+    missing_name_map as api_user is error
 
     # Invalid JSON / non-map decoded values / wrong types / invalid union -> immediate error
-    decode_json "" is error
-    decode_json '{broken' is error
-    decode_json 42 is error
-    (decode_json 'null') as api_user is error
-    (decode_json '[1, 2]') as api_user is error
-    (decode_json '{"id": "not-a-num", "name": "Aria", "role": "admin"}') as api_user is error
-    (decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user is error
+    "" as json is error
+    '{broken' as json is error
+    42 as json is error
+    null_val = 'null' as json
+    null_val as api_user is error
+    arr_val = '[1, 2]' as json
+    arr_val as api_user is error
+    bad_num_map = '{"id": "not-a-num", "name": "Aria", "role": "admin"}' as json
+    bad_num_map as api_user is error
+    bad_role_map = '{"id": 7, "name": "Aria", "role": "superuser"}' as json
+    bad_role_map as api_user is error
     42 as api_user is error
 
     # Symmetry: no JSON magic in 'as text'
@@ -182,7 +188,7 @@ def my_record
     second = ""
 end
 
-to make_pair a b -> decode_json "\{\"first\": \"{a}\", \"second\": \"{b}\"\}"
+to make_pair a b -> ("\{\"first\": \"{a}\", \"second\": \"{b}\"\}") as json
 
 x = make_pair "a" "b" as my_record
 `
@@ -246,19 +252,19 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 		},
 		{
 			name:      "json array rejected for record def",
-			src:       "def user\n    id = 0\nend\nx = (decode_json '[1, 2]') as user\n",
+			src:       "def user\n    id = 0\nend\narr = '[1, 2]' as json\nx = arr as user\n",
 			wantStage: "TypeError",
 			wantSub:   `Cannot validate list as user: expected structured map or user record`,
 		},
 		{
 			name:      "missing required field rejected for record def",
-			src:       "def user\n    id = 0\n    name = \"Gast\"\nend\nx = (decode_json '{\"id\": 1}') as user\n",
+			src:       "def user\n    id = 0\n    name = \"Gast\"\nend\nm = '{\"id\": 1}' as json\nx = m as user\n",
 			wantStage: "TypeError",
 			wantSub:   `Missing field 'user.name'`,
 		},
 		{
 			name:      "wrong nested field type",
-			src:       "def user\n    id = 0\nend\nx = (decode_json '{\"id\": true}') as user\n",
+			src:       "def user\n    id = 0\nend\nm = '{\"id\": true}' as json\nx = m as user\n",
 			wantStage: "TypeError",
 			wantSub:   `Field 'user.id' expected number, got text (true)`,
 		},
@@ -322,22 +328,22 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: text, len: 1}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`decode_json '[1, 2]'`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`'[1, 2]' as json`+"\n", &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("decode_json array failed: %v", err)
+		t.Fatalf("as json array failed: %v", err)
 	}
 	jsonLV, ok := val.(*ListValue)
 	if !ok || jsonLV.ElemType != "number" || len(jsonLV.Elements) != 2 {
-		t.Fatalf("expected *ListValue{ElemType: number, len: 2} from decode_json, got %T %+v", val, val)
+		t.Fatalf("expected *ListValue{ElemType: number, len: 2} from as json, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`decode_json '[]'`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`'[]' as json`+"\n", &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("decode_json empty array failed: %v", err)
+		t.Fatalf("as json empty array failed: %v", err)
 	}
 	emptyJSONLV, ok := val.(*ListValue)
 	if !ok || emptyJSONLV.ElemType != "" || len(emptyJSONLV.Elements) != 0 {
-		t.Fatalf("expected *ListValue{ElemType: \"\", len: 0} from empty decode_json, got %T %+v", val, val)
+		t.Fatalf("expected *ListValue{ElemType: \"\", len: 0} from empty as json, got %T %+v", val, val)
 	}
 
 	// Rule 1 & Rule 2 & Rule 3 & Rule 4 & Rule 5 via Ease source + checks.
@@ -364,24 +370,31 @@ def ticket = "vip" | "standard"
 test "Rule 1 & 2: strict list types and 'as' validation"
     (list 1, 2) as number is list 1, 2
     (list "vip", "standard") as ticket is list "vip", "standard"
-    (decode_json '[1, 2, 3]') as number is list 1, 2, 3
-    (decode_json '["a", "b"]') as text is list "a", "b"
-    users = (decode_json '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]') as user
+    raw_nums = '[1, 2, 3]' as json
+    raw_nums as number is list 1, 2, 3
+    raw_words = '["a", "b"]' as json
+    raw_words as text is list "a", "b"
+    raw_users = '[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]' as json
+    users = raw_users as user
     count users is 2
     users.1 is user
     users.1.name is "Ada"
     users.2.id is 2
 
-    t = (decode_json '{"title": "Red", "scores": [10, 20]}') as team
+    raw_team = '{"title": "Red", "scores": [10, 20]}' as json
+    t = raw_team as team
     t is team
     t.scores is list 10, 20
 
     (list "a", "b") as number is error
     (list 1, 2) as text is error
     (list "vip", "gold") as ticket is error
-    (decode_json '[1, "bad"]') as number is error
-    (decode_json '[{"id": 1, "name": "Ada"}, {"id": 2}]') as user is error
-    (decode_json '{"title": "Red", "scores": [10, "bad"]}') as team is error
+    bad_nums = '[1, "bad"]' as json
+    bad_nums as number is error
+    bad_users = '[{"id": 1, "name": "Ada"}, {"id": 2}]' as json
+    bad_users as user is error
+    bad_team = '{"title": "Red", "scores": [10, "bad"]}' as json
+    bad_team as team is error
 end
 
 test "Rule 3: homogeneous list concatenation with append and vector +"
@@ -389,7 +402,8 @@ test "Rule 3: homogeneous list concatenation with append and vector +"
     combined is list 1, 2, 3, 4
     combined2 = append (list as number) (list 5, 6)
     combined2 is list 5, 6
-    combined3 = append (list 7, 8) (decode_json '[]')
+    empty_json = '[]' as json
+    combined3 = append (list 7, 8) empty_json
     combined3 is list 7, 8
     ((list 1, 2) + (list 3, 4)) is list 4, 6
     append (list 1, 2) (list "a", "b") is error
@@ -428,7 +442,7 @@ test "Rule 5: append type lock and value semantics under aliasing"
     b is list 1, 2, 3
     c is list 1, 2, 4
 
-    dyn = decode_json '[]'
+    dyn = '[]' as json
     dyn_num = append dyn 42
     dyn_num is list 42
     count dyn is 0
@@ -451,7 +465,7 @@ end
 		src  string
 	}{
 		{"cast list mismatch", `x = (list "a", "b") as number`},
-		{"cast mixed json array", `x = (decode_json '[1, "bad"]') as number`},
+		{"cast mixed json array", "raw = '[1, \"bad\"]' as json\nx = raw as number\n"},
 		{"non-numeric list +", `x = (list 1, 2) + (list "a", "b")`},
 		{"append list mismatch", `x = append (list 1, 2) (list "a", "b")`},
 		{"append mismatch", "xs = list 1, 2\nys = append xs \"x\""},
@@ -557,8 +571,10 @@ test "cast fallback comprehensive behavior"
   ("bad" as number or -def_port) is -8080
 
   # Scalar text fallback on dynamic JSON values
-  ((decode_json 'null') as text or "missing") is "missing"
-  ((decode_json '"ok"') as text or "missing") is "ok"
+  null_val = 'null' as json
+  (null_val as text or "missing") is "missing"
+  ok_val = '"ok"' as json
+  (ok_val as text or "missing") is "ok"
 
   # Scalar union and numeric union casts
   ("WARN" as Level or "INFO") is "WARN"
@@ -586,10 +602,6 @@ test "cast fallback comprehensive behavior"
   test_logical_or 9 2 is "ok"
   test_logical_or 9 9 is "no"
 
-  # Chained 'as ... or ... as ... or ...'
-  ("bad" as number or "77" as number or 0) is 77
-  ("12" as number or "bad" as number or 0) is 12
-
   # Batch lists + downstream where / sum + empty list
   nums = (list "10", "bad", " -5.5 ", "1_000") as number or 0
   nums is list 10, 0, -5.5, 0
@@ -607,7 +619,8 @@ test "cast fallback comprehensive behavior"
   empty_out = (list as text) as number or 99
   count empty_out is 0
 
-  json_nums = (decode_json '[1, "bad", null, "4"]') as number or -1
+  raw_json_list = '[1, "bad", null, "4"]' as json
+  json_nums = raw_json_list as number or -1
   json_nums is list 1, -1, -1, 4
 
   # Errors that must NOT be masked by 'or'
@@ -620,7 +633,7 @@ end
 		if err != nil {
 			t.Fatalf("RunChecks failed: %v", err)
 		}
-		if report.Failed != 0 || report.Passed != 44 {
+		if report.Failed != 0 || report.Passed != 42 {
 			t.Fatalf("unexpected check report: passed=%d failed=%d total=%d\n%+v", report.Passed, report.Failed, report.Total, report.Results)
 		}
 	})

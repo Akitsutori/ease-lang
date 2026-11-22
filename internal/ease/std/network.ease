@@ -43,11 +43,17 @@ to fetch target path
     -> res.body
 end
 
+to serialize_payload payload
+    check payload is text   -> payload
+    check payload is number -> payload as text
+    -> payload as json
+end
+
 to send target path payload
     req = http_request with
         method  = "POST"
         url     = "{target.url}{path}"
-        body    = encode_json payload
+        body    = serialize_payload payload
         token   = target.token
         timeout = target.timeout
     end

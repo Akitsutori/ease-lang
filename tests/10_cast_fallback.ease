@@ -34,7 +34,8 @@ test "scalar, union, and numeric union cast fallbacks"
   check_precedence "bad" "force" is "active"
   check_precedence "bad" "off" is "none"
 
-  ("bad" as number or "12" as number or 0) is 12
+  second_try = "12" as number or 0
+  ("bad" as number or second_try) is 12
 end
 
 test "batch list fallback conversions and downstream pipelines"

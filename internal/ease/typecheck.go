@@ -308,13 +308,19 @@ var internalStdlibBuiltins = map[string]string{
 }
 
 func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
+	if cast, ok := e.(*CastExpr); ok {
+		if ce, isCall := cast.Target.(*CallExpr); isCall && ce.Module == "" && ce.Callee == "save" {
+			return "save", true
+		}
+		return "", false
+	}
 	ce, ok := e.(*CallExpr)
 	if !ok {
 		return "", false
 	}
 	if ce.Module == "" {
 		switch ce.Callee {
-		case "close", "put":
+		case "close", "put", "save":
 			return ce.Callee, true
 		case "synth_play":
 			return "synth:play", true
@@ -1525,6 +1531,25 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		case "bytes":
 			return varTypeState{listElemType: "number"}
 		case "csv":
+			if call, isCall := ex.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" {
+				return varTypeState{listElemType: "map"}
+			}
+			targetSt := v.inferExprTypeState(ex.Target)
+			if targetSt.exactBaseType == "text" {
+				return varTypeState{listElemType: "map"}
+			}
+			if targetSt.listElemType != "" {
+				return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+			}
+			return varTypeState{}
+		case "json":
+			if call, isCall := ex.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" {
+				return varTypeState{}
+			}
+			targetSt := v.inferExprTypeState(ex.Target)
+			if targetSt.exactRecord != "" || targetSt.listElemType != "" {
+				return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+			}
 			return varTypeState{}
 		default:
 			targetSt := v.inferExprTypeState(ex.Target)
@@ -1681,8 +1706,10 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{listElemType: "text"}
 		case "upper", "lower", "join", "trim", "replace":
 			return varTypeState{exactNonRecord: true, exactBaseType: "text"}
-		case "load", "save":
-			return varTypeState{exactNonRecord: true}
+		case "load":
+			return varTypeState{exactNonRecord: true, exactBaseType: "text"}
+		case "save":
+			return varTypeState{}
 		case "range":
 			return varTypeState{listElemType: "number"}
 		case "rand_roll":
@@ -1720,49 +1747,43 @@ func (v *typeValidator) checkExpr(e Expr) error {
 	}
 	switch ex := e.(type) {
 	case *CastExpr:
+		if _, isTargetCast := ex.Target.(*CastExpr); isTargetCast {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				"Cannot chain multiple 'as' conversions in one expression",
+				"Assign the intermediate value to a named variable first (e.g. 'json_data = raw as json', then 'user = json_data as api_user').",
+			)
+		}
+		if _, isFallbackCast := ex.Fallback.(*CastExpr); isFallbackCast {
+			return newError(
+				"TypeError",
+				ex.OrLine,
+				ex.OrCol,
+				v.source,
+				"Cannot chain multiple 'as' conversions in one expression",
+				"Assign the intermediate value to a named variable first (e.g. 'json_data = raw as json', then 'user = json_data as api_user').",
+			)
+		}
+		if call, isCall := ex.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "save" {
+			return v.checkSaveCastExpr(ex, call)
+		}
 		if err := v.checkExpr(ex.Target); err != nil {
 			return err
 		}
 		if err := v.checkNotCondition(ex.Target); err != nil {
 			return err
 		}
+		if err := v.checkNotVoidValue(ex.Target); err != nil {
+			return err
+		}
 		isLoadCall := false
 		if call, isCall := ex.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" {
 			isLoadCall = true
 		}
-		if ex.TypeName == "csv" || ex.TypeName == "bytes" {
-			if !isLoadCall {
-				if !v.inErrorTestExpr {
-					return newError(
-						"TypeError",
-						ex.TypeLine,
-						ex.TypeCol,
-						v.source,
-						fmt.Sprintf("Target type %q can only be used with 'load <path> as %s'", ex.TypeName, ex.TypeName),
-						fmt.Sprintf("Write: load \"./path\" as %s", ex.TypeName),
-					)
-				}
-			} else if ex.Fallback != nil && !v.inErrorTestExpr {
-				return newError(
-					"TypeError",
-					ex.OrLine,
-					ex.OrCol,
-					v.source,
-					fmt.Sprintf("'or' fallback cannot be used with 'load ... as %s'", ex.TypeName),
-					"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
-				)
-			}
-			if ex.Fallback != nil {
-				if err := v.checkExpr(ex.Fallback); err != nil {
-					return err
-				}
-				if err := v.checkNotCondition(ex.Fallback); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if isLoadCall && ex.Fallback != nil {
+		if ex.Fallback != nil && (ex.TypeName == "json" || ex.TypeName == "csv" || ex.TypeName == "bytes" || isLoadCall) {
 			if err := v.checkExpr(ex.Fallback); err != nil {
 				return err
 			}
@@ -1770,15 +1791,81 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return err
 			}
 			if !v.inErrorTestExpr {
+				if isLoadCall {
+					return newError(
+						"TypeError",
+						ex.OrLine,
+						ex.OrCol,
+						v.source,
+						fmt.Sprintf("'or' fallback cannot be used with 'load ... as %s'", ex.TypeName),
+						"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
+					)
+				}
 				return newError(
 					"TypeError",
 					ex.OrLine,
 					ex.OrCol,
 					v.source,
-					"'or' fallback cannot be used with 'load ... as text'",
-					"Handle file loading errors separately; 'or' fallbacks are for value conversions.",
+					fmt.Sprintf("'or' fallback cannot be used with 'as %s'", ex.TypeName),
+					fmt.Sprintf("'as %s' does not support 'or' fallbacks.", ex.TypeName),
 				)
 			}
+			return nil
+		}
+		switch ex.TypeName {
+		case "bytes":
+			if !isLoadCall && !v.inErrorTestExpr {
+				return newError(
+					"TypeError",
+					ex.TypeLine,
+					ex.TypeCol,
+					v.source,
+					"Target type \"bytes\" can only be used with 'load <path> as bytes' or 'save <path> <data> as bytes'",
+					"Write: load \"./path\" as bytes",
+				)
+			}
+			return nil
+		case "json":
+			if isLoadCall {
+				return nil
+			}
+			if !v.inErrorTestExpr {
+				if isConditionExpr(ex.Target) {
+					return newError("TypeError", ex.TypeLine, ex.TypeCol, v.source, "Conditions cannot be formatted with 'as json'", "Model states with explicit union types or records.")
+				}
+				targetSt := v.inferExprTypeState(ex.Target)
+				if targetSt.exactBaseType == "number" {
+					return newError(
+						"TypeError",
+						ex.TypeLine,
+						ex.TypeCol,
+						v.source,
+						"Cannot format number with 'as json'",
+						"Use '<num> as text' for numbers, or pass a record, list, map, or JSON text to 'as json'.",
+					)
+				}
+				if targetSt.inboxElemType != "" {
+					return newError(
+						"TypeError",
+						ex.TypeLine,
+						ex.TypeCol,
+						v.source,
+						"Cannot format inbox with 'as json'",
+						"Pass JSON text to parse, or a record, list, or map to serialize with 'as json'.",
+					)
+				}
+			}
+			return nil
+		case "csv":
+			if isLoadCall {
+				return nil
+			}
+			if !v.inErrorTestExpr {
+				return v.checkCSVFormatArg(ex.Target, ex.TypeLine, ex.TypeCol)
+			}
+			return nil
+		}
+		if isLoadCall && ex.TypeName == "text" {
 			return nil
 		}
 		if err := v.validateTypeTarget(ex.TypeName, ex.TypeLine, ex.TypeCol, "as", false); err != nil {
@@ -2267,6 +2354,28 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		return v.validateTypeTarget(ex.ElemType, ex.TypeLine, ex.TypeCol, "inbox as", false)
 
 	case *IdentExpr:
+		if !v.inErrorTestExpr {
+			if ex.Name == "decode_json" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"'decode_json' was removed from Ease",
+					"Use '<text> as json' instead (e.g. 'data = raw as json').",
+				)
+			}
+			if ex.Name == "encode_json" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"'encode_json' was removed from Ease",
+					"Use '<value> as json' instead (e.g. 'raw = user as json').",
+				)
+			}
+		}
 		if v.swarmDepth > 0 && v.workerAssigned != nil && v.workerAssigned[ex.Name] {
 			assignedLocal := false
 			for cur := v.scope; cur != nil && cur != v.workerOuterScope; cur = cur.parent {
@@ -2347,6 +2456,32 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					v.source,
 					fmt.Sprintf("Module %q has no function %q", ex.Module, ex.Callee),
 					fmt.Sprintf("Define 'to %s ...' in module %q.", ex.Callee, ex.Module),
+				)
+			}
+		}
+		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "save" && len(ex.Args) == 2 {
+			dataSt := v.inferExprTypeState(ex.Args[1])
+			if dataSt.exactRecord != "" || dataSt.listElemType != "" || dataSt.unionName != "" || dataSt.inboxElemType != "" || (dataSt.exactBaseType != "" && dataSt.exactBaseType != "text") {
+				gotType := "value"
+				switch {
+				case dataSt.exactRecord != "":
+					gotType = dataSt.exactRecord
+				case dataSt.listElemType != "":
+					gotType = "list of " + dataSt.listElemType
+				case dataSt.unionName != "":
+					gotType = dataSt.unionName
+				case dataSt.inboxElemType != "":
+					gotType = "inbox"
+				case dataSt.exactBaseType != "":
+					gotType = dataSt.exactBaseType
+				}
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Cannot save %s without an explicit format; write 'save <path> <data> as json|csv|bytes'", gotType),
+					"Add 'as json', 'as csv', or 'as bytes' after the data argument.",
 				)
 			}
 		}
@@ -3596,4 +3731,187 @@ func levenshteinDistance(a, b string) int {
 		prev, curr = curr, prev
 	}
 	return prev[len(rb)]
+}
+
+func (v *typeValidator) checkSaveCastExpr(ex *CastExpr, call *CallExpr) error {
+	for _, arg := range call.Args {
+		if err := v.checkExpr(arg); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(arg); err != nil {
+			return err
+		}
+		if err := v.checkNotVoidValue(arg); err != nil {
+			return err
+		}
+	}
+	if ex.Fallback != nil {
+		if err := v.checkExpr(ex.Fallback); err != nil {
+			return err
+		}
+		if !v.inErrorTestExpr {
+			return newError(
+				"TypeError",
+				ex.OrLine,
+				ex.OrCol,
+				v.source,
+				"'or' fallback cannot be used with 'save'",
+				"Write: save \"./out.json\" data as json",
+			)
+		}
+		return nil
+	}
+	if v.inErrorTestExpr || len(call.Args) != 2 {
+		return nil
+	}
+	dataExpr := call.Args[1]
+	dataSt := v.inferExprTypeState(dataExpr)
+	switch ex.TypeName {
+	case "text":
+		if dataSt.exactRecord != "" || dataSt.listElemType != "" || (dataSt.exactBaseType != "" && dataSt.exactBaseType != "text") {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				"save ... as text requires a text value",
+				"Use 'as json', 'as csv', or 'as bytes' for structured data or byte lists.",
+			)
+		}
+		return nil
+	case "json":
+		if dataSt.exactBaseType == "text" {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				"Cannot save raw text with 'as json'; pass a record, list, or map instead",
+				"To save a text string directly, omit 'as json': save \"./out.txt\" txt",
+			)
+		}
+		if dataSt.exactBaseType == "number" {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				"Cannot save number with 'as json'",
+				"Convert the number with 'as text' and save as text, or pass a record, list, or map with 'as json'.",
+			)
+		}
+		return nil
+	case "csv":
+		return v.checkCSVFormatArg(dataExpr, ex.TypeLine, ex.TypeCol)
+	case "bytes":
+		if dataSt.listElemType != "" && dataSt.listElemType != "number" && dataSt.listElemType != "any" {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				fmt.Sprintf("save ... as bytes requires a list of byte numbers (0..255), got list of %s", dataSt.listElemType),
+				"Pass a list of integer byte values (0..255) to 'save ... as bytes'.",
+			)
+		}
+		if dataSt.exactRecord != "" || dataSt.exactBaseType != "" || dataSt.unionName != "" || dataSt.inboxElemType != "" {
+			return newError(
+				"TypeError",
+				ex.TypeLine,
+				ex.TypeCol,
+				v.source,
+				"save ... as bytes requires a list of byte numbers (0..255)",
+				"Example: save \"./out.bin\" byte_list as bytes",
+			)
+		}
+		return nil
+	default:
+		return newError(
+			"TypeError",
+			ex.TypeLine,
+			ex.TypeCol,
+			v.source,
+			fmt.Sprintf("Unsupported format %q for 'save'", ex.TypeName),
+			"Supported formats for 'save' are: text, json, csv, bytes.",
+		)
+	}
+}
+
+func (v *typeValidator) checkCSVFormatArg(target Expr, line, col int) error {
+	if isConditionExpr(target) {
+		return newError("TypeError", line, col, v.source, "Conditions cannot be formatted as csv", "Pass CSV text or a list of flat records/maps to 'as csv'.")
+	}
+	st := v.inferExprTypeState(target)
+	if st.exactBaseType == "text" {
+		return nil
+	}
+	if st.listElemType != "" {
+		if st.listElemType == "map" || st.listElemType == "any" {
+			return nil
+		}
+		if defDecl, isDef := v.defs[st.listElemType]; isDef {
+			for _, f := range defDecl.Fields {
+				if fieldType, nonFlat := v.nonFlatCSVFieldType(f); nonFlat {
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is %s (CSV fields must be text or number)", defDecl.Name, defDecl.Name, f.Name, fieldType),
+						"Flatten nested records/lists into atomic text or number fields before converting to CSV.",
+					)
+				}
+			}
+			return nil
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Cannot format list of %s as csv; 'as csv' requires a list of flat records or maps", st.listElemType),
+			"Use a list of flat 'def' records or maps with text/number fields.",
+		)
+	}
+	if st.exactRecord != "" || st.exactBaseType != "" || st.unionName != "" || st.inboxElemType != "" {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			"Cannot format non-table value as csv; 'as csv' requires CSV text or a list of flat records/maps",
+			"Wrap records in a list (e.g. 'rows as csv') or pass CSV text ('raw as csv').",
+		)
+	}
+	return nil
+}
+
+func (v *typeValidator) nonFlatCSVFieldType(f DefField) (string, bool) {
+	if _, isList := f.Default.(*TypedListExpr); isList {
+		return "list", true
+	}
+	if _, isList := f.Default.(*ListExpr); isList {
+		return "list", true
+	}
+	st := v.inferExprTypeState(f.Default)
+	if st.listElemType != "" {
+		return "list", true
+	}
+	if st.exactRecord != "" {
+		return st.exactRecord, true
+	}
+	for _, opt := range f.Allowed {
+		optSt := v.inferExprTypeState(opt)
+		if optSt.exactRecord != "" {
+			return optSt.exactRecord, true
+		}
+		if optSt.unionName != "" {
+			for _, uv := range v.resolvedUnions[optSt.unionName] {
+				if uv.kind == variantRecord {
+					return uv.recordName, true
+				}
+			}
+		}
+	}
+	return "", false
 }

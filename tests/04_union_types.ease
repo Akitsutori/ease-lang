@@ -62,7 +62,8 @@ test "Union Types & Werteraum-Prüfung"
     log_only_success "FEHLER" is "Irgendetwas anderes ist passiert"
     log_only_success err is "Irgendetwas anderes ist passiert"
 
-    parsed = (decode_json '{"code": 404, "message": "Not Found"}') as outcome
+    parsed_json = '{"code": 404, "message": "Not Found"}' as json
+    parsed = parsed_json as outcome
     parsed is ErrorMessage
     process_response parsed is "Fehler 404: Not Found"
 

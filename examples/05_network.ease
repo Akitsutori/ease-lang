@@ -74,19 +74,22 @@ test "import network, fetch/send interface & form vs. content"
     describe_event events.2 is "key:Enter"
 
     # Expliziter zweistufiger Weg: JSON-Parsing -> strikte Strukturprüfung (Pflichtfelder)
-    raw_map = decode_json '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}'
+    raw_map = '{"id": 42, "name": "Gast", "role": "admin", "ignored": 1}' as json
     u = raw_map as api_user
     u is api_user
     u.id is 42
     u.name is "Gast"
     u.role is "admin"
 
-    raw_json = encode_json u
-    roundtrip = (decode_json raw_json) as api_user
+    raw_json = u as json
+    parsed_roundtrip = raw_json as json
+    roundtrip = parsed_roundtrip as api_user
     roundtrip is api_user
 
     '{"id": 42, "name": "Gast", "role": "admin"}' as api_user is error
-    (decode_json '{"id": 42, "role": "admin"}') as api_user is error
-    (decode_json '{"id": 42, "name": "Gast", "role": "hacker"}') as api_user is error
-    decode_json "" is error
+    missing_name = '{"id": 42, "role": "admin"}' as json
+    missing_name as api_user is error
+    bad_role = '{"id": 42, "name": "Gast", "role": "hacker"}' as json
+    bad_role as api_user is error
+    "" as json is error
 end

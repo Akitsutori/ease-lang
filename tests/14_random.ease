@@ -45,12 +45,12 @@ end
 
 test "random:shuffle returns an immutable shuffled copy"
     orig = list 10, 20, 30, 40, 50
-    snapshot = encode_json orig
+    snapshot = orig as json
     shuffled = random:shuffle orig
 
-    encode_json orig is snapshot
+    orig as json is snapshot
     count shuffled is 5
-    encode_json (sort shuffled) is snapshot
+    (sort shuffled) as json is snapshot
 
     empty = list as number
     count (random:shuffle empty) is 0

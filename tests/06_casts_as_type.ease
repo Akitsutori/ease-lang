@@ -1,7 +1,7 @@
-# Feature 06: Explizites JSON-Parsing (decode_json / encode_json) & strikter Strukturvertrag (as)
+# Feature 06: Explizites JSON-Parsing (as json) & strikter Strukturvertrag (as)
 #
 # Trennung der Verantwortlichkeiten:
-#   1. Format-Parsing:     decode_json <text> / encode_json <val>
+#   1. Format-Parsing:     <text> as json / <val> as json
 #   2. Strukturvertrag:    <map|record> as <def> (alle def-Felder PFLICHT, keine Defaults!)
 #   3. Internes Bauen:     <def> with ... (Default-Werte aus def werden hier genutzt)
 #   4. Atomare Textform:   as text & "{expr}" nur für text und number
@@ -20,7 +20,7 @@ raw_ok = "42" as number
 num_as_text = 123 as text
 vip_ticket = "vip" as ticket
 
-parsed_map = decode_json '{"id": 7, "name": "Aria", "role": "admin", "ignored": true}'
+parsed_map = '{"id": 7, "name": "Aria", "role": "admin", "ignored": true}' as json
 valid_user = parsed_map as api_user
 default_user = api_user with id = 9
 
@@ -35,7 +35,7 @@ test "Explizites JSON-Parsing & striktes as (Ausgang A: gültige Daten)"
     default_user.name is "Gast"
     default_user.role is "member"
 
-    # Zweistufiger Weg: decode_json -> as api_user
+    # Zweistufiger Weg: as json -> as api_user
     type parsed_map is "map"
     parsed_map.id is 7
     valid_user is api_user
@@ -43,9 +43,10 @@ test "Explizites JSON-Parsing & striktes as (Ausgang A: gültige Daten)"
     valid_user.name is "Aria"
     valid_user.role is "admin"
 
-    # Expliziter Roundtrip: encode_json -> decode_json -> as api_user
-    json_out = encode_json valid_user
-    roundtrip = (decode_json json_out) as api_user
+    # Expliziter Roundtrip: as json -> as json -> as api_user
+    json_out = valid_user as json
+    parsed_out = json_out as json
+    roundtrip = parsed_out as api_user
     roundtrip is api_user
     roundtrip.id is 7
     roundtrip.name is "Aria"
@@ -60,15 +61,20 @@ test "Striktes as, Pflichtfelder & atomare Textgrenze (Ausgang B: Fehlerabbruch)
     "" as api_user is error
 
     # Fehlendes Pflichtfeld in `as <def>` (kein stilles Auffüllen mit Defaults)
-    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
+    missing_role = '{"id": 7, "role": "admin"}' as json
+    missing_role as api_user is error
 
     # Ungültiges JSON oder falscher Strukturtyp
-    decode_json "" is error
-    decode_json '{broken' is error
-    (decode_json 'null') as api_user is error
-    (decode_json '[1, 2]') as api_user is error
-    (decode_json '{"id": "keine-zahl", "name": "Aria", "role": "admin"}') as api_user is error
-    (decode_json '{"id": 7, "name": "Aria", "role": "superuser"}') as api_user is error
+    "" as json is error
+    '{broken' as json is error
+    null_json = 'null' as json
+    null_json as api_user is error
+    arr_json = '[1, 2]' as json
+    arr_json as api_user is error
+    bad_id_json = '{"id": "keine-zahl", "name": "Aria", "role": "admin"}' as json
+    bad_id_json as api_user is error
+    bad_role_json = '{"id": 7, "name": "Aria", "role": "superuser"}' as json
+    bad_role_json as api_user is error
     42 as api_user is error
 
     # Symmetrie: strukturierte Werte nicht in `as text` oder `{...}` Interpolation

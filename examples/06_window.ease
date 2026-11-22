@@ -43,7 +43,8 @@ to run_window
         end
 
         raw_state = screen:present win current
-        state = decode_json raw_state as screen.frame_state
+        parsed_state = raw_state as json
+        state = parsed_state as screen.frame_state
         check state is not screen.frame_state -> "Fensterfehler"
     end
 

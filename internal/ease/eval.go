@@ -1078,7 +1078,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 					pCol,
 					ev.source,
 					fmt.Sprintf("Cannot interpolate %s into text", TypeName(val)),
-					"String interpolation '{...}' only allows atomic values (text, number). Interpolate a field like '{hero.hp}' or use 'encode_json ...'.",
+					"String interpolation '{...}' only allows atomic values (text, number). Interpolate a field like '{hero.hp}' or use '<value> as json'.",
 				)
 			}
 			b.WriteString(FormatValue(val))
@@ -1379,7 +1379,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		return matched, nil
 
 	case *CastExpr:
-		if call, isCall := e.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" && (e.TypeName == "csv" || e.TypeName == "bytes" || e.TypeName == "text") {
+		if call, isCall := e.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "load" && (e.TypeName == "csv" || e.TypeName == "bytes" || e.TypeName == "text" || e.TypeName == "json") {
 			if e.Fallback != nil {
 				return nil, newError(
 					"TypeError",
@@ -1401,6 +1401,37 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				}
 				return ev.evalLoad(pathStr, e.TypeName, e.Line, e.Col)
 			}
+		}
+		if call, isCall := e.Target.(*CallExpr); isCall && call.Module == "" && call.Callee == "save" {
+			if e.Fallback != nil {
+				return nil, newError(
+					"TypeError",
+					e.OrLine,
+					e.OrCol,
+					ev.source,
+					"'or' fallback cannot be used with 'save'",
+					"Write: save \"./out.json\" data as json",
+				)
+			}
+			if len(call.Args) != 2 {
+				return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "save takes 2 arguments (path, data)", "")
+			}
+			pathVal, err := ev.EvalExpr(call.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			pathStr, ok := pathVal.(string)
+			if !ok {
+				return nil, newError("TypeError", e.Line, e.Col, ev.source, fmt.Sprintf("save requires a text file path as first argument, got %s", TypeName(pathVal)), "Example: save \"./out.json\" data as json")
+			}
+			dataVal, err := ev.EvalExpr(call.Args[1], env)
+			if err != nil {
+				return nil, err
+			}
+			if err := ev.evalSave(pathStr, dataVal, e.TypeName, env, e.Line, e.Col); err != nil {
+				return nil, err
+			}
+			return nil, nil
 		}
 		targetVal, err := ev.EvalExpr(e.Target, env)
 		if err != nil {

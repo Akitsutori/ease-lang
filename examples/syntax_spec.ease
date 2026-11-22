@@ -105,8 +105,9 @@ test "Happy Paths gemäß README"
     "42" as number is 42
     42 as text is "42"
     "vip" as ticket is "vip"
-    (decode_json '{"id": 7, "name": "Gast", "role": "admin"}') as api_user is api_user
-    decode_json '{"id": 7, "msg": "hi\n{raw}"}' is not text
+    user_map = '{"id": 7, "name": "Gast", "role": "admin"}' as json
+    user_map as api_user is api_user
+    '{"id": 7, "msg": "hi\n{raw}"}' as json is not text
 
     scores = list 10, 25, 40
     scores.1 is 10
@@ -156,19 +157,23 @@ test "Guards, Verzweigungen, Logik & Vergleiche: 8 Negativtests"
     ((1 > 0) < (1 < 0)) is error
 end
 
-test "Striktes as Casting & decode_json (Ausgang B): 10 Negativtests"
+test "Striktes as Casting & as json (Ausgang B): 10 Negativtests"
     "abc" as number is error
     "" as number is error
     (list "a", "b") as number is error
     "pending" as ticket is error
     123 as ticket is error
     '{"id": 7, "name": "Gast", "role": "admin"}' as api_user is error
-    decode_json "" is error
-    decode_json '{broken' is error
-    (decode_json 'null') as api_user is error
-    (decode_json '{"id": 7, "role": "admin"}') as api_user is error
-    (decode_json '{"id": "abc", "name": "Gast", "role": "admin"}') as api_user is error
-    (decode_json '{"id": 7, "name": "Gast", "role": "root"}') as api_user is error
+    "" as json is error
+    '{broken' as json is error
+    null_json = 'null' as json
+    null_json as api_user is error
+    missing_name = '{"id": 7, "role": "admin"}' as json
+    missing_name as api_user is error
+    bad_id = '{"id": "abc", "name": "Gast", "role": "admin"}' as json
+    bad_id as api_user is error
+    bad_role = '{"id": 7, "name": "Gast", "role": "root"}' as json
+    bad_role as api_user is error
     hero as text is error
     bad_interp hero is error
 end

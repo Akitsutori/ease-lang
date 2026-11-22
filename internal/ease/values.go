@@ -18,7 +18,7 @@ type RecordValue struct {
 	IsPrototype bool
 }
 
-// MapValue represents a structured key-value object produced by `decode_json` or `load ... as csv`.
+// MapValue represents a structured key-value object produced by `<text> as json` or `as csv`.
 type MapValue struct {
 	Fields  map[string]Value
 	Order   []string

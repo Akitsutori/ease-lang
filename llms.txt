@@ -4,7 +4,7 @@ Ease is a small, strict, bracket-free language implemented in Go.
 Every construct has **one canonical form** and **zero silent fallbacks**.
 
 ## 1. Core Invariants
-- **No `bool`, no `true`/`false` literals, no storable conditions**: Keep conditions (`x > 0`, `a is b`, `contains txt sub`, `and`, `or`, `not`) inside `check`, `where`, and `test` (there is no `if` keyword). Conditions cannot be stored, printed, passed, or returned (`ok = 3 > 2`, `say 3 > 2` -> `TypeError`). Model outcomes via explicit `def` unions/records. Text boundaries (source, `ask`, `network:fetch`, `decode_json`) reject invalid UTF-8 and normalize to Unicode NFC.
+- **No `bool`, no `true`/`false` literals, no storable conditions**: Keep conditions (`x > 0`, `a is b`, `contains txt sub`, `and`, `or`, `not`) inside `check`, `where`, and `test` (there is no `if` keyword). Conditions cannot be stored, printed, passed, or returned (`ok = 3 > 2`, `say 3 > 2` -> `TypeError`). Model outcomes via explicit `def` unions/records. Text boundaries (source, `ask`, `network:fetch`, `as json`) reject invalid UTF-8 and normalize to Unicode NFC.
 - **Three `check` forms & arrow law (`->` = value return or `-> end`)**:
   - `-> <expr>` returns a value from a `to` function or `swarm loop` iteration; multi-line `to` functions without any `->` are `void` procedures (cannot be assigned/passed as values, like `say`, `put`, `close`, `synth:play`, `screen:open`, `network:reply_*`, `network:tcp_send`). No implicit returns at end of multi-line `to` or `swarm loop`. One-liner: `to add a b -> a + b`. Statements/side effects (`say`, `x = 1`, `void` calls) are forbidden to the right of `->`. Top-level `-> <value>` is a `TypeError` (use `-> end` only to exit `loop`/`take`). `fail` is removed (model errors with explicit `def` unions/records).
   - 3 `check` forms: (1) `check <cond> -> <value | end>` (single-line exit guard); (2) `check <cond>\n  stmts...\n  [else\n  stmts...]\nend` (effect block; continues after `end` unless `->` runs); (3) `check\n  <cond> -> <value | end>\n  [else ...]\nend` (verdict table; bare precondition rules without `->` are removed).
@@ -19,8 +19,8 @@ Every construct has **one canonical form** and **zero silent fallbacks**.
   - `def` with `|` creates a union; without `|`, `def X = val` defines an immutable constant (no 1-variant unions).
   - **4 building blocks**: literals (`"OK"`, `404`), `text`/`number`, `def` records, and named unions (flattened automatically; usable as field types and `list as <union>`). **3 guardrails**: no redundant literals with `text`/`number`, no duplicates, and records in the same union must differ in a mandatory field/type/disjoint constraint.
   - **Narrowing & exhaustiveness**: `res is ErrorMessage -> ...` (and post-guard after `check res is not ErrorMessage -> ...`) narrows `res` for field access; closed-union `check ... end` must cover all variants or include `else`/post-`end` return.
-  - **JSON & `as` contracts**: `decode_json txt` parses JSON (`true`/`false` -> `"true"`/`"false"`); `encode_json val` serializes back (`"true" | "false"` fields emit JSON booleans). `as text` works only on `text`/`number`. `<map_or_rec> as <def_or_union>` validates all mandatory fields (`TypeError` on `Missing field '...'` or raw `text`). Defaults live in `<def> with ...`.
-  - **Fallbacks (`<expr> as <type> or <fallback>`)**: Allowed for `number`, `text`, and scalar unions (`"404" as HttpCode or 200`). Evaluates `<fallback>` lazily (memoized in batch casts like `lines as number or 0`) and requires static AOT type match to `<type>`/`<union>`. Forbidden on `def` records, record unions, and `load ... as ...`.
+  - **JSON, CSV & `as` contracts**: `<text> as json` parses JSON (`true`/`false` -> `"true"`/`"false"`); `<rec|list|map> as json` serializes back (`"true"|"false"` fields emit JSON booleans). `<text> as csv` / `<flat_rec_or_map_list> as csv` converts CSV. `as text` works only on `text`/`number`. Chained `as` (`x as A as B`, `x as A or y as B`) is forbidden. `<map_or_rec> as <def_or_union>` validates all mandatory fields (`TypeError` on `Missing field '...'` or raw `text`). Defaults live in `<def> with ...`.
+  - **Fallbacks (`<expr> as <type> or <fallback>`)**: Allowed for `number`, `text`, and scalar unions (`"404" as HttpCode or 200`). Evaluates `<fallback>` lazily (memoized in batch casts like `lines as number or 0`) and requires static AOT type match to `<type>`/`<union>`. Forbidden on `def` records, record unions, `json`, `csv`, `bytes`, and `load ... as ...`.
 
 ## 2. Operators, Precedence, Escapes & Cheat Sheet
 - **Precedence (high -> low)**:
@@ -88,11 +88,11 @@ end
 loop users
     say "#{it.index} {it.id}: {it.name}"
 end
-
-raw_map = decode_json '{"id": 7, "name": "Guest", "role": "admin"}'
+raw_map = '{"id": 7, "name": "Guest", "role": "admin"}' as json
 parsed = raw_map as user
-encoded = encode_json parsed
-raw_err = decode_json '{"code": 503, "message": "Unavailable"}' as outcome
+encoded = parsed as json
+err_map = '{"code": 503, "message": "Unavailable"}' as json
+raw_err = err_map as outcome
 parsed_port = match "PORT=8080"
     "PORT={port as number}" -> port
     else -> 0
@@ -122,7 +122,8 @@ test "example"
     process_response raw_err is "Error 503: Unavailable"
     "abc" as number is error
     '{"id": 7, "name": "Guest", "role": "admin"}' as user is error
-    (decode_json '{"id": 7, "role": "admin"}') as user ->
+    missing_name = '{"id": 7, "role": "admin"}' as json
+    missing_name as user ->
         error.type is "TypeError"
         error.message is "Missing field 'user.name'"
     end
@@ -136,7 +137,7 @@ end
   - **I/O & Control**: `say val` (appends `\n`, `void`), `ask prompt -> text` (`RuntimeError` on EOF; skipped on EOF during `ease test` / `--check` setup), `type val -> text`, `fields rec_or_map -> list<text>` (`fail` removed)
   - **Math**: `abs n`, `floor n`, `round n`, `min a b`, `max a b` (**no** `ceil` or `mod` verb — use `-floor (-x)` or `%`)
   - **Text & Lists**: `count list_or_text` (runes for `text`), `range start end` (inclusive, empty if `start > end`), `append xs item_or_list` (returns new list), `slice list_or_text start end` (1-based, both bounds inclusive, runes for `text`, clamps bounds to `1..len`, empty if out of order), `split txt sep`, `join text_list sep`, `trim txt`, `upper txt`, `lower txt`, `replace txt old new` (`old` != `""`), `contains txt sub` (condition), `sum num_list`, `avg num_list` (errors if empty), `sort num_or_text_list`
-  - **JSON & Files**: `decode_json txt`, `encode_json val`, `load path [as text|csv|bytes]` (50 MB max; `csv` -> `list<map>` with `it.1` / `it.("Col")` / `it as <def>`; `bytes` -> `0..255` list), `save path text_or_byte_list -> number` (`csv`/`bytes` valid only with `load`)
+  - **Formats & Files**: `<val_or_txt> as json` / `as csv`, `load path [as text|json|csv|bytes]` (50 MB max; `csv` -> `list<map>` with `it.1` / `it.("Col")` / `it as <def>`; `bytes` -> `0..255` list), `save path data [as text|json|csv|bytes]` (`void` statement; `as <format>` required for non-`text`; `as bytes` valid only with `load`/`save`)
   - **Inbox (void statements!)**: `put box val`, `close box` (like `synth:play`, pure statements with no return value — never assign or pass as values!)
 - **Lists, vectors, `where`, batch/index `with`**: Numeric lists support element-wise `+`, `-`, `*`, `/`, `%` and scalar broadcasting (`prices * 1.19 + shipping`). `<list> where <cond>` (single-line or `where ... end` block with union narrowing on `it`) filters; `<list> with field = expr` updates records uniformly (both bind `it` and `it.index` `1..N`, never implicit fields). `<list> with .1 = val` (or `.pos = val`, `.(expr) = val`) returns a new list with updated 1-based elements.
 - **Tests (`test "label" ... end`)**: Supports assignments, `loop`, direct conditions, `is` / `is not`, `expr is error` / `expr is not error`, and `expr -> error.type is "..." / error.message is "..." end` soft assertions.

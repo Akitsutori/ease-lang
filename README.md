@@ -113,7 +113,7 @@ charges = swarm loop orders
     -> 0
 end
 
-say "Room fees in arrival order: {encode_json charges}, total: {sum charges}"
+say "Room fees in arrival order: {charges as json}, total: {sum charges}"
 ```
 
 `swarm loop` spins up isolated workers over any list or `range`, keeps outer variables strictly read-only, lets any worker return early with `check ... -> <value>`, and guarantees `charges` comes back in `1..N` order so `sum charges` is always deterministic.
@@ -161,7 +161,7 @@ test "late-night HTTP switchboard handles parallel callers cleanly"
         -> network:fetch phone it
     end
 
-    replies.1 is (encode_json desk_status)
+    replies.1 is (desk_status as json)
     replies.2 is "Wake-up call set for room 402 in 15m"
     replies.3 is ""
     close requests
@@ -201,7 +201,8 @@ to paint_hotel win
 
         sc = screen.scene with background = "midnight", shapes = shapes
         raw = screen:present win sc
-        st = decode_json raw as screen.frame_state
+        parsed_st = raw as json
+        st = parsed_st as screen.frame_state
         check st.status is "closed" -> end
     end
 end

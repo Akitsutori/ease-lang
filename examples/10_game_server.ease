@@ -134,7 +134,8 @@ test "game server handles parallel HTTP chat/status and TCP inbox cleanly"
     post_res = network:send api "/chat" "hello world"
     status_res = network:fetch api "/status"
 
-    decoded = decode_json status_res as world_state
+    parsed_status = status_res as json
+    decoded = parsed_status as world_state
     decoded.moves is 1
     decoded.messages is 1
     decoded.last_x is 14

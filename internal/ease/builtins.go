@@ -3,7 +3,6 @@ package ease
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -30,8 +29,6 @@ var builtinArities = map[string]int{
 	"upper":          1,
 	"lower":          1,
 	"fields":         1,
-	"decode_json":    1,
-	"encode_json":    1,
 	"http_call":      1,
 	"sum":            1,
 	"avg":            1,
@@ -475,57 +472,6 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		}
 		return &ListValue{ElemType: "text", Elements: out}, true, nil
 
-	case "decode_json":
-		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "decode_json takes 1 argument (text)", "Example: decode_json raw_text")
-		}
-		rawStr, ok := args[0].(string)
-		if !ok {
-			return nil, true, newError(
-				"TypeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("decode_json requires text, got %s", TypeName(args[0])),
-				"Pass a JSON string to decode, e.g. decode_json '{\"id\": 1}'.",
-			)
-		}
-		if strings.TrimSpace(rawStr) == "" {
-			return nil, true, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				"Cannot decode empty text as JSON",
-				"Check for empty responses before calling 'decode_json'.",
-			)
-		}
-		var parsed any
-		if err := json.Unmarshal([]byte(rawStr), &parsed); err != nil {
-			return nil, true, newError(
-				"RuntimeError",
-				line,
-				col,
-				ev.source,
-				fmt.Sprintf("Invalid JSON in decode_json: %v", err),
-				"Provide valid JSON text.",
-			)
-		}
-		return jsonAnyToEase(parsed), true, nil
-
-	case "encode_json":
-		if len(args) != 1 {
-			return nil, true, newError("RuntimeError", line, col, ev.source, "encode_json takes 1 argument", "Example: encode_json user")
-		}
-		if err := validateJSONEncodable(args[0]); err != nil {
-			return nil, true, newError("TypeError", line, col, ev.source, err.Error(), "Conditions and union definitions cannot be encoded as JSON.")
-		}
-		b, err := json.Marshal(easeValueToJSON(args[0]))
-		if err != nil {
-			return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot encode %s to JSON: %v", TypeName(args[0]), err), "")
-		}
-		return string(b), true, nil
-
 	case "split":
 		if len(args) != 2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "split takes 2 arguments", "")
@@ -689,39 +635,10 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if !ok || strings.TrimSpace(pathStr) == "" {
 			return nil, true, newError("TypeError", line, col, ev.source, "save requires a non-empty text file path as first argument", "Example: save \"./out.txt\" content")
 		}
-		switch data := args[1].(type) {
-		case string:
-			if !utf8.ValidString(data) {
-				return nil, true, newError("RuntimeError", line, col, ev.source, "Text passed to save contains invalid UTF-8 bytes", "")
-			}
-			raw := []byte(data)
-			if err := os.WriteFile(pathStr, raw, 0o644); err != nil {
-				return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
-			}
-			return float64(len(raw)), true, nil
-		case *ListValue:
-			buf := make([]byte, len(data.Elements))
-			for i, el := range data.Elements {
-				n, isNum := el.(float64)
-				if !isNum || n != math.Trunc(n) || n < 0 || n > 255 {
-					return nil, true, newError(
-						"RuntimeError",
-						line,
-						col,
-						ev.source,
-						fmt.Sprintf("Byte value at index %d must be an integer in 0..255, got %s", i+1, FormatValue(el)),
-						"Pass a list of integer byte values (0..255) to save binary files.",
-					)
-				}
-				buf[i] = byte(int(n))
-			}
-			if err := os.WriteFile(pathStr, buf, 0o644); err != nil {
-				return nil, true, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
-			}
-			return float64(len(buf)), true, nil
-		default:
-			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("save expects text or a list of bytes (0..255), got %s", TypeName(args[1])), "Pass text or a list of numbers (0..255) to 'save'.")
+		if err := ev.evalSave(pathStr, args[1], "", ev.global, line, col); err != nil {
+			return nil, true, err
 		}
+		return nil, true, nil
 
 	case "http_call":
 		if len(args) != 1 {
@@ -1110,14 +1027,22 @@ func (ev *Evaluator) evalLoad(pathStr, mode string, line, col int) (Value, error
 		return text, nil
 	}
 
+	if mode == "json" {
+		return ev.parseJSONValue(text, line, col)
+	}
+
 	// mode == "csv"
+	return ev.parseCSVText(text, fmt.Sprintf("CSV file %q", pathStr), line, col)
+}
+
+func (ev *Evaluator) parseCSVText(text, sourceLabel string, line, col int) (*ListValue, error) {
 	reader := csv.NewReader(strings.NewReader(text))
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Invalid CSV in %q: %v", pathStr, err), "Check CSV quoting and ensure every row has the same number of columns.")
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Invalid CSV in %s: %v", sourceLabel, err), "Check CSV quoting and ensure every row has the same number of columns.")
 	}
 	if len(records) == 0 || len(records[0]) == 0 {
-		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("CSV file %q is empty", pathStr), "Provide at least a header row in the CSV file.")
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("%s is empty", sourceLabel), "Provide at least a header row in the CSV.")
 	}
 
 	headers := make([]string, len(records[0]))
@@ -1125,7 +1050,7 @@ func (ev *Evaluator) evalLoad(pathStr, mode string, line, col int) (Value, error
 	for i, h := range records[0] {
 		nh := norm.NFC.String(h)
 		if seenHeaders[nh] {
-			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Duplicate CSV header %q in %q", nh, pathStr), "Ensure every CSV column header has a unique name.")
+			return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Duplicate CSV header %q in %s", nh, sourceLabel), "Ensure every CSV column header has a unique name.")
 		}
 		seenHeaders[nh] = true
 		headers[i] = nh
@@ -1142,4 +1067,92 @@ func (ev *Evaluator) evalLoad(pathStr, mode string, line, col int) (Value, error
 		rows = append(rows, &MapValue{Fields: fields, Order: order, FromCSV: true})
 	}
 	return &ListValue{Elements: rows}, nil
+}
+
+func (ev *Evaluator) evalSave(pathStr string, data Value, format string, env *Env, line, col int) error {
+	if strings.TrimSpace(pathStr) == "" {
+		return newError("TypeError", line, col, ev.source, "save requires a non-empty text file path as first argument", "Example: save \"./out.txt\" content")
+	}
+	switch format {
+	case "", "text":
+		str, ok := data.(string)
+		if !ok {
+			if format == "text" {
+				return newError("TypeError", line, col, ev.source, fmt.Sprintf("save ... as text requires text, got %s", TypeName(data)), "Write 'save <path> <data> as json|csv|bytes' for structured data or bytes.")
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot save %s without an explicit format; write 'save <path> <data> as json|csv|bytes'", TypeName(data)),
+				"Add 'as json', 'as csv', or 'as bytes' after the data argument.",
+			)
+		}
+		if !utf8.ValidString(str) {
+			return newError("RuntimeError", line, col, ev.source, "Text passed to save contains invalid UTF-8 bytes", "")
+		}
+		if err := os.WriteFile(pathStr, []byte(str), 0o644); err != nil {
+			return newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+		}
+		return nil
+
+	case "json":
+		if _, isStr := data.(string); isStr {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				"Cannot save raw text with 'as json'; pass a record, list, or map instead",
+				"To save a text string directly, omit 'as json': save \"./out.txt\" txt",
+			)
+		}
+		jsonText, err := ev.formatJSONValue(data, line, col)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(pathStr, []byte(jsonText), 0o644); err != nil {
+			return newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+		}
+		return nil
+
+	case "csv":
+		csvText, err := ev.formatCSVValue(data, env, line, col)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(pathStr, []byte(csvText), 0o644); err != nil {
+			return newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+		}
+		return nil
+
+	case "bytes":
+		lv, ok := data.(*ListValue)
+		if !ok {
+			return newError("TypeError", line, col, ev.source, fmt.Sprintf("save ... as bytes requires a list of byte numbers (0..255), got %s", TypeName(data)), "Example: save \"./out.bin\" byte_list as bytes")
+		}
+		buf := make([]byte, len(lv.Elements))
+		for i, el := range lv.Elements {
+			n, isNum := el.(float64)
+			if !isNum || n != math.Trunc(n) || n < 0 || n > 255 {
+				return newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Byte value at index %d must be an integer in 0..255, got %s", i+1, FormatValue(el)),
+					"Pass a list of integer byte values (0..255) to 'save ... as bytes'.",
+				)
+			}
+			buf[i] = byte(int(n))
+		}
+		if err := os.WriteFile(pathStr, buf, 0o644); err != nil {
+			return newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to save file %q: %v", pathStr, err), "Check that the target directory exists and is writable.")
+		}
+		return nil
+
+	default:
+		return newError("TypeError", line, col, ev.source, fmt.Sprintf("Unsupported format %q for 'save'", format), "Supported formats for 'save' are: text, json, csv, bytes.")
+	}
 }

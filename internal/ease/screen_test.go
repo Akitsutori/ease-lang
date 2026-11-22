@@ -125,7 +125,8 @@ to render_loop win
     loop
         sc = screen.scene with background = "midnight"
         raw = screen:present win sc
-        st = decode_json raw as screen.frame_state
+        decoded_st = raw as json
+        st = decoded_st as screen.frame_state
         check st.status is "closed" -> end
     end
 end
@@ -138,7 +139,7 @@ take events
     check it.kind is "close" -> end
 end
 
-say encode_json seen
+say (seen as json)
 `
 	var out bytes.Buffer
 	if _, err := EvalProgramHeadlessWithTrace(src, strings.NewReader(""), &out, nil); err != nil {
@@ -158,7 +159,8 @@ screen:open win events
 close events
 
 raw = screen:present win (screen.scene)
-st = decode_json raw as screen.frame_state
+decoded_st = raw as json
+st = decoded_st as screen.frame_state
 say st.status
 `
 	var out2 bytes.Buffer

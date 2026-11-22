@@ -58,12 +58,12 @@ test "random:pick and immutable random:shuffle"
     picked = random:pick items
     picked is text
 
-    original_snapshot = encode_json items
+    original_snapshot = items as json
     shuffled = random:shuffle items
 
-    encode_json items is original_snapshot
+    (items as json) is original_snapshot
     count shuffled is 4
-    encode_json (sort shuffled) is encode_json (sort items)
+    ((sort shuffled) as json) is ((sort items) as json)
 
     empty = list as number
     count (random:shuffle empty) is 0

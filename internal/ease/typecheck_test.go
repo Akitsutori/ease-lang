@@ -3,6 +3,7 @@ package ease
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,8 +105,10 @@ def ticket = "open" | "closed"
 a = 42 as text
 b = "12" as number
 d = "open" as ticket
-e = (decode_json '{"name": "Ada"}') as custom_user
-f = (decode_json '{"status": 200, "body": "ok", "error": ""}') as network.http_response
+m1 = '{"name": "Ada"}' as json
+e = m1 as custom_user
+m2 = '{"status": 200, "body": "ok", "error": ""}' as json
+f = m2 as network.http_response
 g = list as number
 `
 	if _, err := ParseProgram(validSrc); err != nil {
@@ -193,16 +196,19 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     err_rec is tagged
 
     # Explicit JSON -> union conversion picks ErrorMessage
-    raw_err = (decode_json '{"code": 503, "message": "Unavailable"}') as outcome
+    raw_err_map = '{"code": 503, "message": "Unavailable"}' as json
+    raw_err = raw_err_map as outcome
     raw_err is ErrorMessage
     process_response raw_err is "Fehler 503: Unavailable"
     process_response "OK" is "Erfolgreich verarbeitet"
     process_response "FEHLER" is "Unbekannter Fehler"
 
     # Record field typed by union accepts literal and ErrorMessage from JSON
-    env1 = (decode_json '{"res": "OK"}') as envelope
+    env1_map = '{"res": "OK"}' as json
+    env1 = env1_map as envelope
     env1.res is "OK"
-    env2 = (decode_json '{"res": {"code": 400, "message": "Bad"}}') as envelope
+    env2_map = '{"res": {"code": 400, "message": "Bad"}}' as json
+    env2 = env2_map as envelope
     env2.res is ErrorMessage
     inspect_check env2.res is "check:400:Bad"
     inspect_check "OK" is "other"
@@ -214,7 +220,8 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     count items is 2
     items.2 is ErrorMessage
 
-    json_items = (decode_json '["OK", {"code": 404, "message": "Missing"}]') as outcome
+    json_items_raw = '["OK", {"code": 404, "message": "Missing"}]' as json
+    json_items = json_items_raw as outcome
     json_items.1 is "OK"
     json_items.2 is ErrorMessage
 
@@ -225,7 +232,8 @@ test "orthogonal union building blocks, flattening, JSON as, narrowing, and else
     server_error_only err_rec is "handled"
 
     # Reject incomplete map when decoding into union
-    (decode_json '{"code": 1}') as outcome is error
+    incomplete_map = '{"code": 1}' as json
+    incomplete_map as outcome is error
 end
 `
 	report, err := RunChecks(src)
@@ -302,19 +310,25 @@ end
 def actor3 = RoleAdmin | RoleGuest
 
 test "distinguishable record unions decode cleanly"
-    a1 = (decode_json '{"name": "Ada", "level": 9}') as actor1
+    ma1 = '{"name": "Ada", "level": 9}' as json
+    a1 = ma1 as actor1
     a1 is AdminDiffField
-    g1 = (decode_json '{"name": "Bob", "ticket": "day"}') as actor1
+    mg1 = '{"name": "Bob", "ticket": "day"}' as json
+    g1 = mg1 as actor1
     g1 is GuestDiffField
 
-    p1 = (decode_json '{"val": 42}') as actor2
+    mp1 = '{"val": 42}' as json
+    p1 = mp1 as actor2
     p1 is NumPayload
-    p2 = (decode_json '{"val": "hi"}') as actor2
+    mp2 = '{"val": "hi"}' as json
+    p2 = mp2 as actor2
     p2 is TextPayload
 
-    r1 = (decode_json '{"kind": "admin", "name": "Ada"}') as actor3
+    mr1 = '{"kind": "admin", "name": "Ada"}' as json
+    r1 = mr1 as actor3
     r1 is RoleAdmin
-    r2 = (decode_json '{"kind": "guest", "name": "Bob"}') as actor3
+    mr2 = '{"kind": "guest", "name": "Bob"}' as json
+    r2 = mr2 as actor3
     r2 is RoleGuest
 end
 `
@@ -687,13 +701,13 @@ def reply
     label = "true"
 end
 
-m = decode_json '{"ok": true, "label": "true"}'
+m = '{"ok": true, "label": "true"}' as json
 r = m as reply
 say r.ok
-say encode_json r
+say (r as json)
 
-free = decode_json '{"ok": true}'
-say encode_json free
+free = '{"ok": true}' as json
+say (free as json)
 `
 	var jsonOut bytes.Buffer
 	if _, err := EvalProgram(jsonBoolSrc, &jsonOut); err != nil {
@@ -1151,7 +1165,7 @@ func TestCastFallbackStaticTypecheckAndInference(t *testing.T) {
 		},
 		{
 			name:    "text fallback given number",
-			src:     "raw = decode_json 'null'\nx = raw as text or 42\n",
+			src:     "raw = 'null' as json\nx = raw as text or 42\n",
 			wantSub: "Fallback for 'as text' must be text, got number",
 		},
 		{
@@ -1238,7 +1252,7 @@ lvl = raw as Level or sub
 def user
   id = 0
 end
-raw = decode_json '{"id": 1}'
+raw = '{"id": 1}' as json
 d = user with id = 2
 u = raw as user or d
 `,
@@ -1254,7 +1268,7 @@ def B
   y = 1
 end
 def Both = A | B
-raw = decode_json '{"x": 1}'
+raw = '{"x": 1}' as json
 res = raw as Both or (A with x = 2)
 `,
 			wantSub: `'or' fallback cannot be used with record-only union "Both"`,
@@ -1327,7 +1341,8 @@ filtered = (lines as number or 0) where it > 5
 raw = "BAD"
 fb_plain = "ok"
 l1 = raw as Level or DefaultLevel
-l2 = (decode_json 'null') as Flex or fb_plain
+l2_raw = 'null' as json
+l2 = l2_raw as Flex or fb_plain
 l3 = lines as Level or "WARN"
 say "{total}|{count filtered}|{l1}|{l2}|{count l3}"
 `
@@ -1669,6 +1684,201 @@ end
 			name:    "swarm loop without -> cannot be assigned",
 			src:     "xs = swarm loop range 1 3\n  say it\nend\n",
 			wantSub: "'swarm loop' without '-> <value>' does not return a value",
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestUnifiedFormatModelSaveVoidAndCastChaining(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "user.json")
+	csvPath := filepath.Join(dir, "sales.csv")
+	emptyCSVPath := filepath.Join(dir, "empty_sales.csv")
+	txtPath := filepath.Join(dir, "note.txt")
+	binPath := filepath.Join(dir, "raw.bin")
+
+	happySrc := fmt.Sprintf(`
+def user
+    id   = 0
+    name = "Gast"
+    ok   = "true" | "false"
+end
+
+def sale
+    item  = ""
+    price = 0
+end
+
+test "as json, in-memory as csv, and void save"
+    # 1. Default def prototype serializes via 'as json' (matching net_reply_json)
+    proto_json = user as json
+    parsed_proto = proto_json as json
+    parsed_proto.name is "Gast"
+
+    # 2. Record <-> JSON file roundtrip via save ... as json and load ... as json
+    ada = user with id = 7, name = "Ada", ok = "true"
+    save %q ada as json
+    loaded_map = load %q as json
+    loaded_ada = loaded_map as user
+    loaded_ada is ada
+
+    # 3. In-memory CSV parsing & serialization (typed list, empty typed list, and map list)
+    csv_raw = "item,price\nTea,4.5\nCake,6\n"
+    rows = csv_raw as csv
+    count rows is 2
+    sales = rows as sale
+    sales.1.item is "Tea"
+    sales.2.price is 6
+
+    csv_back = sales as csv
+    contains csv_back "item,price"
+    contains csv_back "Tea,4.5"
+
+    empty_sales = list as sale
+    (empty_sales as csv) is "item,price\n"
+
+    map_csv = rows as csv
+    contains map_csv "Tea,4.5"
+
+    # 4. save ... as csv / text / bytes
+    save %q sales as csv
+    reloaded_csv = load %q as csv
+    reloaded_sales = reloaded_csv as sale
+    count reloaded_sales is 2
+
+    save %q empty_sales as csv
+    (load %q) is "item,price\n"
+
+    save %q "hi" as text
+    (load %q) is "hi"
+
+    save %q (list 0, 255) as bytes
+    (load %q as bytes) is list 0, 255
+end
+`, jsonPath, jsonPath, csvPath, csvPath, emptyCSVPath, emptyCSVPath, txtPath, txtPath, binPath, binPath)
+
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 13 {
+		t.Fatalf("expected 13 passed / 0 failed, got %+v", report)
+	}
+
+	negCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "decode_json removed migration hint",
+			src:     "x = decode_json '{}'\n",
+			wantSub: "'decode_json' was removed from Ease",
+		},
+		{
+			name:    "encode_json removed migration hint",
+			src:     "def u\n  id = 1\nend\nx = encode_json u\n",
+			wantSub: "'encode_json' was removed from Ease",
+		},
+		{
+			name:    "bare number rejected by as json",
+			src:     "x = 42 as json\n",
+			wantSub: "Cannot format number with 'as json'",
+		},
+		{
+			name:    "or fallback rejected on as json",
+			src:     "x = '{}' as json or \"\"\n",
+			wantSub: "'or' fallback cannot be used with 'as json'",
+		},
+		{
+			name:    "or fallback rejected on as csv",
+			src:     "x = \"a,b\\n1,2\" as csv or \"\"\n",
+			wantSub: "'or' fallback cannot be used with 'as csv'",
+		},
+		{
+			name: "nested list field in record rejected by as csv",
+			src: `
+def order
+  id = 0
+  tags = list as text
+end
+rows = list as order
+x = rows as csv
+`,
+			wantSub: "Cannot format record \"order\" as csv: field 'order.tags' is list",
+		},
+		{
+			name: "nested record field in record rejected by as csv",
+			src: `
+def addr
+  city = ""
+end
+def person
+  name = ""
+  home = addr
+end
+rows = list as person
+x = rows as csv
+`,
+			wantSub: "Cannot format record \"person\" as csv: field 'person.home' is addr",
+		},
+		{
+			name:    "single record rejected by as csv",
+			src:     "def u\n  id = 1\nend\nx = u as csv\n",
+			wantSub: "Cannot format non-table value as csv",
+		},
+		{
+			name:    "scalar list rejected by as csv",
+			src:     "xs = list 1, 2\nx = xs as csv\n",
+			wantSub: "Cannot format list of number as csv",
+		},
+		{
+			name:    "save is void (cannot assign)",
+			src:     "x = save \"./out.txt\" \"hi\"\n",
+			wantSub: "'save' does not return a value",
+		},
+		{
+			name:    "save ... as json is void (cannot assign)",
+			src:     "def u\n  id = 1\nend\nx = save \"./u.json\" u as json\n",
+			wantSub: "'save' does not return a value",
+		},
+		{
+			name:    "bare save on record without as format rejected",
+			src:     "def u\n  id = 1\nend\nsave \"./u.json\" u\n",
+			wantSub: "Cannot save u without an explicit format",
+		},
+		{
+			name:    "bare save on list without as format rejected",
+			src:     "xs = list 1, 2\nsave \"./raw.bin\" xs\n",
+			wantSub: "Cannot save list of number without an explicit format",
+		},
+		{
+			name:    "save raw text as json rejected",
+			src:     "txt = \"hi\"\nsave \"./out.json\" txt as json\n",
+			wantSub: "Cannot save raw text with 'as json'",
+		},
+		{
+			name:    "chained as without parens rejected statically",
+			src:     "def u\n  id = 1\nend\nx = '{}' as json as u\n",
+			wantSub: "Cannot chain multiple 'as' conversions in one expression",
+		},
+		{
+			name:    "chained as with parens rejected statically",
+			src:     "def u\n  id = 1\nend\nx = ('{}' as json) as u\n",
+			wantSub: "Cannot chain multiple 'as' conversions in one expression",
+		},
+		{
+			name:    "chained as in or fallback rejected statically",
+			src:     "x = \"bad\" as number or \"12\" as number\n",
+			wantSub: "Cannot chain multiple 'as' conversions in one expression",
 		},
 	}
 

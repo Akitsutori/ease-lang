@@ -1,6 +1,9 @@
 package ease
 
 import (
+	"bytes"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -287,7 +290,7 @@ func (ev *Evaluator) castListValue(lv *ListValue, targetType string, line, col i
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate list as %s: expected structured map or %s record, got list of %s", targetType, targetType, lv.ElemType),
-				fmt.Sprintf("Expected a list of maps from 'decode_json' or %s records.", targetType),
+				fmt.Sprintf("Expected a list of maps from 'as json'/'as csv' or %s records.", targetType),
 			)
 		}
 
@@ -434,7 +437,7 @@ func (ev *Evaluator) castScalarForFallback(item Value, targetType string, union 
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot convert %s to text", TypeName(item)),
-				"Only atomic values (text, number) can be cast with 'as text'. Use 'encode_json ...' to serialize structured data to JSON.",
+				"Only atomic values (text, number) can be cast with 'as text'. Use '<value> as json' to serialize structured data to JSON.",
 			)
 		default:
 			return nil, false, nil
@@ -582,6 +585,19 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 		return ev.castWithFallback(e, targetVal, env, line, col)
 	}
 
+	switch e.TypeName {
+	case "json":
+		if s, ok := targetVal.(string); ok {
+			return ev.parseJSONValue(s, line, col)
+		}
+		return ev.formatJSONValue(targetVal, line, col)
+	case "csv":
+		if s, ok := targetVal.(string); ok {
+			return ev.parseCSVText(s, "CSV text", line, col)
+		}
+		return ev.formatCSVValue(targetVal, env, line, col)
+	}
+
 	if lv, isList := targetVal.(*ListValue); isList {
 		return ev.castListValue(lv, e.TypeName, line, col, env)
 	}
@@ -600,7 +616,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot convert %s to text", TypeName(targetVal)),
-				"Only atomic values (text, number) can be cast with 'as text'. Use 'encode_json ...' to serialize structured data to JSON.",
+				"Only atomic values (text, number) can be cast with 'as text'. Use '<value> as json' to serialize structured data to JSON.",
 			)
 		default:
 			return nil, newError(
@@ -696,7 +712,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate record %q as %q", rec.TypeName, e.TypeName),
-				fmt.Sprintf("Expected a map from 'decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from '<text> as json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 
@@ -709,7 +725,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 					col,
 					ev.source,
 					fmt.Sprintf("Cannot validate text as %s: expected structured map or %s record", e.TypeName, e.TypeName),
-					fmt.Sprintf("Parse JSON text explicitly first with 'decode_json ...', then validate with 'as %s'.", e.TypeName),
+					fmt.Sprintf("Parse JSON text first ('data = raw as json'), then validate with 'data as %s'.", e.TypeName),
 				)
 			}
 			return nil, newError(
@@ -718,7 +734,7 @@ func (ev *Evaluator) castValue(e *CastExpr, targetVal Value, env *Env) (Value, e
 				col,
 				ev.source,
 				fmt.Sprintf("Cannot validate %s as %s: expected structured map or %s record", TypeName(targetVal), e.TypeName, e.TypeName),
-				fmt.Sprintf("Expected a map from 'decode_json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
+				fmt.Sprintf("Expected a map from '<text> as json' or a %s record matching 'def %s'.", e.TypeName, e.TypeName),
 			)
 		}
 
@@ -867,4 +883,263 @@ func structuredTypeName(v any) string {
 		return "none"
 	}
 	return TypeName(v)
+}
+
+func (ev *Evaluator) parseJSONValue(rawStr string, line, col int) (Value, error) {
+	if strings.TrimSpace(rawStr) == "" {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			"Cannot parse empty text as json",
+			"Provide non-empty JSON text before 'as json'.",
+		)
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(rawStr), &parsed); err != nil {
+		return nil, newError(
+			"RuntimeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Invalid JSON in 'as json': %v", err),
+			"Provide valid JSON text.",
+		)
+	}
+	return jsonAnyToEase(parsed), nil
+}
+
+func (ev *Evaluator) formatJSONValue(val Value, line, col int) (string, error) {
+	switch v := val.(type) {
+	case *RecordValue, *ListValue, *MapValue:
+		if err := validateJSONEncodable(v); err != nil {
+			return "", newError("TypeError", line, col, ev.source, err.Error(), "Conditions and union definitions cannot be serialized as JSON.")
+		}
+		b, err := json.Marshal(easeValueToJSON(v))
+		if err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Cannot format %s as json: %v", TypeName(val), err), "")
+		}
+		return string(b), nil
+	case float64:
+		return "", newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			"Cannot format number with 'as json'",
+			fmt.Sprintf("Use '%s as text' for numbers, or pass a record, list, map, or JSON text to 'as json'.", FormatValue(v)),
+		)
+	default:
+		return "", newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Cannot format %s as json", TypeName(val)),
+			"Pass JSON text to parse, or a record, list, or map to serialize with 'as json'.",
+		)
+	}
+}
+
+func (ev *Evaluator) formatCSVValue(val Value, env *Env, line, col int) (string, error) {
+	lv, ok := val.(*ListValue)
+	if !ok {
+		return "", newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Cannot format %s as csv; 'as csv' requires CSV text or a list of flat records/maps", TypeName(val)),
+			"Wrap records in a list (e.g. 'rows as csv') or pass CSV text ('raw as csv').",
+		)
+	}
+
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+
+	if lv.ElemType != "" {
+		protoVal, ok := lookupTypeInEnv(env, lv.ElemType)
+		if !ok {
+			if lv.ElemType == "map" {
+				goto formatMapRows
+			}
+			return "", newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot format list of %s as csv; 'as csv' requires a list of flat records or maps", lv.ElemType),
+				"Use a list of flat 'def' records or maps with text/number fields.",
+			)
+		}
+		proto, isRec := protoVal.(*RecordValue)
+		if !isRec {
+			return "", newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Cannot format list of %s as csv; 'as csv' requires a list of flat records or maps", lv.ElemType),
+				"Use a list of flat 'def' records or maps with text/number fields.",
+			)
+		}
+		for _, fieldName := range proto.Order {
+			if opts, hasUnion := proto.Allowed[fieldName]; hasUnion {
+				for _, opt := range opts {
+					if optRec, isOptRec := opt.(*RecordValue); isOptRec && optRec.IsPrototype {
+						return "", newError(
+							"TypeError",
+							line,
+							col,
+							ev.source,
+							fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is %s (CSV fields must be text or number)", proto.TypeName, proto.TypeName, fieldName, optRec.TypeName),
+							"Flatten nested records/lists into atomic text or number fields before converting to CSV.",
+						)
+					}
+				}
+			}
+			fVal := proto.Fields[fieldName]
+			if _, isList := fVal.(*ListValue); isList {
+				return "", newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is list (CSV fields must be text or number)", proto.TypeName, proto.TypeName, fieldName),
+					"Flatten nested records/lists into atomic text or number fields before converting to CSV.",
+				)
+			}
+			if _, isSubRec := fVal.(*RecordValue); isSubRec {
+				return "", newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is %s (CSV fields must be text or number)", proto.TypeName, proto.TypeName, fieldName, TypeName(fVal)),
+					"Flatten nested records/lists into atomic text or number fields before converting to CSV.",
+				)
+			}
+		}
+		headers := proto.Order
+		if err := w.Write(headers); err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV header: %v", err), "")
+		}
+		for idx, el := range lv.Elements {
+			rec, ok := el.(*RecordValue)
+			if !ok {
+				return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("CSV row at index %d must be %s, got %s", idx+1, proto.TypeName, TypeName(el)), "")
+			}
+			row := make([]string, len(headers))
+			for i, h := range headers {
+				fv := rec.Fields[h]
+				if _, isList := fv.(*ListValue); isList {
+					return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is list (CSV fields must be text or number)", rec.TypeName, rec.TypeName, h), "")
+				}
+				if _, isSubRec := fv.(*RecordValue); isSubRec {
+					return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is %s (CSV fields must be text or number)", rec.TypeName, rec.TypeName, h, TypeName(fv)), "")
+				}
+				row[i] = FormatValue(fv)
+			}
+			if err := w.Write(row); err != nil {
+				return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV row %d: %v", idx+1, err), "")
+			}
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to flush CSV output: %v", err), "")
+		}
+		return buf.String(), nil
+	}
+
+formatMapRows:
+	if len(lv.Elements) == 0 {
+		return "", newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			"Cannot format empty untyped list as csv without column headers",
+			"Create a typed record list (e.g. 'list as MyRow') or provide at least one map row.",
+		)
+	}
+	if firstRec, isRec := lv.Elements[0].(*RecordValue); isRec {
+		headers := firstRec.Order
+		if err := w.Write(headers); err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV header: %v", err), "")
+		}
+		for idx, el := range lv.Elements {
+			rec, ok := el.(*RecordValue)
+			if !ok || rec.TypeName != firstRec.TypeName {
+				return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("CSV row at index %d must be %s, got %s", idx+1, firstRec.TypeName, TypeName(el)), "")
+			}
+			row := make([]string, len(headers))
+			for i, h := range headers {
+				fv := rec.Fields[h]
+				switch fv.(type) {
+				case string, float64:
+					row[i] = FormatValue(fv)
+				default:
+					return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot format record %q as csv: field '%s.%s' is %s (CSV fields must be text or number)", rec.TypeName, rec.TypeName, h, TypeName(fv)), "")
+				}
+			}
+			if err := w.Write(row); err != nil {
+				return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV row %d: %v", idx+1, err), "")
+			}
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to flush CSV output: %v", err), "")
+		}
+		return buf.String(), nil
+	}
+
+	firstMap, isMap := lv.Elements[0].(*MapValue)
+	if !isMap {
+		return "", newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Cannot format list of %s as csv; 'as csv' requires a list of flat records or maps", TypeName(lv.Elements[0])),
+			"Use a list of flat 'def' records or maps with text/number fields.",
+		)
+	}
+	headers := firstMap.Order
+	if len(headers) == 0 {
+		return "", newError("TypeError", line, col, ev.source, "Cannot format empty map row as csv", "")
+	}
+	if err := w.Write(headers); err != nil {
+		return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV header: %v", err), "")
+	}
+	for idx, el := range lv.Elements {
+		mv, ok := el.(*MapValue)
+		if !ok {
+			return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("CSV row at index %d must be a map, got %s", idx+1, TypeName(el)), "")
+		}
+		if len(mv.Fields) != len(headers) {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("CSV row at index %d has %d columns, expected %d", idx+1, len(mv.Fields), len(headers)), "")
+		}
+		row := make([]string, len(headers))
+		for i, h := range headers {
+			fv, exists := mv.Fields[h]
+			if !exists {
+				return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("CSV row at index %d is missing column %q", idx+1, h), "")
+			}
+			switch fv.(type) {
+			case string, float64:
+				row[i] = FormatValue(fv)
+			default:
+				return "", newError("TypeError", line, col, ev.source, fmt.Sprintf("CSV field %q at row %d must be text or number, got %s", h, idx+1, TypeName(fv)), "")
+			}
+		}
+		if err := w.Write(row); err != nil {
+			return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to write CSV row %d: %v", idx+1, err), "")
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return "", newError("RuntimeError", line, col, ev.source, fmt.Sprintf("Failed to flush CSV output: %v", err), "")
+	}
+	return buf.String(), nil
 }
