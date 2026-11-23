@@ -1,0 +1,397 @@
+import screen
+import random
+
+# Classic arcade Pac-Man in pure Ease — compiles natively to WebAssembly!
+# Build for browser:
+#   ease build examples/12_pacman.ease --target wasm -o dist_pacman
+# Controls: Arrow keys or W/A/S/D to steer, R or Space to restart, Esc to quit.
+
+def game_state
+    px      = 8
+    py      = 9
+    dx      = 1
+    dy      = 0
+    next_dx = 1
+    next_dy = 0
+    g1x     = 7
+    g1y     = 5
+    g1dx    = 1
+    g1dy    = 0
+    g2x     = 8
+    g2y     = 5
+    g2dx    = -1
+    g2dy    = 0
+    g3x     = 9
+    g3y     = 5
+    g3dx    = 0
+    g3dy    = -1
+    score   = 0
+    lives   = 3
+    pellets = 0
+    fright  = 0
+    status  = "playing" | "won" | "lost"
+    tick    = 0
+end
+
+# 15 columns x 11 rows maze
+# 1 = wall, 2 = pellet, 3 = power pellet, 0 = empty
+to build_maze
+    -> list 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 3, 1, 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 2, 2, 2, 2, 2, 0, 2, 2, 2, 2, 2, 2, 1, 1, 2, 1, 1, 2, 1, 0, 0, 0, 1, 2, 1, 1, 2, 1, 1, 2, 2, 2, 2, 1, 0, 0, 0, 1, 2, 2, 2, 2, 1, 1, 2, 1, 1, 2, 1, 1, 0, 1, 1, 2, 1, 1, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 1, 1, 2, 1, 2, 0, 2, 1, 2, 1, 1, 2, 1, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+end
+
+to tile_idx col row
+    -> ((row - 1) * 15) + col
+end
+
+to tile_kind maze col row
+    check col < 1 or col > 15 -> "wall"
+    check row < 1 or row > 11 -> "wall"
+    cell = maze.(tile_idx col row)
+    check cell is 1 -> "wall"
+    -> "open"
+end
+
+to count_pellets maze
+    total = 0
+    loop maze
+        check it is 2 or it is 3
+            total = total + 1
+        end
+    end
+    -> total
+end
+
+to ghost_step_x maze gx gy gdx gdy px py fright
+    # Prefer continuing or turning toward/away from Pac-Man without reversing into walls
+    best_dx = 0
+    best_score = -9999
+    if_valid_r = tile_kind maze (gx + 1) gy
+    check if_valid_r is "open"
+        dist = (abs ((gx + 1) - px)) + (abs (gy - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdx is -1
+            sc = sc - 5
+        end
+        sc = sc + (random:roll 0 2)
+        check sc > best_score
+            best_score = sc
+            best_dx = 1
+        end
+    end
+
+    if_valid_l = tile_kind maze (gx - 1) gy
+    check if_valid_l is "open"
+        dist = (abs ((gx - 1) - px)) + (abs (gy - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdx is 1
+            sc = sc - 5
+        end
+        sc = sc + (random:roll 0 2)
+        check sc > best_score
+            best_score = sc
+            best_dx = -1
+        end
+    end
+
+    if_valid_d = tile_kind maze gx (gy + 1)
+    check if_valid_d is "open"
+        dist = (abs (gx - px)) + (abs ((gy + 1) - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdy is -1
+            sc = sc - 5
+        end
+        sc = sc + (random:roll 0 2)
+        check sc > best_score
+            best_score = sc
+            best_dx = 0
+        end
+    end
+
+    if_valid_u = tile_kind maze gx (gy - 1)
+    check if_valid_u is "open"
+        dist = (abs (gx - px)) + (abs ((gy - 1) - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdy is 1
+            sc = sc - 5
+        end
+        sc = sc + (random:roll 0 2)
+        check sc > best_score
+            best_score = sc
+            best_dx = 0
+        end
+    end
+    -> best_dx
+end
+
+to ghost_step_y maze gx gy gdx gdy px py fright chosen_dx
+    check chosen_dx is not 0 -> 0
+    best_dy = 0
+    best_score = -9999
+    if_valid_d = tile_kind maze gx (gy + 1)
+    check if_valid_d is "open"
+        dist = (abs (gx - px)) + (abs ((gy + 1) - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdy is -1
+            sc = sc - 5
+        end
+        check sc > best_score
+            best_score = sc
+            best_dy = 1
+        end
+    end
+    if_valid_u = tile_kind maze gx (gy - 1)
+    check if_valid_u is "open"
+        dist = (abs (gx - px)) + (abs ((gy - 1) - py))
+        sc = 0 - dist
+        check fright > 0
+            sc = dist
+        end
+        check gdy is 1
+            sc = sc - 5
+        end
+        check sc > best_score
+            best_score = sc
+            best_dy = -1
+        end
+    end
+    -> best_dy
+end
+
+to add_ghost_shapes shapes gx gy body_color fright tick
+    cx = ((gx - 1) * 40) + 20
+    cy = 60 + ((gy - 1) * 40) + 20
+    col = body_color
+    check fright > 0
+        col = "#3b82f6"
+        check fright < 45 and (tick % 10) < 5
+            col = "white"
+        end
+    end
+    # Ghost head + body + eyes
+    shapes = append shapes (screen.circle with x = cx, y = cy - 2, size = 14, color = col, style = "solid")
+    shapes = append shapes (screen.box with x = cx - 14, y = cy - 2, width = 28, height = 14, color = col, style = "solid")
+    shapes = append shapes (screen.circle with x = cx - 5, y = cy - 4, size = 4, color = "white", style = "solid")
+    shapes = append shapes (screen.circle with x = cx + 5, y = cy - 4, size = 4, color = "white", style = "solid")
+    shapes = append shapes (screen.circle with x = cx - 4, y = cy - 4, size = 2, color = "midnight", style = "solid")
+    shapes = append shapes (screen.circle with x = cx + 6, y = cy - 4, size = 2, color = "midnight", style = "solid")
+    -> shapes
+end
+
+to build_pacman_scene maze st
+    shapes = list as screen.shape
+    labels = list as screen.label
+
+    # Top HUD bar
+    shapes = append shapes (screen.box with x = 0, y = 0, width = 600, height = 60, color = "#020617", style = "solid")
+    shapes = append shapes (screen.line with x1 = 0, y1 = 60, x2 = 600, y2 = 60, width = 2, color = "indigo")
+
+    # Maze walls & pellets
+    loop range 1 11
+        row = it
+        loop range 1 15
+            col = it
+            cell = maze.(tile_idx col row)
+            tx = (col - 1) * 40
+            ty = 60 + ((row - 1) * 40)
+            check cell is 1
+                shapes = append shapes (screen.box with x = tx + 2, y = ty + 2, width = 36, height = 36, color = "#1d4ed8", style = "solid")
+                shapes = append shapes (screen.box with x = tx + 4, y = ty + 4, width = 32, height = 32, color = "#60a5fa", style = "outline", stroke = 2)
+            end
+            check cell is 2
+                shapes = append shapes (screen.circle with x = tx + 20, y = ty + 20, size = 4, color = "cream", style = "solid")
+            end
+            check cell is 3
+                p_size = 9
+                check (st.tick % 20) < 10
+                    p_size = 7
+                end
+                shapes = append shapes (screen.circle with x = tx + 20, y = ty + 20, size = p_size, color = "amber", style = "solid")
+            end
+        end
+    end
+
+    # Pac-Man body + animated mouth
+    pcx = ((st.px - 1) * 40) + 20
+    pcy = 60 + ((st.py - 1) * 40) + 20
+    shapes = append shapes (screen.circle with x = pcx, y = pcy, size = 15, color = "yellow", style = "solid")
+    check (st.tick % 12) < 6
+        check st.dx is 1
+            shapes = append shapes (screen.triangle with x1 = pcx, y1 = pcy, x2 = pcx + 17, y2 = pcy - 10, x3 = pcx + 17, y3 = pcy + 10, color = "midnight", style = "solid")
+        end
+        check st.dx is -1
+            shapes = append shapes (screen.triangle with x1 = pcx, y1 = pcy, x2 = pcx - 17, y2 = pcy - 10, x3 = pcx - 17, y3 = pcy + 10, color = "midnight", style = "solid")
+        end
+        check st.dy is -1
+            shapes = append shapes (screen.triangle with x1 = pcx, y1 = pcy, x2 = pcx - 10, y2 = pcy - 17, x3 = pcx + 10, y3 = pcy - 17, color = "midnight", style = "solid")
+        end
+        check st.dy is 1
+            shapes = append shapes (screen.triangle with x1 = pcx, y1 = pcy, x2 = pcx - 10, y2 = pcy + 17, x3 = pcx + 10, y3 = pcy + 17, color = "midnight", style = "solid")
+        end
+    end
+
+    # Ghosts (Blinky, Pinky, Inky)
+    shapes = add_ghost_shapes shapes st.g1x st.g1y "crimson" st.fright st.tick
+    shapes = add_ghost_shapes shapes st.g2x st.g2y "#ec4899" st.fright st.tick
+    shapes = add_ghost_shapes shapes st.g3x st.g3y "#06b6d4" st.fright st.tick
+
+    # HUD Labels
+    labels = append labels (screen.label with x = 16, y = 18, content = "PAC-MAN", size = 20, color = "yellow")
+    labels = append labels (screen.label with x = 150, y = 20, content = "SCORE: {st.score}", size = 18, color = "white")
+    labels = append labels (screen.label with x = 340, y = 20, content = "LIVES: {st.lives}", size = 18, color = "emerald")
+    labels = append labels (screen.label with x = 470, y = 22, content = "LEFT: {st.pellets}", size = 15, color = "silver")
+
+    check st.status is "won"
+        shapes = append shapes (screen.box with x = 140, y = 220, width = 320, height = 100, color = "#020617", style = "solid")
+        shapes = append shapes (screen.box with x = 140, y = 220, width = 320, height = 100, color = "emerald", style = "outline", stroke = 3)
+        labels = append labels (screen.label with x = 230, y = 242, content = "YOU WIN!", size = 26, color = "emerald")
+        labels = append labels (screen.label with x = 185, y = 282, content = "Press R or SPACE to play again", size = 15, color = "cream")
+    end
+
+    check st.status is "lost"
+        shapes = append shapes (screen.box with x = 140, y = 220, width = 320, height = 100, color = "#020617", style = "solid")
+        shapes = append shapes (screen.box with x = 140, y = 220, width = 320, height = 100, color = "crimson", style = "outline", stroke = 3)
+        labels = append labels (screen.label with x = 215, y = 242, content = "GAME OVER", size = 26, color = "crimson")
+        labels = append labels (screen.label with x = 185, y = 282, content = "Press R or SPACE to restart", size = 15, color = "cream")
+    end
+
+    -> screen.scene with
+        background = "midnight"
+        shapes     = shapes
+        labels     = labels
+    end
+end
+
+to run_pacman
+    win = screen.screen with width = 600, height = 500, title = "Pac-Man (Ease WASM)", fps = 60
+    maze = build_maze
+    st = game_state with pellets = count_pellets maze
+
+    loop
+        sc = build_pacman_scene maze st
+        raw_state = screen:present win sc
+        parsed = raw_state as json
+        frame = parsed as screen.frame_state
+        check frame is not screen.frame_state -> end
+        check frame.status is "closed" -> end
+        check frame.key is "escape" -> end
+
+        # Steering input (Arrow keys or WASD)
+        check frame.key is "left" or frame.key is "a"
+            st = st with next_dx = -1, next_dy = 0
+        end
+        check frame.key is "right" or frame.key is "d"
+            st = st with next_dx = 1, next_dy = 0
+        end
+        check frame.key is "up" or frame.key is "w"
+            st = st with next_dx = 0, next_dy = -1
+        end
+        check frame.key is "down" or frame.key is "s"
+            st = st with next_dx = 0, next_dy = 1
+        end
+
+        # Restart on R or Space when game ended
+        check (st.status is "won" or st.status is "lost") and (frame.key is "r" or frame.key is "space")
+            maze = build_maze
+            st = game_state with pellets = count_pellets maze
+        end
+
+        st = st with tick = st.tick + 1
+        check st.fright > 0
+            st = st with fright = st.fright - 1
+        end
+
+        # Move Pac-Man every 8 frames (~7.5 tiles/sec at 60 FPS)
+        check st.status is "playing" and (st.tick % 8) is 0
+            can_turn = tile_kind maze (st.px + st.next_dx) (st.py + st.next_dy)
+            check can_turn is "open"
+                st = st with dx = st.next_dx, dy = st.next_dy
+            end
+            can_move = tile_kind maze (st.px + st.dx) (st.py + st.dy)
+            check can_move is "open"
+                nx = st.px + st.dx
+                ny = st.py + st.dy
+                st = st with px = nx, py = ny
+                idx = tile_idx nx ny
+                cell = maze.(idx)
+                check cell is 2
+                    maze = maze with .(idx) = 0
+                    st = st with score = st.score + 10, pellets = st.pellets - 1
+                end
+                check cell is 3
+                    maze = maze with .(idx) = 0
+                    st = st with score = st.score + 50, pellets = st.pellets - 1, fright = 240
+                end
+                check st.pellets <= 0
+                    st = st with status = "won"
+                end
+            end
+        end
+
+        # Move Ghosts every 12 frames (slightly slower than Pac-Man)
+        check st.status is "playing" and (st.tick % 12) is 0
+            n1dx = ghost_step_x maze st.g1x st.g1y st.g1dx st.g1dy st.px st.py st.fright
+            n1dy = ghost_step_y maze st.g1x st.g1y st.g1dx st.g1dy st.px st.py st.fright n1dx
+            n2dx = ghost_step_x maze st.g2x st.g2y st.g2dx st.g2dy st.px st.py st.fright
+            n2dy = ghost_step_y maze st.g2x st.g2y st.g2dx st.g2dy st.px st.py st.fright n2dx
+            n3dx = ghost_step_x maze st.g3x st.g3y st.g3dx st.g3dy st.px st.py st.fright
+            n3dy = ghost_step_y maze st.g3x st.g3y st.g3dx st.g3dy st.px st.py st.fright n3dx
+            st = st with g1x = st.g1x + n1dx, g1y = st.g1y + n1dy, g1dx = n1dx, g1dy = n1dy, g2x = st.g2x + n2dx, g2y = st.g2y + n2dy, g2dx = n2dx, g2dy = n2dy, g3x = st.g3x + n3dx, g3y = st.g3y + n3dy, g3dx = n3dx, g3dy = n3dy
+        end
+
+        # Ghost collision check
+        check st.status is "playing"
+            check st.px is st.g1x and st.py is st.g1y
+                check st.fright > 0
+                    st = st with g1x = 7, g1y = 5, score = st.score + 200
+                else
+                    st = st with lives = st.lives - 1, px = 8, py = 9, g1x = 7, g1y = 5, g2x = 8, g2y = 5, g3x = 9, g3y = 5
+                end
+            end
+            check st.px is st.g2x and st.py is st.g2y
+                check st.fright > 0
+                    st = st with g2x = 8, g2y = 5, score = st.score + 200
+                else
+                    st = st with lives = st.lives - 1, px = 8, py = 9, g1x = 7, g1y = 5, g2x = 8, g2y = 5, g3x = 9, g3y = 5
+                end
+            end
+            check st.px is st.g3x and st.py is st.g3y
+                check st.fright > 0
+                    st = st with g3x = 9, g3y = 5, score = st.score + 200
+                else
+                    st = st with lives = st.lives - 1, px = 8, py = 9, g1x = 7, g1y = 5, g2x = 8, g2y = 5, g3x = 9, g3y = 5
+                end
+            end
+            check st.lives <= 0
+                st = st with status = "lost"
+            end
+        end
+    end
+end
+
+test "pacman maze and scene build deterministically"
+    maze = build_maze
+    count maze is 165
+    tile_kind maze 1 1 is "wall"
+    tile_kind maze 8 9 is "open"
+    count_pellets maze > 60
+    st = game_state with pellets = count_pellets maze
+    sc = build_pacman_scene maze st
+    count sc.labels is 4
+end
+
+run_pacman

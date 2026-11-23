@@ -663,20 +663,48 @@ func executeChecksWithWriters(source, label string, traceMode, verbose, jsonMode
 
 func cmdBuild(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: ease build <file.ease> [-o <out>]")
+		fmt.Fprintln(os.Stderr, "Usage: ease build <file.ease> [--target exe|wasm] [-o <out>]")
 		return 2
 	}
-	inputFile := args[0]
+	inputFile := ""
 	outFile := ""
-	for i := 1; i < len(args); i++ {
-		if (args[i] == "-o" || args[i] == "--out") && i+1 < len(args) {
+	target := "exe"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case (arg == "-o" || arg == "--out") && i+1 < len(args):
 			outFile = args[i+1]
 			i++
+		case strings.HasPrefix(arg, "--out="):
+			outFile = strings.TrimPrefix(arg, "--out=")
+		case arg == "--target" && i+1 < len(args):
+			target = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--target="):
+			target = strings.TrimPrefix(arg, "--target=")
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(os.Stderr, "Unknown build flag %q\n", arg)
+			return 2
+		case inputFile == "":
+			inputFile = arg
+		default:
+			fmt.Fprintf(os.Stderr, "Unexpected argument %q\n", arg)
+			return 2
 		}
+	}
+	if inputFile == "" {
+		fmt.Fprintln(os.Stderr, "Usage: ease build <file.ease> [--target exe|wasm] [-o <out>]")
+		return 2
+	}
+	if target != "exe" && target != "wasm" {
+		fmt.Fprintf(os.Stderr, "Unknown build target %q (expected 'exe' or 'wasm')\n", target)
+		return 2
 	}
 	if outFile == "" {
 		base := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
-		if runtime.GOOS == "windows" {
+		if target == "wasm" {
+			outFile = base + "_wasm"
+		} else if runtime.GOOS == "windows" {
 			outFile = base + ".exe"
 		} else {
 			outFile = base
@@ -687,6 +715,14 @@ func cmdBuild(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", inputFile, err)
 		return 1
+	}
+	if target == "wasm" {
+		if err := ease.BuildWasmBundleFromFile(string(src), inputFile, outFile); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("Built WASM bundle in %s (index.html, ease_host.js, app.wasm)\n", outFile)
+		return 0
 	}
 	if err := ease.BuildStandaloneExeFromFile("", string(src), inputFile, outFile); err != nil {
 		fmt.Fprintln(os.Stderr, err)

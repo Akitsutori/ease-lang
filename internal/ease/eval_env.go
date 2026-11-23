@@ -13,7 +13,7 @@ type binding struct {
 	isParam bool
 }
 
-// Env implements lexical scopes with mutability tracking (immutable `def` constants/params vs mutable bindings)
+// Env implements lexical scopes with mutability tracking (immutable `def` constants vs mutable bindings/params)
 // and a mutex-protected function table on the root scope for atomic hot-code-swapping.
 type Env struct {
 	mu             sync.RWMutex
@@ -205,7 +205,7 @@ func (e *Env) Define(name string, val Value, mutable bool) {
 
 func (e *Env) DefineParam(name string, val Value) {
 	e.mu.Lock()
-	e.vars[name] = binding{val: val, mutable: false, isParam: true}
+	e.vars[name] = binding{val: val, mutable: true, isParam: true}
 	e.mu.Unlock()
 }
 
@@ -266,16 +266,6 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 		if ok {
 			if !b.mutable {
 				cur.mu.Unlock()
-				if b.isParam {
-					return newError(
-						"RuntimeError",
-						line,
-						col,
-						source,
-						fmt.Sprintf("Cannot reassign parameter %q; assign to a new local variable instead.", name),
-						fmt.Sprintf("Use a new local variable like 'next_%s = ...' instead of reassigning '%s'.", name, name),
-					)
-				}
 				return newError(
 					"RuntimeError",
 					line,
@@ -285,7 +275,7 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 					fmt.Sprintf("Use a local variable '%s = ...' instead of 'def %s = ...' if it needs to change.", name, name),
 				)
 			}
-			cur.vars[name] = binding{val: val, mutable: true}
+			cur.vars[name] = binding{val: val, mutable: true, isParam: b.isParam}
 			cur.mu.Unlock()
 			return nil
 		}

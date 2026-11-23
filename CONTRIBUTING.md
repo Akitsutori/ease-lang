@@ -48,6 +48,11 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
 │   ├── bundle.go                # Standalone executable packer (`EASE_BUNDLE_V1`)
+│   ├── wasm_enc.go              # Pure-Go WebAssembly 1.0 binary encoder (sections, LEB128, opcodes)
+│   ├── wasm_rt.go               # WASM linear-memory allocator, string/list/math runtime & host imports
+│   ├── wasm_compile.go          # Ease-to-WASM bundle compiler (`--target wasm`), validation & data layout
+│   ├── wasm_codegen.go          # Ease AST-to-WASM bytecode lowering & non-blocking `ease_step` state machine
+│   ├── wasm_assets.go           # Static HTML5 Canvas host (`index.html`, `ease_host.js`) & WebAudio synth
 │   ├── logo.go                  # Embedded Ease brand mark/banner helpers
 │   ├── errors.go                # Structured `EaseError` diagnostics with source snippets and hints
 │   ├── version.go               # Toolchain version metadata
@@ -63,6 +68,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── spawn_inbox_test.go      # `spawn` / `inbox` worker isolation and backpressure Go tests
 │   ├── swarm_test.go            # `swarm loop` ordering, isolation and error-reporting Go tests
 │   ├── serve_test.go            # `ease serve` hot-reload, debug socket & lifecycle Go tests
+│   ├── wasm_test.go             # Pure-Go WASM validation, Node.js WebAssembly execution & golden tests
 │   ├── lsp_test.go              # LSP server diagnostics and protocol Go tests
 │   ├── dap_test.go              # DAP stepping debugger, breakpoints, scopes & watch evaluation Go tests
 │   ├── logo_test.go             # Logo/CLI banner Go tests

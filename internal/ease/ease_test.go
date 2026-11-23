@@ -1177,16 +1177,27 @@ say describe 1
 		t.Fatalf("unexpected output: got %q, want %q", got, "got pos")
 	}
 
-	// 5. Reassigning a function parameter gives a parameter-specific error (not 'def' constant).
+	// 5. Rebinding a function parameter locally is allowed and never mutates the caller.
 	paramReassignSrc := `
 to inc n
     n = n + 1
     -> n
 end
-say inc 1
+to push_four xs
+    xs = append xs 4
+    -> xs
+end
+x = 1
+base = list 1, 2, 3
+res = push_four base
+say "{inc x}|{x}|{count res}|{count base}"
 `
-	if _, err := EvalProgram(paramReassignSrc, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `Cannot reassign parameter "n"; assign to a new local variable instead.`) {
-		t.Fatalf("expected parameter reassignment error, got: %v", err)
+	var outParam bytes.Buffer
+	if _, err := EvalProgram(paramReassignSrc, &outParam); err != nil {
+		t.Fatalf("expected local parameter rebinding to succeed, got: %v", err)
+	}
+	if got := strings.TrimSpace(outParam.String()); got != "2|1|4|3" {
+		t.Fatalf("unexpected parameter rebinding output: got %q, want %q", got, "2|1|4|3")
 	}
 
 	// 6. 'if ... end' is removed from Ease.
