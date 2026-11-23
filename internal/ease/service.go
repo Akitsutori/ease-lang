@@ -428,7 +428,21 @@ func valueToTypedStub(val Value) string {
 		if v.ElemType != "" && v.ElemType != "any" {
 			return "list as " + v.ElemType
 		}
-		return "list as number"
+		if len(v.Elements) > 0 {
+			switch el := v.Elements[0].(type) {
+			case float64:
+				return "list as number"
+			case string:
+				return "list as text"
+			case *RecordValue:
+				if el.TypeName != "" {
+					return "list as " + el.TypeName
+				}
+			}
+		}
+		return `'[]' as json`
+	case *MapValue:
+		return `'{}' as json`
 	case *RecordValue:
 		return v.TypeName
 	case *UnionValue:
@@ -439,6 +453,49 @@ func valueToTypedStub(val Value) string {
 	default:
 		return `""`
 	}
+}
+
+func (ev *Evaluator) BuildReplPreamble(declsSrc string) string {
+	var b strings.Builder
+	if declsSrc != "" {
+		b.WriteString(declsSrc)
+		b.WriteByte('\n')
+	}
+	if ev == nil || ev.global == nil {
+		return strings.TrimSpace(b.String())
+	}
+
+	ev.global.mu.RLock()
+	names := make([]string, 0, len(ev.global.vars))
+	snapshot := make(map[string]binding, len(ev.global.vars))
+	for name, bnd := range ev.global.vars {
+		names = append(names, name)
+		snapshot[name] = bnd
+	}
+	ev.global.mu.RUnlock()
+
+	sort.Strings(names)
+	for _, name := range names {
+		if name == "it" || strings.Contains(name, ".") {
+			continue
+		}
+		bnd := snapshot[name]
+		switch v := bnd.val.(type) {
+		case *RecordValue:
+			if v.IsPrototype {
+				continue
+			}
+		case *UnionValue, *ModuleValue:
+			continue
+		}
+		stub := valueToTypedStub(bnd.val)
+		if !bnd.mutable {
+			fmt.Fprintf(&b, "def %s = %s\n", name, stub)
+		} else {
+			fmt.Fprintf(&b, "%s = %s\n", name, stub)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {

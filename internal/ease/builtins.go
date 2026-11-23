@@ -608,12 +608,43 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 		if len(args) != 2 {
 			return nil, true, newError("RuntimeError", line, col, ev.source, "contains takes 2 arguments", "")
 		}
-		s, ok1 := args[0].(string)
-		sub, ok2 := args[1].(string)
-		if !ok1 || !ok2 {
-			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("contains requires two text arguments, got %s and %s", TypeName(args[0]), TypeName(args[1])), "Example: check contains email \"@example.com\" -> ...")
+		switch container := args[0].(type) {
+		case string:
+			sub, ok2 := args[1].(string)
+			if !ok2 {
+				return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("contains on text requires a text argument, got %s", TypeName(args[1])), "Example: check contains email \"@example.com\" -> ...")
+			}
+			return strings.Contains(container, sub), true, nil
+		case *ListValue:
+			if container.ElemType != "" && !isAtomicListElemType(container.ElemType, ev.global) {
+				return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot use 'contains' on list of %s; 'contains' only supports text or lists of atomic values", container.ElemType), "Use 'count (xs where it is ...) > 0' to query record lists.")
+			}
+			if !isAtomicValue(args[1]) {
+				return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot use 'contains' with non-atomic %s", structuredTypeName(args[1])), "Use 'count (xs where it is ...) > 0' to query record lists.")
+			}
+			if container.ElemType != "" {
+				if !matchesListElemType(args[1], container.ElemType, ev.global) {
+					if _, isUnion := lookupUnion(ev.global, container.ElemType); isUnion {
+						return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("Value %s is not valid for list union %q", formatScalarErrVal(args[1]), container.ElemType), fmt.Sprintf("Provide a valid member of union %s.", container.ElemType))
+					}
+					return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("Cannot check 'contains' for %s in list of %s", structuredTypeName(args[1]), container.ElemType), fmt.Sprintf("Provide a value of type %q.", container.ElemType))
+				}
+			} else {
+				for _, el := range container.Elements {
+					if !isAtomicValue(el) {
+						return nil, true, newError("TypeError", line, col, ev.source, "Cannot use 'contains' on list containing non-atomic values", "Use 'count (xs where it is ...) > 0' to query record lists.")
+					}
+				}
+			}
+			for _, el := range container.Elements {
+				if ValuesEqual(el, args[1]) {
+					return true, true, nil
+				}
+			}
+			return false, true, nil
+		default:
+			return nil, true, newError("TypeError", line, col, ev.source, fmt.Sprintf("contains requires text or a list of atomic values, got %s", TypeName(args[0])), "Example: check contains roles \"admin\" -> ...")
 		}
-		return strings.Contains(s, sub), true, nil
 
 	case "load":
 		if len(args) != 1 {
@@ -1220,5 +1251,45 @@ func (ev *Evaluator) evalSave(pathStr string, data Value, format string, env *En
 
 	default:
 		return newError("TypeError", line, col, ev.source, fmt.Sprintf("Unsupported format %q for 'save'", format), "Supported formats for 'save' are: text, json, csv, bytes.")
+	}
+}
+
+func isAtomicValue(v Value) bool {
+	switch v.(type) {
+	case float64, string:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAtomicListElemType(elemType string, env *Env) bool {
+	switch elemType {
+	case "", "number", "text":
+		return true
+	case "list", "map", "inbox":
+		return false
+	default:
+		if uVal, ok := lookupUnion(env, elemType); ok {
+			for _, opt := range uVal.Values {
+				switch opt.(type) {
+				case *RecordValue, *MapValue, *ListValue, *InboxValue:
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	}
+}
+
+func formatScalarErrVal(v Value) string {
+	switch x := v.(type) {
+	case string:
+		return fmt.Sprintf("%q", x)
+	case float64:
+		return FormatValue(x)
+	default:
+		return structuredTypeName(v)
 	}
 }

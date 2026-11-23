@@ -20,32 +20,34 @@ type wasmRuntime struct {
 	impPlayMelody   uint32
 
 	// Runtime functions
-	fnAlloc        uint32
-	fnMemcpy       uint32
-	fnStrEq        uint32
-	fnStrConcat    uint32
-	fnF64ToText    uint32
-	fnTextToF64    uint32
-	fnStrContains  uint32
-	fnStrTrim      uint32
-	fnStrUpper     uint32
-	fnStrLower     uint32
-	fnStrSlice     uint32
-	fnStrSplit     uint32
-	fnStrJoin      uint32
-	fnStrReplace   uint32
-	fnListNew      uint32
-	fnListPush     uint32
-	fnListGet      uint32
-	fnListSet      uint32
-	fnListLen      uint32
-	fnListRange    uint32
-	fnListSum      uint32
-	fnListAvg      uint32
-	fnListSlice    uint32
-	fnListSortNum  uint32
-	fnListSortText uint32
-	fnPresentScene uint32
+	fnAlloc            uint32
+	fnMemcpy           uint32
+	fnStrEq            uint32
+	fnStrConcat        uint32
+	fnF64ToText        uint32
+	fnTextToF64        uint32
+	fnStrContains      uint32
+	fnStrTrim          uint32
+	fnStrUpper         uint32
+	fnStrLower         uint32
+	fnStrSlice         uint32
+	fnStrSplit         uint32
+	fnStrJoin          uint32
+	fnStrReplace       uint32
+	fnListNew          uint32
+	fnListPush         uint32
+	fnListGet          uint32
+	fnListSet          uint32
+	fnListLen          uint32
+	fnListRange        uint32
+	fnListSum          uint32
+	fnListAvg          uint32
+	fnListSlice        uint32
+	fnListSortNum      uint32
+	fnListSortText     uint32
+	fnListContainsNum  uint32
+	fnListContainsText uint32
+	fnPresentScene     uint32
 }
 
 func newWasmRuntime(mod *wasmModule) *wasmRuntime {
@@ -90,6 +92,8 @@ func newWasmRuntime(mod *wasmModule) *wasmRuntime {
 	rt.fnListSlice = mod.reserveFunc([]byte{wasmI32, wasmF64, wasmF64}, []byte{wasmI32})
 	rt.fnListSortNum = mod.reserveFunc([]byte{wasmI32}, []byte{wasmI32})
 	rt.fnListSortText = mod.reserveFunc([]byte{wasmI32}, []byte{wasmI32})
+	rt.fnListContainsNum = mod.reserveFunc([]byte{wasmI32, wasmF64}, []byte{wasmI32})
+	rt.fnListContainsText = mod.reserveFunc([]byte{wasmI32, wasmI64}, []byte{wasmI32})
 	rt.fnPresentScene = mod.reserveFunc([]byte{wasmI32}, nil)
 
 	// Export ease_alloc and memory
@@ -153,6 +157,8 @@ func (rt *wasmRuntime) emitAllBodies() {
 	rt.emitListSlice()
 	rt.emitListSort(true, rt.fnListSortNum)
 	rt.emitListSort(false, rt.fnListSortText)
+	rt.emitListContainsNum()
+	rt.emitListContainsText()
 }
 
 func (rt *wasmRuntime) emitAlloc() {
@@ -1585,4 +1591,104 @@ func (rt *wasmRuntime) emitListSort(isNum bool, fnIdx uint32) {
 	c.op(opEnd)
 	c.localGet(2)
 	rt.mod.setFuncBody(fnIdx, []byte{wasmI32, wasmI32, wasmI32, wasmI32, wasmI32, wasmI64, wasmI64}, c.b)
+}
+
+func (rt *wasmRuntime) emitListContainsNum() {
+	// params: 0=listPtr(i32), 1=needle(f64) -> i32 (0 or 1)
+	// locals: 2=i(i32), 3=n(i32), 4=data(i32)
+	var c wasmCodeBuf
+	c.localGet(0)
+	c.op(opI32Eqz)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(0)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(0)
+	c.memOp(opI32Load, 2, 4)
+	c.localSet(3)
+	c.localGet(0)
+	c.memOp(opI32Load, 2, 0)
+	c.localSet(4)
+	c.i32Const(0)
+	c.localSet(2)
+
+	c.block(wasmBlockVoid)
+	c.loop(wasmBlockVoid)
+	c.localGet(2)
+	c.localGet(3)
+	c.op(opI32GeS)
+	c.brIf(1)
+	c.localGet(4)
+	c.localGet(2)
+	c.i32Const(8)
+	c.op(opI32Mul)
+	c.op(opI32Add)
+	c.memOp(opF64Load, 3, 0)
+	c.localGet(1)
+	c.op(opF64Eq)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(1)
+	c.op(opReturn)
+	c.op(opEnd)
+	c.localGet(2)
+	c.i32Const(1)
+	c.op(opI32Add)
+	c.localSet(2)
+	c.br(0)
+	c.op(opEnd)
+	c.op(opEnd)
+
+	c.i32Const(0)
+	rt.mod.setFuncBody(rt.fnListContainsNum, []byte{wasmI32, wasmI32, wasmI32}, c.b)
+}
+
+func (rt *wasmRuntime) emitListContainsText() {
+	// params: 0=listPtr(i32), 1=needle(i64) -> i32 (0 or 1)
+	// locals: 2=i(i32), 3=n(i32), 4=data(i32)
+	var c wasmCodeBuf
+	c.localGet(0)
+	c.op(opI32Eqz)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(0)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(0)
+	c.memOp(opI32Load, 2, 4)
+	c.localSet(3)
+	c.localGet(0)
+	c.memOp(opI32Load, 2, 0)
+	c.localSet(4)
+	c.i32Const(0)
+	c.localSet(2)
+
+	c.block(wasmBlockVoid)
+	c.loop(wasmBlockVoid)
+	c.localGet(2)
+	c.localGet(3)
+	c.op(opI32GeS)
+	c.brIf(1)
+	c.localGet(4)
+	c.localGet(2)
+	c.i32Const(8)
+	c.op(opI32Mul)
+	c.op(opI32Add)
+	c.memOp(opI64Load, 3, 0)
+	c.localGet(1)
+	c.call(rt.fnStrEq)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(1)
+	c.op(opReturn)
+	c.op(opEnd)
+	c.localGet(2)
+	c.i32Const(1)
+	c.op(opI32Add)
+	c.localSet(2)
+	c.br(0)
+	c.op(opEnd)
+	c.op(opEnd)
+
+	c.i32Const(0)
+	rt.mod.setFuncBody(rt.fnListContainsText, []byte{wasmI32, wasmI32, wasmI32}, c.b)
 }

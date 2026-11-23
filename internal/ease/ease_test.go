@@ -1003,7 +1003,6 @@ func TestLargeInputsAndResourceLimitsIssue13(t *testing.T) {
 import network
 n = network.network with url = %q, timeout = 5
 body = network:fetch n "/big"
-body is ""
 req = network.http_request with method = "GET", url = "%s/big", timeout = 5
 `, srv.URL, srv.URL)
 	prog, err := ParseProgram(httpSrc)
@@ -2443,5 +2442,39 @@ func TestElseAfterSingleLineCheckAndContinueHints(t *testing.T) {
 	wantContHint := "Ease has no 'continue' keyword; wrap the remaining loop body in 'check <inverted_cond> ... end' instead."
 	if _, err := ParseProgram(contSrc); err == nil || !strings.Contains(err.Error(), wantContHint) {
 		t.Fatalf("expected hint %q, got: %v", wantContHint, err)
+	}
+}
+
+func TestContainsOnAtomicListsRuntime(t *testing.T) {
+	src := `
+def Role = "admin" | "guest"
+roles = (list "admin", "guest") as Role
+nums = list 13, 16
+empty_json = '[]' as json
+
+to check_dynamic_bad xs item
+  check contains xs item
+    -> "yes"
+  end
+  -> "no"
+end
+
+test "runtime contains on atomic lists and error tests"
+  contains nums 16
+  not (contains nums 99)
+  contains roles "guest"
+  not (contains empty_json "nope")
+  (check_dynamic_bad (list "a", "b") 32) is error
+end
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 5 || report.Failed != 0 {
+		t.Fatalf("expected 5 passed / 0 failed, got %d/%d: %+v", report.Passed, report.Failed, report.Results)
 	}
 }

@@ -146,11 +146,17 @@ type typeValidator struct {
 	funcDecls             map[string]*FuncDecl
 	modules               map[string]modTypeInfo
 	resolvedUnions        map[string][]resolvedUnionVariant
+	globalScope           *typeScope
 	scope                 *typeScope
 	allowInternalBuiltins bool
 	spawnFuncCache        map[string]bool
+	activeCallSpecs       map[string]bool
+	verifiedCallSpecs     map[string]bool
+	activeReturnInfer     map[string]bool
+	callSpecDepth         int
 	inErrorTestExpr       bool
 	inErrorBlock          bool
+	inTestBlock           bool
 	loopDepth             int
 	swarmDepth            int
 	directInSwarm         bool
@@ -278,10 +284,10 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Expression); err != nil {
 			return err
 		}
-		if inFunction {
-			return v.checkNotCondition(st.Expression)
+		if v.inTestBlock {
+			return nil
 		}
-		return nil
+		return v.checkNotStandaloneCondition(st.Expression)
 
 	case *LoopEndStmt:
 		if v.directInSwarm {
@@ -717,6 +723,13 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 			if effective && (c.TypeName == "text" || c.TypeName == "number" || c.TypeName == "list") {
 				next.exactRecord = ""
 				next.exactNonRecord = true
+				next.unionName = ""
+				if c.TypeName == "text" || c.TypeName == "number" {
+					next.exactBaseType = c.TypeName
+					next.listElemType = ""
+				} else {
+					next.exactBaseType = ""
+				}
 				scope.vars[id.Name] = next
 			}
 		}

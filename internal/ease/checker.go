@@ -124,6 +124,43 @@ func runChecksWithOptions(source string, filePath string, trace io.Writer) (*Che
 	return report, nil
 }
 
+// RunCheckBlocks executes the given `test ... end` blocks against a child scope of ev.global
+// using headless screen/audio/net safety, returning a CheckReport without exiting on failures.
+func (ev *Evaluator) RunCheckBlocks(checks []*CheckBlock, source string) (*CheckReport, error) {
+	prevScreen, prevAudio, prevNet := ev.headlessScreen, ev.headlessAudio, ev.headlessNet
+	ev.SetHeadlessScreen(true)
+	ev.SetHeadlessNet(true)
+	ev.SetHeadlessAudio(true)
+	defer func() {
+		ev.SetHeadlessScreen(prevScreen)
+		ev.SetHeadlessAudio(prevAudio)
+		ev.SetHeadlessNet(prevNet)
+	}()
+
+	report := &CheckReport{TestBlocks: len(checks)}
+	srcLines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
+
+	for _, blk := range checks {
+		scopeName := fmt.Sprintf("test %q", blk.Title)
+		ev.logTrace("running %s (%d statement(s))", scopeName, len(blk.Body))
+		runner := &testRunner{
+			ev:           ev,
+			srcLines:     srcLines,
+			report:       report,
+			testTitle:    blk.Title,
+			scope:        scopeName,
+			contextLines: []int{blk.Line},
+		}
+		scopeEnv := NewEnv(ev.global)
+		runner.runStmts(blk.Body, scopeEnv)
+	}
+
+	if err := ev.WaitWorkers(); err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
 type testRunner struct {
 	ev           *Evaluator
 	srcLines     []string

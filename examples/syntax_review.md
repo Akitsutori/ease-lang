@@ -172,7 +172,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   5. Mutating outer variable `total = total + it` inside `swarm loop` (`TypeError` / `RuntimeError`)
   6. `ask "..."` inside `swarm loop` (`TypeError` / `RuntimeError`)
   7. Non-list/non-range iterable `swarm loop 42 ... end` or `swarm loop "abc" ... end` (`TypeError`)
-  8. Condition returned from worker `swarm loop xs\n it > 1\nend` (`TypeError`)
+  8. Condition returned from worker `swarm loop xs\n -> it > 1\nend` (`TypeError`)
   9. Mixed result types across worker branches (`number` vs `text`, `TypeError`)
   10. Downstream field typo `res where it.missing is 1` or `sum text_res` (`TypeError`)
 

@@ -13,10 +13,12 @@ type typeDefInfo struct {
 type modTypeInfo struct {
 	alias    string
 	origName string
+	source   string
 	defs     map[string]*DefDecl
 	unions   map[string]*UnionDecl
 	funcs    map[string]*FuncDecl
 	consts   map[string]Expr
+	modules  map[string]modTypeInfo
 }
 
 type fieldSchema struct {
@@ -199,10 +201,12 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 		mi := modTypeInfo{
 			alias:    alias,
 			origName: origName,
+			source:   imp.ModuleSource,
 			defs:     make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
 			unions:   make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
 			funcs:    make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
 			consts:   make(map[string]Expr),
+			modules:  collectSubModules(imp.ModuleProg),
 		}
 		for _, d := range imp.ModuleProg.Defs {
 			mi.defs[d.Name] = d
@@ -227,6 +231,7 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 		modules[alias] = mi
 	}
 
+	rootScope := newTypeScope(nil)
 	v := &typeValidator{
 		source:                source,
 		known:                 known,
@@ -238,9 +243,13 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 		funcDecls:             funcDecls,
 		modules:               modules,
 		resolvedUnions:        make(map[string][]resolvedUnionVariant, len(unions)),
-		scope:                 newTypeScope(nil),
+		globalScope:           rootScope,
+		scope:                 rootScope,
 		allowInternalBuiltins: allowInternalBuiltins,
 		spawnFuncCache:        make(map[string]bool),
+		activeCallSpecs:       make(map[string]bool),
+		verifiedCallSpecs:     make(map[string]bool),
+		activeReturnInfer:     make(map[string]bool),
 	}
 
 	if err := v.resolveAndValidateUnions(prog); err != nil {
@@ -284,7 +293,9 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 
 	for _, chk := range prog.Checks {
 		v.pushScope()
+		v.inTestBlock = true
 		err := v.checkStmts(chk.Body, false)
+		v.inTestBlock = false
 		v.popScope()
 		if err != nil {
 			return err
@@ -858,6 +869,15 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 					}
 				}
 			}
+			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "" {
+				if fn := mod.funcs[ex.Callee]; fn != nil && len(ex.Args) == len(fn.Params) {
+					argStates := make([]varTypeState, len(ex.Args))
+					for i, arg := range ex.Args {
+						argStates[i] = v.inferExprTypeState(arg)
+					}
+					return v.inferFuncReturnState(ex.Module, fn, argStates)
+				}
+			}
 			return varTypeState{}
 		}
 		switch ex.Callee {
@@ -914,6 +934,14 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			if len(ex.Args) >= 1 {
 				return v.inferExprTypeState(ex.Args[0])
 			}
+		default:
+			if fn := v.funcDecls[ex.Callee]; fn != nil && len(ex.Args) == len(fn.Params) {
+				argStates := make([]varTypeState, len(ex.Args))
+				for i, arg := range ex.Args {
+					argStates[i] = v.inferExprTypeState(arg)
+				}
+				return v.inferFuncReturnState("", fn, argStates)
+			}
 		}
 	}
 	return varTypeState{}
@@ -931,6 +959,138 @@ func (v *typeValidator) inferIterableElemState(iter Expr) varTypeState {
 		return varTypeState{exactRecord: st.exactRecord}
 	}
 	return varTypeState{}
+}
+
+func (v *typeValidator) checkContainsCall(ex *CallExpr) error {
+	cSt := v.inferExprTypeState(ex.Args[0])
+	iSt := v.inferExprTypeState(ex.Args[1])
+
+	if cSt.exactRecord != "" || cSt.exactBaseType == "number" || cSt.inboxElemType != "" {
+		got := v.staticConcreteType(cSt)
+		if got == "" {
+			got = "non-container"
+		}
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("contains requires text or a list of atomic values, got %s", got),
+			"Example: check contains roles \"admin\" -> ...",
+		)
+	}
+	if cSt.listElemType == "" && cSt.unionName != "" {
+		if uVars, ok := v.resolvedUnions[cSt.unionName]; ok && !v.unionContainsOnlyBaseType(uVars, "text") {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("contains requires text or a list of atomic values, got %s", cSt.unionName),
+				"Example: check contains roles \"admin\" -> ...",
+			)
+		}
+	}
+
+	if cSt.exactBaseType == "text" {
+		if iSt.exactRecord != "" || iSt.listElemType != "" || iSt.inboxElemType != "" ||
+			(iSt.exactBaseType != "" && iSt.exactBaseType != "text") {
+			got := v.staticConcreteType(iSt)
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("contains on text requires a text argument, got %s", got),
+				"Example: check contains email \"@example.com\" -> ...",
+			)
+		}
+		if uVars := v.unionVariantsForTypeState(iSt); len(uVars) > 0 && !v.unionContainsOnlyBaseType(uVars, "text") {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"contains on text requires a text argument",
+				"Example: check contains email \"@example.com\" -> ...",
+			)
+		}
+		return nil
+	}
+
+	if cSt.listElemType != "" {
+		if !v.isAtomicElemType(cSt.listElemType) {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("Cannot use 'contains' on list of %s; 'contains' only supports text or lists of atomic values", cSt.listElemType),
+				"Use 'count (xs where it is ...) > 0' to query record lists.",
+			)
+		}
+		if (cSt.listElemType == "number" || cSt.listElemType == "text") && iSt.exactBaseType != "" && iSt.exactBaseType != cSt.listElemType {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("Cannot check 'contains' for %s in list of %s", iSt.exactBaseType, cSt.listElemType),
+				fmt.Sprintf("Provide a value of type %q.", cSt.listElemType),
+			)
+		}
+		return v.checkTypedElementValue(cSt.listElemType, ex.Args[1], "check 'contains'", "list")
+	}
+
+	// Empty untyped list (e.g. '[]' as json) or unknown list: still reject known non-atomic items.
+	if iSt.exactRecord != "" || iSt.listElemType != "" || iSt.inboxElemType != "" {
+		got := v.staticConcreteType(iSt)
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("Cannot use 'contains' with non-atomic %s", got),
+			"Use 'count (xs where it is ...) > 0' to query record lists.",
+		)
+	}
+	if uVars := v.unionVariantsForTypeState(iSt); len(uVars) > 0 {
+		for _, vr := range uVars {
+			if vr.kind == variantRecord {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("Cannot use 'contains' with non-atomic %s", vr.display()),
+					"Use 'count (xs where it is ...) > 0' to query record lists.",
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (v *typeValidator) isAtomicElemType(elemType string) bool {
+	switch elemType {
+	case "", "number", "text":
+		return true
+	case "list", "map", "inbox":
+		return false
+	default:
+		if v.defs[elemType] != nil {
+			return false
+		}
+		if uVars, isU := v.resolvedUnions[elemType]; isU {
+			for _, vr := range uVars {
+				if vr.kind == variantRecord {
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	}
 }
 
 func (v *typeValidator) checkExpr(e Expr) error {
@@ -1733,6 +1893,11 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				)
 			}
 		}
+		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "contains" && len(ex.Args) == 2 {
+			if err := v.checkContainsCall(ex); err != nil {
+				return err
+			}
+		}
 		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "put" && len(ex.Args) == 2 {
 			inSt := v.inferExprTypeState(ex.Args[0])
 			if inSt.inboxElemType == "" {
@@ -1776,8 +1941,341 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return err
 			}
 		}
+		if !v.inErrorTestExpr {
+			if err := v.checkCallSiteSpecialization(ex); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func collectSubModules(prog *Program) map[string]modTypeInfo {
+	if prog == nil || len(prog.Imports) == 0 {
+		return nil
+	}
+	out := make(map[string]modTypeInfo, len(prog.Imports))
+	for _, imp := range prog.Imports {
+		if imp.ModuleProg == nil {
+			continue
+		}
+		alias := imp.Alias
+		if alias == "" {
+			alias = imp.Name
+		}
+		origName := ""
+		if !imp.IsFileImport {
+			origName = imp.Name
+		}
+		sub := modTypeInfo{
+			alias:    alias,
+			origName: origName,
+			source:   imp.ModuleSource,
+			defs:     make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
+			unions:   make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
+			funcs:    make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
+			consts:   make(map[string]Expr),
+			modules:  collectSubModules(imp.ModuleProg),
+		}
+		for _, d := range imp.ModuleProg.Defs {
+			sub.defs[d.Name] = d
+		}
+		for _, u := range imp.ModuleProg.Unions {
+			sub.unions[u.Name] = u
+		}
+		for _, fn := range imp.ModuleProg.Functions {
+			sub.funcs[fn.Name] = fn
+		}
+		for _, s := range imp.ModuleProg.Body {
+			if cs, ok := s.(*ConstDeclStmt); ok {
+				sub.consts[cs.Name] = cs.Value
+			}
+		}
+		out[alias] = sub
+	}
+	return out
+}
+
+func hasConcreteTypeInfo(st varTypeState) bool {
+	return st.exactBaseType != "" ||
+		st.exactRecord != "" ||
+		st.unionName != "" ||
+		st.listElemType != "" ||
+		st.inboxElemType != "" ||
+		st.inlineUnionLabel != ""
+}
+
+func varTypeStateSig(st varTypeState) string {
+	return st.exactBaseType + "|" + st.exactRecord + "|" + st.unionName + "|" + st.listElemType + "|" + st.inboxElemType + "|" + st.inlineUnionLabel
+}
+
+func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
+	var fn *FuncDecl
+	var callName string
+	var modInfo modTypeInfo
+	isModCall := false
+	if ex.Module == "" {
+		fn = v.funcDecls[ex.Callee]
+		callName = ex.Callee
+	} else {
+		mod, ok := v.modules[ex.Module]
+		if !ok || mod.origName != "" {
+			return nil
+		}
+		modInfo = mod
+		isModCall = true
+		fn = mod.funcs[ex.Callee]
+		callName = ex.Module + ":" + ex.Callee
+	}
+	if fn == nil || len(fn.Params) == 0 || len(ex.Args) != len(fn.Params) {
+		return nil
+	}
+
+	argStates := make([]varTypeState, len(ex.Args))
+	hasAnyConcrete := false
+	sig := callName + "("
+	for i, arg := range ex.Args {
+		argStates[i] = v.inferExprTypeState(arg)
+		if hasConcreteTypeInfo(argStates[i]) {
+			hasAnyConcrete = true
+		}
+		if i > 0 {
+			sig += ","
+		}
+		sig += varTypeStateSig(argStates[i])
+	}
+	sig += ")"
+	if !hasAnyConcrete {
+		return nil
+	}
+	if v.activeCallSpecs[sig] || v.verifiedCallSpecs[sig] || v.callSpecDepth >= 16 {
+		return nil
+	}
+
+	v.activeCallSpecs[sig] = true
+	v.callSpecDepth++
+
+	// Save validator state so specialized check runs in an isolated scope.
+	savedScope := v.scope
+	savedLoopDepth := v.loopDepth
+	savedSwarmDepth := v.swarmDepth
+	savedDirectInSwarm := v.directInSwarm
+	savedWorkerAssigned := v.workerAssigned
+	savedWorkerOuter := v.workerOuterScope
+	savedInErrorBlock := v.inErrorBlock
+	savedSource := v.source
+
+	var addedDefs []string
+	var addedFuncs []string
+	var addedMods []string
+	if isModCall {
+		if modInfo.source != "" {
+			v.source = modInfo.source
+		}
+		for name, d := range modInfo.defs {
+			if _, exists := v.defs[name]; !exists {
+				v.defs[name] = d
+				addedDefs = append(addedDefs, name)
+			}
+		}
+		for name, mfn := range modInfo.funcs {
+			if _, exists := v.funcDecls[name]; !exists {
+				v.funcDecls[name] = mfn
+				addedFuncs = append(addedFuncs, name)
+			}
+		}
+		for alias, subMod := range modInfo.modules {
+			if _, exists := v.modules[alias]; !exists {
+				v.modules[alias] = subMod
+				addedMods = append(addedMods, alias)
+			}
+		}
+	}
+
+	v.scope = newTypeScope(v.globalScope)
+	v.loopDepth = 0
+	v.swarmDepth = 0
+	v.directInSwarm = false
+	v.workerAssigned = nil
+	v.workerOuterScope = nil
+	v.inErrorBlock = false
+
+	fnScope := v.pushScope()
+	v.inferFuncUnionParams(fn, fnScope)
+	for i, p := range fn.Params {
+		if hasConcreteTypeInfo(argStates[i]) {
+			fnScope.vars[p] = argStates[i].clone()
+		}
+	}
+
+	err := v.checkStmts(fn.Body, true)
+
+	// Restore validator state.
+	for _, name := range addedDefs {
+		delete(v.defs, name)
+	}
+	for _, name := range addedFuncs {
+		delete(v.funcDecls, name)
+	}
+	for _, alias := range addedMods {
+		delete(v.modules, alias)
+	}
+	v.scope = savedScope
+	v.loopDepth = savedLoopDepth
+	v.swarmDepth = savedSwarmDepth
+	v.directInSwarm = savedDirectInSwarm
+	v.workerAssigned = savedWorkerAssigned
+	v.workerOuterScope = savedWorkerOuter
+	v.inErrorBlock = savedInErrorBlock
+	v.source = savedSource
+	delete(v.activeCallSpecs, sig)
+	v.callSpecDepth--
+
+	if err != nil {
+		if ee, ok := err.(*EaseError); ok {
+			return newError(
+				ee.Stage,
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("In call to '%s': %s (in '%s' at line %d)", callName, ee.Message, fn.Name, ee.Line),
+				ee.Hint,
+			)
+		}
+		return err
+	}
+	v.verifiedCallSpecs[sig] = true
+	return nil
+}
+
+func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argStates []varTypeState) varTypeState {
+	if fn == nil || !stmtsHaveReturn(fn.Body) {
+		return varTypeState{}
+	}
+	key := modName + ":" + fn.Name + "("
+	for i, st := range argStates {
+		if i > 0 {
+			key += ","
+		}
+		key += varTypeStateSig(st)
+	}
+	key += ")"
+	if v.activeReturnInfer[key] || len(v.activeReturnInfer) >= 16 {
+		return varTypeState{}
+	}
+	v.activeReturnInfer[key] = true
+	defer delete(v.activeReturnInfer, key)
+
+	savedScope := v.scope
+	v.scope = newTypeScope(v.globalScope)
+	fnScope := v.pushScope()
+	v.inferFuncUnionParams(fn, fnScope)
+	for i, p := range fn.Params {
+		if i < len(argStates) && hasConcreteTypeInfo(argStates[i]) {
+			fnScope.vars[p] = argStates[i].clone()
+		}
+	}
+
+	var retStates []varTypeState
+	var walkStmts func(stmts []Stmt)
+	walkStmts = func(stmts []Stmt) {
+		for _, s := range stmts {
+			switch st := s.(type) {
+			case *AssignStmt:
+				v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
+			case *ConstDeclStmt:
+				v.scope.vars[st.Name] = v.inferExprTypeState(st.Value)
+			case *ReturnStmt:
+				retStates = append(retStates, v.inferExprTypeState(st.Value))
+			case *CheckGuardStmt:
+				if st.IsEffectBlock {
+					bScope := v.pushScope()
+					v.applyCondNarrowing(bScope, st.Cond, true)
+					walkStmts(st.Body)
+					v.popScope()
+					if len(st.ElseBody) > 0 {
+						eScope := v.pushScope()
+						v.applyCondNarrowing(eScope, st.Cond, false)
+						walkStmts(st.ElseBody)
+						v.popScope()
+					}
+				} else {
+					for _, r := range st.Rules {
+						if r.Action != nil {
+							aScope := v.pushScope()
+							v.applyCondNarrowing(aScope, r.Cond, true)
+							walkStmts([]Stmt{r.Action})
+							v.popScope()
+						}
+						v.applyCondNarrowing(v.scope, r.Cond, false)
+					}
+					if len(st.ElseBody) > 0 {
+						walkStmts(st.ElseBody)
+					}
+				}
+			case *MatchStmt:
+				for _, arm := range st.Arms {
+					v.pushScope()
+					if arm.Action != nil {
+						walkStmts([]Stmt{arm.Action})
+					} else {
+						walkStmts(arm.Body)
+					}
+					v.popScope()
+				}
+				if len(st.ElseBody) > 0 {
+					v.pushScope()
+					walkStmts(st.ElseBody)
+					v.popScope()
+				}
+			}
+		}
+	}
+	walkStmts(fn.Body)
+	v.scope = savedScope
+
+	if len(retStates) == 0 {
+		return varTypeState{}
+	}
+	// Check if all return states agree on a structured list/record/inbox type.
+	first := retStates[0]
+	if first.listElemType != "" {
+		allMatch := true
+		for _, rs := range retStates[1:] {
+			if rs.listElemType != first.listElemType {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return varTypeState{listElemType: first.listElemType}
+		}
+	}
+	if first.exactRecord != "" {
+		allMatch := true
+		for _, rs := range retStates[1:] {
+			if rs.exactRecord != first.exactRecord {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return varTypeState{exactRecord: first.exactRecord}
+		}
+	}
+	if first.inboxElemType != "" {
+		allMatch := true
+		for _, rs := range retStates[1:] {
+			if rs.inboxElemType != first.inboxElemType {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return varTypeState{inboxElemType: first.inboxElemType}
+		}
+	}
+	return v.unifyScalarTypeStates(retStates)
 }
 
 func isConditionExpr(e Expr) bool {
@@ -1811,6 +2309,21 @@ func (v *typeValidator) checkNotCondition(e Expr) error {
 		v.source,
 		"Conditions cannot be stored or printed. Use a domain union instead, e.g.: def state = \"free\" | \"occupied\"",
 		"Evaluate conditions directly inside 'check' or 'test', and return/store explicit union variants instead.",
+	)
+}
+
+func (v *typeValidator) checkNotStandaloneCondition(e Expr) error {
+	if v.inErrorTestExpr || e == nil || !isConditionExpr(e) {
+		return nil
+	}
+	line, col := e.Pos()
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		"Standalone condition has no effect; conditions can only be used in 'check', 'where', or 'test'",
+		"Write 'check <cond> ... end' to branch, 'xs where <cond>' to filter, or wrap assertions in 'test ... end'.",
 	)
 }
 

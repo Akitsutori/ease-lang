@@ -26,7 +26,7 @@ var builtinDocs = map[string]lspBuiltinDoc{
 	"upper":    {sig: "upper <text>", desc: "Convert `text` to uppercase."},
 	"lower":    {sig: "lower <text>", desc: "Convert `text` to lowercase."},
 	"replace":  {sig: "replace <text> <old> <new>", desc: "Replace all non-empty occurrences of `old` with `new`."},
-	"contains": {sig: "contains <text> <sub>", desc: "Condition checking whether `text` contains substring `sub`."},
+	"contains": {sig: "contains <text_or_atomic_list> <item>", desc: "Condition checking whether `text` contains substring `item` or an atomic list (`number`, `text`, or scalar union) contains `item`."},
 	"sum":      {sig: "sum <num_list>", desc: "Sum all numbers in a `list<number>`."},
 	"avg":      {sig: "avg <num_list>", desc: "Compute the arithmetic mean of a non-empty `list<number>`."},
 	"sort":     {sig: "sort <list>", desc: "Return a sorted copy of a homogeneous `list<number>` or `list<text>`."},

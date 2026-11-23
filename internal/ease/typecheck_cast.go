@@ -243,6 +243,19 @@ func (v *typeValidator) checkCastFallback(ex *CastExpr) error {
 	if fbSt.exactBaseType != "" {
 		baseVar := resolvedUnionVariant{kind: variantBaseType, baseType: fbSt.exactBaseType}
 		if !v.variantCoveredByUnion(baseVar, uVariants) {
+			if v.callSpecDepth > 0 {
+				hasMatchingLit := false
+				for _, uv := range uVariants {
+					if (fbSt.exactBaseType == "text" && uv.kind == variantStringLit) ||
+						(fbSt.exactBaseType == "number" && uv.kind == variantNumberLit) {
+						hasMatchingLit = true
+						break
+					}
+				}
+				if hasMatchingLit {
+					return nil
+				}
+			}
 			var allowedDisplay []string
 			for _, uv := range uVariants {
 				allowedDisplay = append(allowedDisplay, uv.display())

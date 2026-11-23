@@ -653,7 +653,7 @@ func TestIssue7NoBoolConditionJsonBoolAndStrictUnionLiteral(t *testing.T) {
 		{"print comparison", "say 3 > 2\n"},
 		{"list element", "xs = list 3 > 2\n"},
 		{"record field", "def box\n    v = 0\nend\nb = box with v = 3 > 2\n"},
-		{"function return", "to f\n    3 > 2\nend\n"},
+		{"function return", "to f\n    -> 3 > 2\nend\n"},
 	}
 	for _, tc := range condCases {
 		_, err := EvalProgram(tc.src, &bytes.Buffer{})
@@ -665,6 +665,30 @@ func TestIssue7NoBoolConditionJsonBoolAndStrictUnionLiteral(t *testing.T) {
 			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
 		}
 		if !strings.Contains(err.Error(), `Conditions cannot be stored or printed. Use a domain union instead, e.g.: def state = "free" | "occupied"`) {
+			t.Fatalf("%s: unexpected error message: %v", tc.name, err)
+		}
+	}
+
+	// 1b. Tier 2: Standalone conditions outside 'check'/'where'/'test' are rejected everywhere.
+	standaloneCases := []struct {
+		name string
+		src  string
+	}{
+		{"top-level comparison", "10 > 5\n"},
+		{"top-level contains", "contains \"abc\" \"a\"\n"},
+		{"function body standalone", "to f\n    10 > 5\nend\n"},
+		{"function body contains", "to f\n    contains \"abc\" \"a\"\nend\n"},
+	}
+	for _, tc := range standaloneCases {
+		_, err := ParseProgram(tc.src)
+		if err == nil {
+			t.Fatalf("%s: expected standalone condition TypeError, got nil", tc.name)
+		}
+		var easeErr *EaseError
+		if !errors.As(err, &easeErr) || easeErr.Stage != "TypeError" {
+			t.Fatalf("%s: expected TypeError, got %v", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), "Standalone condition has no effect; conditions can only be used in 'check', 'where', or 'test'") {
 			t.Fatalf("%s: unexpected error message: %v", tc.name, err)
 		}
 	}
@@ -2010,5 +2034,160 @@ end
 				t.Fatalf("expected static TypeError containing %q, got: %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestContainsOnAtomicListsStaticAndRuntime(t *testing.T) {
+	// Valid static & runtime cases
+	validSrc := `
+def Role = "admin" | "guest"
+def Scalar = number | text
+
+nums = list 13, 16
+words = list "alpha", "beta"
+roles = (list "admin", "guest") as Role
+mixed = list as Scalar
+mixed = append mixed 13
+mixed = append mixed "b"
+empty_json = '[]' as json
+
+test "contains on atomic lists"
+  contains nums 16
+  not (contains nums 0)
+  contains words "beta"
+  contains roles "admin"
+  contains mixed 13
+  contains mixed "b"
+  not (contains empty_json "x")
+  not (contains empty_json 42)
+end
+`
+	if _, err := ParseProgram(validSrc); err != nil {
+		t.Fatalf("ParseProgram failed on valid atomic list contains: %v", err)
+	}
+	report, err := RunChecks(validSrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Passed != 8 || report.Failed != 0 {
+		t.Fatalf("expected 8 passed / 0 failed, got %d/%d: %+v", report.Passed, report.Failed, report.Results)
+	}
+
+	// Static TypeError cases
+	badCases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "number_in_text_list",
+			src:  "xs = list \"a\", \"b\"\ncheck contains xs 32\n  say \"ok\"\nend\n",
+			want: "Cannot check 'contains' for number in list of text",
+		},
+		{
+			name: "union_typo_literal",
+			src:  "def Role = \"admin\" | \"guest\"\nroles = (list \"admin\", \"guest\") as Role\ncheck contains roles \"admn\"\n  say \"ok\"\nend\n",
+			want: `Value "admn" is not valid for list union "Role"`,
+		},
+		{
+			name: "record_list_rejected_with_where_hint",
+			src:  "def User\n  name = \"\"\nend\nusers = list as User\nu = User with name = \"Aria\"\ncheck contains users u\n  say \"ok\"\nend\n",
+			want: "Use 'count (xs where it is ...) > 0' to query record lists",
+		},
+		{
+			name: "record_in_mixed_scalar_union_rejected",
+			src:  "def User\n  name = \"\"\nend\ndef Scalar = number | text\nxs = list as Scalar\nu = User with name = \"Aria\"\ncheck contains xs u\n  say \"ok\"\nend\n",
+			want: `Record "User" is not a member of list union "Scalar"`,
+		},
+		{
+			name: "record_in_empty_json_rejected",
+			src:  "def User\n  name = \"\"\nend\nxs = '[]' as json\nu = User with name = \"Aria\"\ncheck contains xs u\n  say \"ok\"\nend\n",
+			want: "Cannot use 'contains' with non-atomic User",
+		},
+		{
+			name: "condition_cannot_be_stored",
+			src:  "xs = list 1, 2\nflag = contains xs 1\n",
+			want: "Conditions cannot be stored or printed",
+		},
+	}
+
+	for _, tc := range badCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected TypeError containing %q, got: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestCallSiteParameterTypecheckAndReturnInference(t *testing.T) {
+	// 1. Wrong list element type passed to function using `sum`
+	badSumList := `
+to total prices
+  -> sum prices
+end
+bad = list "a", "b"
+say total bad
+`
+	if _, err := ParseProgram(badSumList); err == nil || !strings.Contains(err.Error(), "In call to 'total'") || !strings.Contains(err.Error(), "sum requires a list of numbers") {
+		t.Fatalf("expected call-site TypeError for total(list of text), got: %v", err)
+	}
+
+	// 2. Wrong record field accessed inside specialized function
+	badFieldInFn := `
+def User
+  name = ""
+end
+to sum_orders orders
+  matched = orders where it.amount > 0
+  -> count matched
+end
+users = list as User
+say sum_orders users
+`
+	if _, err := ParseProgram(badFieldInFn); err == nil || !strings.Contains(err.Error(), "In call to 'sum_orders'") || !strings.Contains(err.Error(), `has no field "amount"`) {
+		t.Fatalf("expected call-site TypeError for missing field 'amount', got: %v", err)
+	}
+
+	// 3. Wrong scalar type passed to arithmetic function
+	badScalar := `
+to add_ten x
+  -> x + 10
+end
+say add_ten "hello"
+`
+	if _, err := ParseProgram(badScalar); err == nil || !strings.Contains(err.Error(), "In call to 'add_ten'") {
+		t.Fatalf("expected call-site TypeError for add_ten \"hello\", got: %v", err)
+	}
+
+	// 4. Return type propagation enables downstream field typo checks
+	badReturnField := `
+def Order
+  amount = 0
+end
+to make_orders n
+  xs = list as Order
+  xs = append xs (Order with amount = n)
+  -> xs
+end
+orders = make_orders 42
+say orders.1.amnt
+`
+	if _, err := ParseProgram(badReturnField); err == nil || !strings.Contains(err.Error(), `Order has no field "amnt"`) {
+		t.Fatalf("expected downstream field typo TypeError via return inference, got: %v", err)
+	}
+
+	// 5. Recursive function (fib) terminates cleanly and infers number return
+	recSrc := `
+to fib n
+  check n <= 1 -> n
+  -> (fib (n - 1)) + (fib (n - 2))
+end
+res = fib 6
+say res + 1
+`
+	if _, err := ParseProgram(recSrc); err != nil {
+		t.Fatalf("expected recursive fib to typecheck cleanly, got: %v", err)
 	}
 }

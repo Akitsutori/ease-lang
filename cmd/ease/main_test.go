@@ -106,3 +106,54 @@ end
 		t.Fatalf("expected stderr %q, got %q", "Konfiguration fehlt", got)
 	}
 }
+
+func TestReplParityAndTestBlocks(t *testing.T) {
+	input := strings.Join([]string{
+		"k = list 12, 13, 14",
+		"k",
+		"test \"t\"",
+		"  contains k 13",
+		"end",
+		"test \"fail\"",
+		"  1 is 2",
+		"end",
+		"10 > 5",
+		"contains k 13",
+		"xs = list \"a\", \"b\"",
+		"check contains xs 32",
+		"  say \"no\"",
+		"end",
+		"check 1 is 1",
+		":reset",
+		"40 + 2",
+		"exit",
+	}, "\n") + "\n"
+
+	var out, errOut bytes.Buffer
+	code := runRepl(strings.NewReader(input), &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runRepl returned %d, errOut=%s", code, errOut.String())
+	}
+
+	outStr := out.String()
+	errStr := errOut.String()
+
+	if !strings.Contains(outStr, "[12, 13, 14]") {
+		t.Fatalf("expected REPL to print list k, got out:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "Summary: 1 passed, 0 failed (1 assertions in 1 test blocks)") {
+		t.Fatalf("expected passing test block summary in REPL, got out:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "FAIL") || !strings.Contains(outStr, "Summary: 0 passed, 1 failed (1 assertions in 1 test blocks)") {
+		t.Fatalf("expected failing test block report and continued session, got out:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "42") {
+		t.Fatalf("expected :reset + 40 + 2 to print 42, got out:\n%s", outStr)
+	}
+	if strings.Count(errStr, "Standalone condition has no effect") != 2 {
+		t.Fatalf("expected 2 standalone condition errors (10 > 5 and contains k 13), got errOut:\n%s", errStr)
+	}
+	if !strings.Contains(errStr, "Cannot check 'contains' for number in list of text") {
+		t.Fatalf("expected cross-line static TypeError for contains xs 32, got errOut:\n%s", errStr)
+	}
+}

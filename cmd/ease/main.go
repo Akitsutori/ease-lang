@@ -870,11 +870,10 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 					pending.Reset()
 				}
 			}()
-			fullSrc := declsSrc.String()
-			if fullSrc != "" {
-				fullSrc += "\n" + chunk
-			} else {
-				fullSrc = chunk
+			preamble := ev.BuildReplPreamble(declsSrc.String())
+			fullSrc := chunk
+			if preamble != "" {
+				fullSrc = preamble + "\n" + chunk
 			}
 			parsed, err := ease.ParseProgram(fullSrc)
 			if err != nil {
@@ -887,6 +886,15 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 			}
 			pending.Reset()
 
+			preBodyLen := 0
+			preChecksLen := 0
+			if preamble != "" {
+				if preProg, preErr := ease.ParseProgram(preamble); preErr == nil {
+					preBodyLen = len(preProg.Body)
+					preChecksLen = len(preProg.Checks)
+				}
+			}
+
 			if err := ev.RegisterDeclarations(parsed); err != nil {
 				fmt.Fprintln(errOut, err)
 				return
@@ -896,7 +904,7 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 				knownArities[fn.Name] = len(fn.Params)
 			}
 			chunkOnly, chunkErr := ease.ParseProgramWithArities(chunk, knownArities)
-			if chunkErr == nil && len(chunkOnly.Body) == 0 &&
+			if chunkErr == nil && len(chunkOnly.Body) == 0 && len(chunkOnly.Checks) == 0 &&
 				(len(chunkOnly.Defs) > 0 || len(chunkOnly.Unions) > 0 || len(chunkOnly.Functions) > 0 || len(chunkOnly.Imports) > 0) {
 				if declsSrc.Len() > 0 {
 					declsSrc.WriteByte('\n')
@@ -904,15 +912,16 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 				declsSrc.WriteString(chunk)
 			}
 
-			if len(parsed.Body) > 0 {
-				val, err := ev.ExecTopLevel(parsed.Body)
+			if len(parsed.Body) > preBodyLen {
+				newBody := parsed.Body[preBodyLen:]
+				val, err := ev.ExecTopLevel(newBody)
 				if err != nil {
 					fmt.Fprintln(errOut, err)
 					return
 				}
 				if val != nil {
-					if _, isSay := parsed.Body[len(parsed.Body)-1].(*ease.SayStmt); !isSay {
-						lastStmt := parsed.Body[len(parsed.Body)-1]
+					if _, isSay := newBody[len(newBody)-1].(*ease.SayStmt); !isSay {
+						lastStmt := newBody[len(newBody)-1]
 						line, col := lastStmt.Pos()
 						if condErr := ease.CheckNotConditionValue(val, line, col, fullSrc); condErr != nil {
 							fmt.Fprintln(errOut, condErr)
@@ -921,6 +930,22 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 						fmt.Fprintln(out, ease.FormatValue(val))
 					}
 				}
+			}
+
+			if len(parsed.Checks) > preChecksLen {
+				newChecks := parsed.Checks[preChecksLen:]
+				report, err := ev.RunCheckBlocks(newChecks, fullSrc)
+				if err != nil {
+					fmt.Fprintln(errOut, err)
+					return
+				}
+				for _, r := range report.Results {
+					if !r.Passed {
+						fmt.Fprint(out, ease.FormatFailure(r, "<repl>", fullSrc))
+					}
+				}
+				fmt.Fprintf(out, "Summary: %d passed, %d failed (%d assertions in %d test blocks)\n",
+					report.Passed, report.Failed, report.Total, report.TestBlocks)
 			}
 		}()
 	}

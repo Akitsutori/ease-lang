@@ -1800,6 +1800,24 @@ func (wc *wasmCompiler) emitCallExpr(c *wasmCodeBuf, ex *CallExpr) error {
 			}
 			return nil
 		case "contains":
+			cType := wc.inferExprTypeWithEnv(ex.Args[0], wc.curEnvTypes(), "")
+			if cType.kind == wkList {
+				if err := wc.emitExpr(c, ex.Args[0], cType); err != nil {
+					return err
+				}
+				if cType.elemKind == wkText {
+					if err := wc.emitExpr(c, ex.Args[1], wasmTypeInfo{kind: wkText}); err != nil {
+						return err
+					}
+					c.call(wc.rt.fnListContainsText)
+				} else {
+					if err := wc.emitExpr(c, ex.Args[1], wasmTypeInfo{kind: wkNum}); err != nil {
+						return err
+					}
+					c.call(wc.rt.fnListContainsNum)
+				}
+				return nil
+			}
 			if err := wc.emitExpr(c, ex.Args[0], wasmTypeInfo{kind: wkText}); err != nil {
 				return err
 			}

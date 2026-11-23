@@ -341,8 +341,8 @@ to run_match x
 end
 run_match 123
 `
-		if _, err := EvalProgram(badTargetDyn, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "'match' requires text target, got number") {
-			t.Fatalf("expected runtime error for numeric target, got: %v", err)
+		if _, err := EvalProgram(badTargetDyn, &bytes.Buffer{}); err == nil || (!strings.Contains(err.Error(), "'match' requires text target, got number") && !strings.Contains(err.Error(), "'match' requires text or a list of text, got number")) {
+			t.Fatalf("expected type error for numeric target, got: %v", err)
 		}
 
 		// Mixed list outputs when branches return dynamic/untyped results

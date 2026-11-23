@@ -318,10 +318,19 @@ to main
   evens = nums where it % 2 is 0
   r = random:roll 1 10
   v = 5
+  words = list "alpha", "beta"
+  has_num = "no"
+  check contains nums 4
+    has_num = "yes"
+  end
+  has_word = "no"
+  check contains words "beta"
+    has_word = "yes"
+  end
   say "fib={fib 7} rebind={rebind_add v},{v}"
   say "mod={17 % 5} abs={abs -7} floor={floor 3.9} min={min 8 3} max={max 8 3}"
   say "point={p2.x},{p2.y}"
-  say "sum={sum evens} roll={r}"
+  say "sum={sum evens} roll={r} has={has_num},{has_word}"
 end
 
 main`
@@ -335,7 +344,7 @@ main`
 		"fib=13 rebind=15,5",
 		"mod=2 abs=7 floor=3 min=3 max=8",
 		"point=42,20",
-		"sum=6 roll=5",
+		"sum=6 roll=5 has=yes,yes",
 	}
 	if len(res.Prints) != len(want) {
 		t.Fatalf("got %d print lines %v, want %v", len(res.Prints), res.Prints, want)
