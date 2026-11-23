@@ -11,6 +11,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 ```text
 .
 ├── cmd/ease/main.go             # CLI entrypoint (run, check, test, build, ast, tokens, repl, lsp, version)
+├── cmd/ease/main_test.go        # CLI subprocess tests (system.arguments, system:exit codes & stderr)
 ├── internal/ease/
 │   ├── token.go                 # Token types and reserved keywords
 │   ├── lexer.go                 # Scanner (numbers, strings with {interpolation}, raw '...', # comments, operators)
@@ -65,9 +66,10 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │       ├── network.ease         # `network` stdlib module (HTTP client + `inbox`-driven HTTP & TCP servers)
 │       ├── random.ease          # `random` stdlib module (`roll`, `pick`, `shuffle`)
 │       ├── screen.ease          # `screen` stdlib module (`fps_mode`, `event`, 2D shapes, `open` & `present`)
-│       └── synth.ease           # `synth` stdlib module (`wave_kind`, `melody`, `play`)
+│       ├── synth.ease           # `synth` stdlib module (`wave_kind`, `melody`, `play`)
+│       └── system.ease          # `system` stdlib module (`arguments`, `ok`, `exit`)
 ├── examples/                    # Runnable examples (00–11, fibonacci, showcase) and reference specs
-├── tests/                       # Language feature test files (01–15) executed via `ease test`
+├── tests/                       # Language feature test files (01–16) executed via `ease test`
 └── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux with -race, and Windows)
 ```
 

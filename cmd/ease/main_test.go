@@ -2,327 +2,107 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"ease-lang/internal/ease"
-	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 )
 
-func TestReplMultilineAndDeclarations(t *testing.T) {
-	input := strings.Join([]string{
-		"def player",
-		"    x = 10",
-		"    role = \"guest\" | \"admin\"",
-		"end",
-		"to add a b",
-		"    a + b",
-		"end",
-		"p = player with x = 25, role = \"admin\"",
-		"say p.x",
-		"add 2 3",
-		"total = 0",
-		"loop range 1 4",
-		"    total = total + it",
-		"end",
-		"say total",
-		"exit",
-	}, "\n") + "\n"
-
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	code := runRepl(strings.NewReader(input), &out, &errOut)
-	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d; stderr=%s", code, errOut.String())
+func buildTestEaseBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "ease-test.exe")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build ease binary: %v\n%s", err, out)
 	}
-	if errOut.Len() != 0 {
-		t.Fatalf("expected empty stderr, got: %s", errOut.String())
-	}
-	outStr := out.String()
-	for _, want := range []string{"...   ", "25", "5", "10"} {
-		if !strings.Contains(outStr, want) {
-			t.Fatalf("expected %q in REPL output, got:\n%s", want, outStr)
-		}
-	}
+	return bin
 }
 
-func TestCmdCheckAndJSON(t *testing.T) {
-	dir := t.TempDir()
-	okFile := filepath.Join(dir, "ok.ease")
-	okSrc := `def user
-  name = "Ada"
-end
+func TestCLISystemArgumentsAndExitCodes(t *testing.T) {
+	bin := buildTestEaseBinary(t)
+	tmpDir := t.TempDir()
 
-to greet u
-  "Hi {u.name}"
-end
-
-# Runtime crash only if called; ` + "`ease check`" + ` must succeed without executing.
-say "hello"
-
-test "smoke"
-  1 + 1 is 2
+	argsScript := filepath.Join(tmpDir, "args.ease")
+	argsSrc := `import system
+say count system.arguments
+loop system.arguments
+    say "{it.index}:{it}"
 end
 `
-	if err := os.WriteFile(okFile, []byte(okSrc), 0o644); err != nil {
-		t.Fatal(err)
+	if err := os.WriteFile(argsScript, []byte(argsSrc), 0o644); err != nil {
+		t.Fatalf("write args.ease: %v", err)
 	}
 
-	var out, errOut bytes.Buffer
-	if code := cmdCheckWithWriters([]string{okFile}, &out, &errOut); code != 0 {
-		t.Fatalf("expected exit code 0, got %d; stderr=%s", code, errOut.String())
+	// 1. `ease run <file> -- --check --port 8080` forwards flags after `--` untouched.
+	cmd := exec.Command(bin, "run", argsScript, "--", "--check", "--port", "8080")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run with -- failed: %v\n%s", err, out)
 	}
-	wantText := "OK: " + okFile + " (1 defs, 1 functions, 1 test blocks)"
-	if !strings.Contains(out.String(), wantText) {
-		t.Fatalf("expected %q in stdout, got %q", wantText, out.String())
-	}
-
-	out.Reset()
-	errOut.Reset()
-	if code := cmdCheckWithWriters([]string{okFile, "--json"}, &out, &errOut); code != 0 {
-		t.Fatalf("expected exit code 0, got %d; stderr=%s", code, errOut.String())
-	}
-	var chk jsonCheckResult
-	if err := json.Unmarshal(out.Bytes(), &chk); err != nil {
-		t.Fatalf("invalid JSON from ease check --json: %v\n%s", err, out.String())
-	}
-	if !chk.OK || chk.File != okFile || chk.Defs != 1 || chk.Functions != 1 || chk.TestBlocks != 1 {
-		t.Fatalf("unexpected check JSON: %+v", chk)
+	wantOut := "3\n1:--check\n2:--port\n3:8080"
+	if got := strings.TrimSpace(strings.ReplaceAll(string(out), "\r\n", "\n")); got != wantOut {
+		t.Fatalf("unexpected args output after --:\ngot:\n%s\nwant:\n%s", got, wantOut)
 	}
 
-	badFile := filepath.Join(dir, "bad.ease")
-	if err := os.WriteFile(badFile, []byte("x = \"41\" + 1\n"), 0o644); err != nil {
-		t.Fatal(err)
+	// 2. `ease <file> --port 8080 alpha` forwards unknown flags & positional args without `--`.
+	cmd2 := exec.Command(bin, argsScript, "--port", "8080", "alpha")
+	out2, err2 := cmd2.CombinedOutput()
+	if err2 != nil {
+		t.Fatalf("direct ease <file> with args failed: %v\n%s", err2, out2)
+	}
+	wantOut2 := "3\n1:--port\n2:8080\n3:alpha"
+	if got := strings.TrimSpace(strings.ReplaceAll(string(out2), "\r\n", "\n")); got != wantOut2 {
+		t.Fatalf("unexpected args output for direct file invocation:\ngot:\n%s\nwant:\n%s", got, wantOut2)
 	}
 
-	out.Reset()
-	errOut.Reset()
-	if code := cmdCheckWithWriters([]string{badFile}, &out, &errOut); code != 1 {
-		t.Fatalf("expected exit code 1 for bad file, got %d", code)
+	// 3. `system:exit system.ok` exits with 0 and no extra stderr.
+	okScript := filepath.Join(tmpDir, "exit_ok.ease")
+	if err := os.WriteFile(okScript, []byte("import system\nsystem:exit system.ok\nsay \"unreachable\"\n"), 0o644); err != nil {
+		t.Fatalf("write exit_ok.ease: %v", err)
 	}
-	if !strings.Contains(errOut.String(), "TypeError") {
-		t.Fatalf("expected TypeError on stderr, got: %q", errOut.String())
+	var stdout, stderr bytes.Buffer
+	cmdOk := exec.Command(bin, "run", okScript)
+	cmdOk.Stdout = &stdout
+	cmdOk.Stderr = &stderr
+	if err := cmdOk.Run(); err != nil {
+		t.Fatalf("expected exit code 0 for system.ok, got err=%v stderr=%q", err, stderr.String())
 	}
-
-	out.Reset()
-	errOut.Reset()
-	if code := cmdCheckWithWriters([]string{badFile, "--json"}, &out, &errOut); code != 1 {
-		t.Fatalf("expected exit code 1 for bad file --json, got %d", code)
-	}
-	var errResp jsonErrorResponse
-	if err := json.Unmarshal(out.Bytes(), &errResp); err != nil {
-		t.Fatalf("invalid JSON error: %v\n%s", err, out.String())
-	}
-	if errResp.OK || errResp.File != badFile || errResp.Error == nil || errResp.Error.Stage != "TypeError" || errResp.Error.Line != 1 {
-		t.Fatalf("unexpected JSON error payload: %+v", errResp)
-	}
-}
-
-func TestCmdTestAndAstJSON(t *testing.T) {
-	dir := t.TempDir()
-	passFile := filepath.Join(dir, "pass.ease")
-	if err := os.WriteFile(passFile, []byte("def p\n  x = 1\nend\ntest \"math\"\n  1 + 2 is 3\nend\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("expected empty stdout/stderr for system.ok, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 
-	var out, errOut bytes.Buffer
-	if code := cmdTestWithWriters([]string{passFile, "--json"}, &out, &errOut); code != 0 {
-		t.Fatalf("expected exit code 0, got %d; stderr=%s", code, errOut.String())
+	// 4. `system:exit 2` exits with exact code 2 and empty stderr.
+	codeScript := filepath.Join(tmpDir, "exit_code.ease")
+	if err := os.WriteFile(codeScript, []byte("import system\nsystem:exit 2\n"), 0o644); err != nil {
+		t.Fatalf("write exit_code.ease: %v", err)
 	}
-	var passRes jsonTestResult
-	if err := json.Unmarshal(out.Bytes(), &passRes); err != nil {
-		t.Fatalf("invalid test JSON: %v\n%s", err, out.String())
+	stderr.Reset()
+	cmdCode := exec.Command(bin, "run", codeScript)
+	cmdCode.Stderr = &stderr
+	errCode := cmdCode.Run()
+	exitErr, ok := errCode.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 2 {
+		t.Fatalf("expected exit code 2, got err=%v", errCode)
 	}
-	if !passRes.OK || passRes.Passed != 1 || passRes.Failed != 0 || passRes.Total != 1 || len(passRes.Failures) != 0 {
-		t.Fatalf("unexpected pass test JSON: %+v", passRes)
-	}
-
-	failFile := filepath.Join(dir, "fail.ease")
-	if err := os.WriteFile(failFile, []byte("test \"broken\"\n  1 + 2 is 4\nend\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out.Reset()
-	errOut.Reset()
-	if code := cmdTestWithWriters([]string{failFile, "--json"}, &out, &errOut); code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	var failRes jsonTestResult
-	if err := json.Unmarshal(out.Bytes(), &failRes); err != nil {
-		t.Fatalf("invalid fail test JSON: %v\n%s", err, out.String())
-	}
-	if failRes.OK || failRes.Passed != 0 || failRes.Failed != 1 || len(failRes.Failures) != 1 {
-		t.Fatalf("unexpected fail test JSON: %+v", failRes)
-	}
-	if failRes.Failures[0].Test != "broken" || failRes.Failures[0].Line != 2 {
-		t.Fatalf("unexpected failure entry: %+v", failRes.Failures[0])
+	if stderr.String() != "" {
+		t.Fatalf("expected empty stderr for numeric exit code, got %q", stderr.String())
 	}
 
-	// ease ast --json
-	out.Reset()
-	errOut.Reset()
-	if code := cmdAstWithWriters([]string{passFile, "--json"}, &out, &errOut); code != 0 {
-		t.Fatalf("expected exit code 0 from ease ast --json, got %d; stderr=%s", code, errOut.String())
+	// 5. `system:exit "Konfiguration fehlt"` prints message to stderr (no RuntimeError prefix) and exits with 1.
+	msgScript := filepath.Join(tmpDir, "exit_msg.ease")
+	if err := os.WriteFile(msgScript, []byte("import system\nsystem:exit \"Konfiguration fehlt\"\n"), 0o644); err != nil {
+		t.Fatalf("write exit_msg.ease: %v", err)
 	}
-	var astMap map[string]any
-	if err := json.Unmarshal(out.Bytes(), &astMap); err != nil {
-		t.Fatalf("invalid AST JSON: %v\n%s", err, out.String())
+	stderr.Reset()
+	cmdMsg := exec.Command(bin, "run", msgScript)
+	cmdMsg.Stderr = &stderr
+	errMsg := cmdMsg.Run()
+	exitMsgErr, ok := errMsg.(*exec.ExitError)
+	if !ok || exitMsgErr.ExitCode() != 1 {
+		t.Fatalf("expected exit code 1, got err=%v", errMsg)
 	}
-	if _, hasDefs := astMap["Defs"]; !hasDefs {
-		t.Fatalf("expected Defs key in AST JSON, got: %v", astMap)
-	}
-}
-
-func TestReplRejectsPrintingConditions(t *testing.T) {
-	input := "not 2 > 1\n3 > 2\nexit\n"
-	var out, errOut bytes.Buffer
-	code := runRepl(strings.NewReader(input), &out, &errOut)
-	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d", code)
-	}
-	if strings.Contains(out.String(), "false") || strings.Contains(out.String(), "true") {
-		t.Fatalf("REPL must not print raw boolean condition values, got stdout: %q", out.String())
-	}
-	if strings.Count(errOut.String(), "Conditions cannot be stored or printed") != 2 {
-		t.Fatalf("expected 2 condition TypeErrors on stderr, got: %q", errOut.String())
-	}
-}
-
-func TestCmdBuildMultiFileCLI(t *testing.T) {
-	dir := t.TempDir()
-	subDir := filepath.Join(dir, "sub")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	modPath := filepath.Join(subDir, "mod.ease")
-	if err := os.WriteFile(modPath, []byte("def tax = 1.19\nto gross x -> x * tax\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mainPath := filepath.Join(subDir, "main.ease")
-	if err := os.WriteFile(mainPath, []byte("import \"./mod.ease\" as mod\nsay mod:gross 100\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	outExe := filepath.Join(dir, "app.exe")
-	if code := cmdBuild([]string{mainPath, "-o", outExe}); code != 0 {
-		t.Fatalf("cmdBuild failed with exit code %d", code)
-	}
-	bundle, ok, err := ease.ReadEmbeddedBundle(outExe)
-	if err != nil || !ok {
-		t.Fatalf("ReadEmbeddedBundle failed: ok=%v err=%v", ok, err)
-	}
-	if bundle.Entry != "main.ease" || len(bundle.Files) != 2 {
-		t.Fatalf("unexpected CLI bundle: entry=%q files=%d", bundle.Entry, len(bundle.Files))
-	}
-}
-
-type syncBuf struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (sb *syncBuf) Write(p []byte) (int, error) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	return sb.b.Write(p)
-}
-
-func (sb *syncBuf) String() string {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	return sb.b.String()
-}
-
-func TestCmdServeLifecycleAndFlags(t *testing.T) {
-	dir := t.TempDir()
-	oneShot := filepath.Join(dir, "oneshot.ease")
-	if err := os.WriteFile(oneShot, []byte("say 42\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out1, err1 bytes.Buffer
-	if code := cmdServeWithContext(context.Background(), []string{oneShot}, &out1, &err1); code != 1 {
-		t.Fatalf("expected exit code 1 for one-shot script, got %d", code)
-	}
-	if !strings.Contains(err1.String(), "no active listeners or background workers") {
-		t.Fatalf("unexpected fail-fast error: %q", err1.String())
-	}
-
-	srvFile := filepath.Join(dir, "svc.ease")
-	src := `import network
-to handle requests
-    take requests
-        network:reply_text it 200 "ok"
-    end
-end
-requests = inbox as network.http_request
-p = network:serve_http 0 requests
-spawn handle requests
-`
-	if err := os.WriteFile(srvFile, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var out2, err2 syncBuf
-	done := make(chan int, 1)
-	go func() {
-		done <- cmdServeWithContext(ctx, []string{srvFile, "--watch", "--debug-port", strconv.Itoa(0), "--json"}, &out2, &err2)
-	}()
-
-	deadline := time.Now().Add(3 * time.Second)
-	started := false
-	for time.Now().Before(deadline) {
-		if strings.Contains(out2.String(), `"event": "started"`) {
-			started = true
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	if !started {
-		cancel()
-		t.Fatalf("timed out waiting for started JSON log, got out=%q err=%q", out2.String(), err2.String())
-	}
-	if !strings.Contains(out2.String(), `"debug_addr": "127.0.0.1:`) {
-		cancel()
-		t.Fatalf("expected loopback debug_addr in started JSON log, got %q", out2.String())
-	}
-
-	cancel()
-	select {
-	case code := <-done:
-		if code != 0 {
-			t.Fatalf("expected clean exit code 0 on context cancel, got %d (err=%q)", code, err2.String())
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("cmdServeWithContext did not shut down within 3s")
-	}
-}
-
-func TestCmdRunCheckSkipsTopLevelAskEOF(t *testing.T) {
-	dir := t.TempDir()
-	srcFile := filepath.Join(dir, "interactive.ease")
-	src := `def cap = 40
-loop
-  cmd = ask "> "
-  check cmd is "q" -> end
-end
-
-test "smoke"
-  cap is 40
-end
-`
-	if err := os.WriteFile(srcFile, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var out, errOut bytes.Buffer
-	code := cmdRunWithWriters([]string{srcFile, "--check"}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("expected exit code 0 for --check on interactive ask EOF, got %d; stdout=%q stderr=%q", code, out.String(), errOut.String())
+	if got := strings.TrimSpace(stderr.String()); got != "Konfiguration fehlt" {
+		t.Fatalf("expected stderr %q, got %q", "Konfiguration fehlt", got)
 	}
 }

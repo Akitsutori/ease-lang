@@ -1,0 +1,6 @@
+def ok = 0
+def arguments = sys_args
+
+to exit reason
+    sys_exit reason
+end

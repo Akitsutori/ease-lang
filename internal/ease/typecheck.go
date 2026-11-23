@@ -307,6 +307,8 @@ var internalStdlibBuiltins = map[string]string{
 	"rand_pick":      "random:pick",
 	"rand_shuffle":   "random:shuffle",
 	"synth_play":     "synth:play",
+	"sys_args":       "system.arguments",
+	"sys_exit":       "system:exit",
 }
 
 func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
@@ -334,6 +336,8 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 			return "network:reply_json", true
 		case "net_send":
 			return "network:tcp_send", true
+		case "sys_exit":
+			return "system:exit", true
 		default:
 			if fn, ok := v.funcDecls[ce.Callee]; ok && !stmtsHaveReturn(fn.Body) {
 				return ce.Callee, true
@@ -355,6 +359,10 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 			switch ce.Callee {
 			case "reply_text", "reply_json", "tcp_send":
 				return "network:" + ce.Callee, true
+			}
+		case "system":
+			if ce.Callee == "exit" {
+				return "system:exit", true
 			}
 		}
 		if fn, ok := mod.funcs[ce.Callee]; ok && !stmtsHaveReturn(fn.Body) {
@@ -836,6 +844,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if ex.Module != "" {
 			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "random" {
 				switch ex.Callee {
+				case "sys_args":
+					return varTypeState{listElemType: "text"}
 				case "roll":
 					return varTypeState{exactNonRecord: true, exactBaseType: "number"}
 				case "pick":
@@ -851,6 +861,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{}
 		}
 		switch ex.Callee {
+		case "sys_args":
+			return varTypeState{listElemType: "text"}
 		case "append":
 			if len(ex.Args) >= 1 {
 				argSt := v.inferExprTypeState(ex.Args[0])
@@ -1646,6 +1658,39 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					v.source,
 					fmt.Sprintf("Module %q has no function %q", ex.Module, ex.Callee),
 					fmt.Sprintf("Define 'to %s ...' in module %q.", ex.Callee, ex.Module),
+				)
+			}
+		}
+		isSystemExitCall := (ex.Module == "" && ex.Callee == "sys_exit")
+		if !isSystemExitCall && ex.Module != "" {
+			if mod, isMod := v.modules[ex.Module]; isMod && mod.origName == "system" && ex.Callee == "exit" {
+				isSystemExitCall = true
+			}
+		}
+		if v.swarmDepth > 0 && !v.inErrorTestExpr && isSystemExitCall {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"'system:exit' cannot be used inside 'swarm loop'",
+				"Return an outcome union/record from 'swarm loop' and call 'system:exit' at the top level.",
+			)
+		}
+		if !v.inErrorTestExpr && len(ex.Args) == 1 && isSystemExitCall {
+			argSt := v.inferExprTypeState(ex.Args[0])
+			if argSt.exactRecord != "" || argSt.listElemType != "" || argSt.inboxElemType != "" || (argSt.exactBaseType != "" && argSt.exactBaseType != "number" && argSt.exactBaseType != "text") {
+				gotType := v.staticConcreteType(argSt)
+				if gotType == "" {
+					gotType = "value"
+				}
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("'system:exit' expects a number (0..255, e.g. 'system.ok') or a non-empty text message, got %s", gotType),
+					"Example: system:exit system.ok or system:exit \"Missing config\"",
 				)
 			}
 		}

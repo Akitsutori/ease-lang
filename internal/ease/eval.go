@@ -41,6 +41,7 @@ type Evaluator struct {
 	headlessNet    bool
 	headlessAudio  bool
 	httpClient     *http.Client
+	programArgs    []string
 }
 
 // SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
@@ -117,6 +118,10 @@ func NewEvaluator(source string, prog *Program, out io.Writer) *Evaluator {
 
 // NewEvaluatorWithInput creates an Evaluator reading `ask` input from `in` and writing `say` output to `out`.
 func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Writer) *Evaluator {
+	return newEvaluatorWithOptions(source, prog, in, out, nil)
+}
+
+func newEvaluatorWithOptions(source string, prog *Program, in io.Reader, out io.Writer, args []string) *Evaluator {
 	if out == nil {
 		out = os.Stdout
 	}
@@ -124,14 +129,15 @@ func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Wr
 		in = os.Stdin
 	}
 	ev := &Evaluator{
-		source:     source,
-		out:        out,
-		ioMu:       &sync.Mutex{},
-		rt:         newRuntimeLifecycle(),
-		inReader:   bufio.NewReader(in),
-		modules:    make(map[string]*Evaluator),
-		global:     NewEnv(nil),
-		httpClient: &http.Client{},
+		source:      source,
+		out:         out,
+		ioMu:        &sync.Mutex{},
+		rt:          newRuntimeLifecycle(),
+		inReader:    bufio.NewReader(in),
+		modules:     make(map[string]*Evaluator),
+		global:      NewEnv(nil),
+		httpClient:  &http.Client{},
+		programArgs: slices.Clone(args),
 	}
 	if err := ev.RegisterDeclarations(prog); err != nil {
 		ev.initErr = err
@@ -156,7 +162,7 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		if _, exists := ev.modules[alias]; exists {
 			continue
 		}
-		modEv := NewEvaluatorWithInput(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out)
+		modEv := newEvaluatorWithOptions(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out, ev.programArgs)
 		modEv.ioMu = ev.ioMu
 		modEv.rt = ev.rt
 		modEv.isChild = true
@@ -474,27 +480,41 @@ func EvalProgramWithInput(source string, in io.Reader, out io.Writer) (Value, er
 	return EvalProgramWithTrace(source, in, out, nil)
 }
 
+// EvalOptions configures program execution for CLI and embedded runs.
+type EvalOptions struct {
+	In       io.Reader
+	Out      io.Writer
+	Trace    io.Writer
+	Headless bool
+	Args     []string
+}
+
+// EvalProgramWithOptions parses and executes `source` resolved relative to `filePath` with `opts`.
+func EvalProgramWithOptions(source string, filePath string, opts EvalOptions) (Value, error) {
+	return evalProgramWithOptions(source, filePath, opts.In, opts.Out, opts.Trace, opts.Headless, opts.Args)
+}
+
 // EvalProgramWithTrace parses and executes `source` with custom stdin, stdout, and optional trace output.
 func EvalProgramWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", in, out, trace, false)
+	return evalProgramWithOptions(source, "", in, out, trace, false, nil)
 }
 
 // EvalProgramWithTraceFromFile parses and executes `source` resolved relative to `filePath`.
 func EvalProgramWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, in, out, trace, false)
+	return evalProgramWithOptions(source, filePath, in, out, trace, false, nil)
 }
 
 // EvalProgramHeadlessWithTrace parses and executes `source` with headless screen simulation.
 func EvalProgramHeadlessWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", in, out, trace, true)
+	return evalProgramWithOptions(source, "", in, out, trace, true, nil)
 }
 
 // EvalProgramHeadlessWithTraceFromFile parses and executes `source` resolved relative to `filePath` with headless screen simulation.
 func EvalProgramHeadlessWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, in, out, trace, true)
+	return evalProgramWithOptions(source, filePath, in, out, trace, true, nil)
 }
 
-func evalProgramWithOptions(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer, headless bool) (Value, error) {
+func evalProgramWithOptions(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer, headless bool, args []string) (Value, error) {
 	var prog *Program
 	var err error
 	if filePath != "" {
@@ -505,7 +525,7 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	if err != nil {
 		return nil, err
 	}
-	ev := NewEvaluatorWithInput(source, prog, in, out)
+	ev := newEvaluatorWithOptions(source, prog, in, out, args)
 	defer ev.Close()
 	ev.SetHeadlessScreen(headless)
 	ev.SetHeadlessNet(headless)
@@ -531,12 +551,12 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 
 // EvalProgram parses and executes `source`, writing `say` output to `out`.
 func EvalProgram(source string, out io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", os.Stdin, out, nil, false)
+	return evalProgramWithOptions(source, "", os.Stdin, out, nil, false, nil)
 }
 
 // EvalProgramFromFile parses and executes `source` resolved relative to `filePath`, writing `say` output to `out`.
 func EvalProgramFromFile(source string, filePath string, out io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, os.Stdin, out, nil, false)
+	return evalProgramWithOptions(source, filePath, os.Stdin, out, nil, false, nil)
 }
 
 // ExecTopLevel runs a sequence of top-level statements in the evaluator's global environment.

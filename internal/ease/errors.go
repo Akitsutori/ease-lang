@@ -6,6 +6,19 @@ import (
 	"strings"
 )
 
+// ExitError signals an explicit program termination requested via `system:exit`.
+type ExitError struct {
+	Code    int
+	Message string
+}
+
+func (e *ExitError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("exit code %d", e.Code)
+}
+
 // EaseError provides human-friendly diagnostics with source context and an actionable hint.
 type EaseError struct {
 	Stage    string // e.g. "SyntaxError", "RuntimeError", "TestError"

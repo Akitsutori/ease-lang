@@ -58,6 +58,8 @@ var builtinArities = map[string]int{
 	"rand_pick":      1,
 	"rand_shuffle":   1,
 	"synth_play":     1,
+	"sys_args":       0,
+	"sys_exit":       1,
 }
 
 func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Value, bool, error) {
@@ -703,6 +705,70 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 	case "synth_play":
 		v, err := ev.execSynthPlay(args, line, col)
 		return v, true, err
+
+	case "sys_args":
+		elems := make([]Value, len(ev.programArgs))
+		for i, a := range ev.programArgs {
+			if !utf8.ValidString(a) {
+				return nil, true, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					"Command-line argument is not valid UTF-8",
+					"Pass valid UTF-8 command-line arguments.",
+				)
+			}
+			elems[i] = norm.NFC.String(a)
+		}
+		return &ListValue{ElemType: "text", Elements: elems}, true, nil
+
+	case "sys_exit":
+		if ev.inSwarmWorker {
+			return nil, true, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				"'system:exit' cannot be used inside 'swarm loop'",
+				"Return an outcome union/record from 'swarm loop' and call 'system:exit' at the top level.",
+			)
+		}
+		switch val := args[0].(type) {
+		case float64:
+			if math.IsNaN(val) || math.IsInf(val, 0) || math.Trunc(val) != val || val < 0 || val > 255 {
+				return nil, true, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Exit code must be an integer in 0..255, got %s", FormatValue(val)),
+					"Pass an integer between 0 and 255 (e.g. 'system:exit system.ok' or 'system:exit 2').",
+				)
+			}
+			return nil, true, &ExitError{Code: int(val)}
+		case string:
+			if strings.TrimSpace(val) == "" {
+				return nil, true, newError(
+					"RuntimeError",
+					line,
+					col,
+					ev.source,
+					"Exit message cannot be empty; pass a message or 'system:exit system.ok'",
+					"Provide a descriptive error message or call 'system:exit system.ok'.",
+				)
+			}
+			return nil, true, &ExitError{Code: 1, Message: val}
+		default:
+			return nil, true, newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("'system:exit' expects a number (0..255, e.g. 'system.ok') or a non-empty text message, got %s", TypeName(args[0])),
+				"Example: system:exit system.ok or system:exit \"Missing config\"",
+			)
+		}
 	}
 
 	return nil, false, nil

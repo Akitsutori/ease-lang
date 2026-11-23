@@ -1,0 +1,35 @@
+import system
+
+# Feature 16: `import system` (`system.arguments`, `system.ok`, `system:exit`)
+
+test "system.ok and deterministic empty system.arguments in ease test"
+    system.ok is 0
+    count system.arguments is 0
+    system.arguments is list as text
+end
+
+test "system:exit produces testable ExitError for codes and messages"
+    system:exit system.ok ->
+        error.type is "ExitError"
+        error.message is "exit code 0"
+    end
+
+    system:exit 2 ->
+        error.type is "ExitError"
+        error.message is "exit code 2"
+    end
+
+    system:exit "Konfiguration fehlt" ->
+        error.type is "ExitError"
+        error.message is "Konfiguration fehlt"
+    end
+end
+
+test "system:exit rejects invalid exit codes, empty messages, and wrong types"
+    system:exit -1 is error
+    system:exit 256 is error
+    system:exit 1.5 is error
+    system:exit "" is error
+    system:exit "   " is error
+    system:exit (list 1, 2) is error
+end

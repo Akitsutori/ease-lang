@@ -120,7 +120,14 @@ func runEmbeddedBundle(bundle *ease.EmbeddedBundle, args []string) int {
 		if testMode {
 			return executeChecks(src, "<embedded>", false)
 		}
-		if _, err := ease.EvalProgram(src, os.Stdout); err != nil {
+		if _, err := ease.EvalProgramWithOptions(src, "", ease.EvalOptions{In: os.Stdin, Out: os.Stdout, Args: args}); err != nil {
+			var exitErr *ease.ExitError
+			if errors.As(err, &exitErr) {
+				if exitErr.Message != "" {
+					fmt.Fprintln(os.Stderr, exitErr.Message)
+				}
+				return exitErr.Code
+			}
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -156,7 +163,14 @@ func runEmbeddedBundle(bundle *ease.EmbeddedBundle, args []string) int {
 	if testMode {
 		return executeChecksWithWriters(entrySrc, entryFile, false, false, false, os.Stdout, os.Stderr)
 	}
-	if _, err := ease.EvalProgramFromFile(entrySrc, entryFile, os.Stdout); err != nil {
+	if _, err := ease.EvalProgramWithOptions(entrySrc, entryFile, ease.EvalOptions{In: os.Stdin, Out: os.Stdout, Args: args}); err != nil {
+		var exitErr *ease.ExitError
+		if errors.As(err, &exitErr) {
+			if exitErr.Message != "" {
+				fmt.Fprintln(os.Stderr, exitErr.Message)
+			}
+			return exitErr.Code
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -305,7 +319,17 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	runCheckFirst := false
 	traceMode := false
 	jsonMode := false
+	var progArgs []string
+	afterDashDash := false
 	for _, a := range args {
+		if afterDashDash {
+			progArgs = append(progArgs, a)
+			continue
+		}
+		if a == "--" {
+			afterDashDash = true
+			continue
+		}
 		switch a {
 		case "--check", "-c":
 			runCheckFirst = true
@@ -316,11 +340,13 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 		default:
 			if file == "" && !strings.HasPrefix(a, "-") {
 				file = a
+			} else if file != "" {
+				progArgs = append(progArgs, a)
 			}
 		}
 	}
 	if file == "" {
-		fmt.Fprintln(errOut, "Usage: ease run <file.ease> [--json] [--check] [--trace]")
+		fmt.Fprintln(errOut, "Usage: ease run <file.ease> [--json] [--check] [--trace] [-- args...]")
 		return 2
 	}
 
@@ -347,11 +373,36 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	}
 	var errEval error
 	if runCheckFirst {
-		_, errEval = ease.EvalProgramHeadlessWithTraceFromFile(string(src), file, strings.NewReader(""), out, traceOut)
+		_, errEval = ease.EvalProgramWithOptions(string(src), file, ease.EvalOptions{
+			In:       strings.NewReader(""),
+			Out:      out,
+			Trace:    traceOut,
+			Headless: true,
+			Args:     nil,
+		})
 	} else {
-		_, errEval = ease.EvalProgramWithTraceFromFile(string(src), file, os.Stdin, out, traceOut)
+		_, errEval = ease.EvalProgramWithOptions(string(src), file, ease.EvalOptions{
+			In:       os.Stdin,
+			Out:      out,
+			Trace:    traceOut,
+			Headless: false,
+			Args:     progArgs,
+		})
 	}
 	if errEval != nil {
+		var exitErr *ease.ExitError
+		if errors.As(errEval, &exitErr) {
+			if jsonMode {
+				if exitErr.Code == 0 {
+					writeJSON(out, jsonRunResult{OK: true, File: file})
+				} else {
+					writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: &jsonErrorInfo{Stage: "ExitError", Message: exitErr.Error()}})
+				}
+			} else if exitErr.Message != "" {
+				fmt.Fprintln(errOut, exitErr.Message)
+			}
+			return exitErr.Code
+		}
 		if jsonMode {
 			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(errEval)})
 		} else {

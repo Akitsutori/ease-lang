@@ -336,6 +336,10 @@ func (r *testRunner) runStmts(items []Stmt, env *Env) bool {
 }
 
 func errStage(err error) string {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) {
+		return "ExitError"
+	}
 	var easeErr *EaseError
 	if errors.As(err, &easeErr) && easeErr.Stage != "" {
 		return easeErr.Stage

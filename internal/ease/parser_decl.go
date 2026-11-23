@@ -763,8 +763,9 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	if _, isSwarm := expr.(*SwarmLoopExpr); isSwarm {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
-	if call, isCall := expr.(*CallExpr); isCall && ((call.Module == "" && (call.Callee == "put" || call.Callee == "close" || call.Callee == "save" || call.Callee == "synth_play")) ||
-		(call.Module != "" && p.stdModuleOrigNames[call.Module] == "synth" && call.Callee == "play")) {
+	if call, isCall := expr.(*CallExpr); isCall && ((call.Module == "" && (call.Callee == "put" || call.Callee == "close" || call.Callee == "save" || call.Callee == "synth_play" || call.Callee == "sys_exit")) ||
+		(call.Module != "" && p.stdModuleOrigNames[call.Module] == "synth" && call.Callee == "play") ||
+		(call.Module != "" && p.stdModuleOrigNames[call.Module] == "system" && call.Callee == "exit")) {
 		return &ExprStmt{posInfo: posInfo{Line: line, Col: col}, Expression: expr}, nil
 	}
 	if castExpr, isCast := expr.(*CastExpr); isCast {

@@ -2,6 +2,7 @@ package ease
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -633,5 +634,69 @@ func TestStandaloneBundleMultiFileRoundTrip(t *testing.T) {
 	report, err := RunChecksFromFile(bundle.Files[bundle.Entry], unpackedEntry)
 	if err != nil || report.Failed != 0 || report.Passed != 1 {
 		t.Fatalf("RunChecksFromFile on unpacked bundle failed: report=%+v err=%v", report, err)
+	}
+}
+
+func TestSystemModuleArgsExitAndImmutability(t *testing.T) {
+	// 1. system.arguments is populated in EvalProgramWithOptions (including inside imported file modules).
+	dir := t.TempDir()
+	modPath := filepath.Join(dir, "cli_mod.ease")
+	modSrc := `import system
+to first_arg
+    check count system.arguments is 0 -> ""
+    -> system.arguments.1
+end
+`
+	if err := os.WriteFile(modPath, []byte(modSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(dir, "main.ease")
+	mainSrc := `import system
+import "./cli_mod.ease" as cli
+say count system.arguments
+say system.arguments.2
+say cli:first_arg
+`
+	var out bytes.Buffer
+	_, err := EvalProgramWithOptions(mainSrc, mainPath, EvalOptions{
+		Out:  &out,
+		Args: []string{"--port", "8080"},
+	})
+	if err != nil {
+		t.Fatalf("EvalProgramWithOptions failed: %v", err)
+	}
+	if got, want := strings.TrimSpace(strings.ReplaceAll(out.String(), "\r\n", "\n")), "2\n8080\n--port"; got != want {
+		t.Fatalf("unexpected system.arguments output: got %q, want %q", got, want)
+	}
+
+	// 2. system:exit returns ExitError with exact Code / Message.
+	_, errOk := EvalProgramWithOptions("import system\nsystem:exit system.ok\n", "", EvalOptions{Out: &bytes.Buffer{}})
+	var exitErr *ExitError
+	if !errors.As(errOk, &exitErr) || exitErr.Code != 0 || exitErr.Message != "" {
+		t.Fatalf("expected ExitError{Code: 0}, got: %v", errOk)
+	}
+
+	_, errMsg := EvalProgramWithOptions("import system\nsystem:exit \"Konfiguration fehlt\"\n", "", EvalOptions{Out: &bytes.Buffer{}})
+	if !errors.As(errMsg, &exitErr) || exitErr.Code != 1 || exitErr.Message != "Konfiguration fehlt" {
+		t.Fatalf("expected ExitError{Code: 1, Message: 'Konfiguration fehlt'}, got: %v", errMsg)
+	}
+
+	// 3. Static rejections: reassigning system.arguments, system:exit in swarm loop, wrong type, direct sys_args/sys_exit.
+	negCases := []struct {
+		name string
+		src  string
+	}{
+		{"reassign system.arguments", "import system\nsystem.arguments = list \"x\"\n"},
+		{"system:exit in swarm loop", "import system\nxs = swarm loop range 1 2\n  system:exit 1\n  -> it\nend\n"},
+		{"system:exit wrong static type", "import system\nsystem:exit (list 1, 2)\n"},
+		{"direct sys_args", "say sys_args\n"},
+		{"direct sys_exit", "sys_exit 0\n"},
+	}
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseProgram(tc.src); err == nil {
+				t.Fatalf("expected static parse/typecheck error for %s, got nil", tc.name)
+			}
+		})
 	}
 }
