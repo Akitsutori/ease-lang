@@ -88,6 +88,8 @@ func runCLI() (exitCode int) {
 		return cmdRepl()
 	case "lsp":
 		return cmdLsp()
+	case "dap":
+		return cmdDap()
 	case "version", "--version", "-v":
 		fmt.Printf("ease %s\n", ease.Version)
 		return 0
@@ -893,6 +895,15 @@ func cmdLsp() int {
 	srv := ease.NewLSPServer(os.Stdin, os.Stdout)
 	if err := srv.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "LSP server error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func cmdDap() int {
+	srv := ease.NewDAPServer(os.Stdin, os.Stdout)
+	if err := srv.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "DAP server error: %v\n", err)
 		return 1
 	}
 	return 0

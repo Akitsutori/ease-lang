@@ -40,7 +40,10 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── synth.go                 # Retro chiptune waveform synthesizer & headless validation (`synth:play`)
 │   ├── service.go               # `ease serve` supervisor, fail-fast checks, `--watch` hot-code-swap & graceful shutdown
 │   ├── debug_server.go          # Opt-in `127.0.0.1` loopback debug socket (`:status`, `:funcs`, `:reload`, live eval)
-│   ├── lsp.go                   # Language Server Protocol (`ease lsp`) diagnostics, hover & completion
+│   ├── debug.go                 # Thread-safe `DebugController` (breakpoints, stepping, scopes, variables, watch eval)
+│   ├── dap.go                   # Debug Adapter Protocol (`ease dap`) stdio server for VS Code stepping
+│   ├── lsp.go                   # Language Server Protocol (`ease lsp`) diagnostics, outline, completion & cache
+│   ├── lsp_nav.go               # LSP Go-to-Definition, Hover & Find References (local & cross-file)
 │   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, JSON/CSV formatting & parsing
 │   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
@@ -61,6 +64,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── swarm_test.go            # `swarm loop` ordering, isolation and error-reporting Go tests
 │   ├── serve_test.go            # `ease serve` hot-reload, debug socket & lifecycle Go tests
 │   ├── lsp_test.go              # LSP server diagnostics and protocol Go tests
+│   ├── dap_test.go              # DAP stepping debugger, breakpoints, scopes & watch evaluation Go tests
 │   ├── logo_test.go             # Logo/CLI banner Go tests
 │   └── std/
 │       ├── network.ease         # `network` stdlib module (HTTP client + `inbox`-driven HTTP & TCP servers)

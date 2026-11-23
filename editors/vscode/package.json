@@ -47,6 +47,11 @@
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "ease"
+      }
+    ],
     "debuggers": [
       {
         "type": "ease",
@@ -62,8 +67,21 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Path to the .ease file to run",
+                "description": "Path to the .ease file to debug",
                 "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Command-line arguments passed to `system.arguments`",
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause automatically at the first top-level statement",
+                "default": false
               }
             }
           }
@@ -107,7 +125,12 @@
         "ease.executablePath": {
           "type": "string",
           "default": "ease",
-          "description": "Path to the ease CLI executable (used to launch `ease lsp`)."
+          "description": "Path to the ease CLI executable (used to launch `ease lsp`, run, test, and debug)."
+        },
+        "ease.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override path to the ease CLI executable for `ease lsp` when `ease.executablePath` is left at default."
         }
       }
     }

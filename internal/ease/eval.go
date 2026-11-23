@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ type Evaluator struct {
 	headlessAudio  bool
 	httpClient     *http.Client
 	programArgs    []string
+	filePath       string
+	debug          *DebugController
 }
 
 // SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
@@ -118,10 +121,10 @@ func NewEvaluator(source string, prog *Program, out io.Writer) *Evaluator {
 
 // NewEvaluatorWithInput creates an Evaluator reading `ask` input from `in` and writing `say` output to `out`.
 func NewEvaluatorWithInput(source string, prog *Program, in io.Reader, out io.Writer) *Evaluator {
-	return newEvaluatorWithOptions(source, prog, in, out, nil)
+	return newEvaluatorWithOptions(source, prog, in, out, nil, "", nil)
 }
 
-func newEvaluatorWithOptions(source string, prog *Program, in io.Reader, out io.Writer, args []string) *Evaluator {
+func newEvaluatorWithOptions(source string, prog *Program, in io.Reader, out io.Writer, args []string, filePath string, dbg *DebugController) *Evaluator {
 	if out == nil {
 		out = os.Stdout
 	}
@@ -138,6 +141,8 @@ func newEvaluatorWithOptions(source string, prog *Program, in io.Reader, out io.
 		global:      NewEnv(nil),
 		httpClient:  &http.Client{},
 		programArgs: slices.Clone(args),
+		filePath:    filePath,
+		debug:       dbg,
 	}
 	if err := ev.RegisterDeclarations(prog); err != nil {
 		ev.initErr = err
@@ -162,7 +167,11 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 		if _, exists := ev.modules[alias]; exists {
 			continue
 		}
-		modEv := newEvaluatorWithOptions(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out, ev.programArgs)
+		modPath := ""
+		if imp.IsFileImport && ev.filePath != "" && imp.Path != "" {
+			modPath = filepath.Join(filepath.Dir(ev.filePath), filepath.FromSlash(imp.Path))
+		}
+		modEv := newEvaluatorWithOptions(imp.ModuleSource, imp.ModuleProg, ev.inReader, ev.out, ev.programArgs, modPath, ev.debug)
 		modEv.ioMu = ev.ioMu
 		modEv.rt = ev.rt
 		modEv.isChild = true
@@ -487,34 +496,35 @@ type EvalOptions struct {
 	Trace    io.Writer
 	Headless bool
 	Args     []string
+	Debug    *DebugController
 }
 
 // EvalProgramWithOptions parses and executes `source` resolved relative to `filePath` with `opts`.
 func EvalProgramWithOptions(source string, filePath string, opts EvalOptions) (Value, error) {
-	return evalProgramWithOptions(source, filePath, opts.In, opts.Out, opts.Trace, opts.Headless, opts.Args)
+	return evalProgramWithOptions(source, filePath, opts.In, opts.Out, opts.Trace, opts.Headless, opts.Args, opts.Debug)
 }
 
 // EvalProgramWithTrace parses and executes `source` with custom stdin, stdout, and optional trace output.
 func EvalProgramWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", in, out, trace, false, nil)
+	return evalProgramWithOptions(source, "", in, out, trace, false, nil, nil)
 }
 
 // EvalProgramWithTraceFromFile parses and executes `source` resolved relative to `filePath`.
 func EvalProgramWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, in, out, trace, false, nil)
+	return evalProgramWithOptions(source, filePath, in, out, trace, false, nil, nil)
 }
 
 // EvalProgramHeadlessWithTrace parses and executes `source` with headless screen simulation.
 func EvalProgramHeadlessWithTrace(source string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", in, out, trace, true, nil)
+	return evalProgramWithOptions(source, "", in, out, trace, true, nil, nil)
 }
 
 // EvalProgramHeadlessWithTraceFromFile parses and executes `source` resolved relative to `filePath` with headless screen simulation.
 func EvalProgramHeadlessWithTraceFromFile(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, in, out, trace, true, nil)
+	return evalProgramWithOptions(source, filePath, in, out, trace, true, nil, nil)
 }
 
-func evalProgramWithOptions(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer, headless bool, args []string) (Value, error) {
+func evalProgramWithOptions(source string, filePath string, in io.Reader, out io.Writer, trace io.Writer, headless bool, args []string, dbg *DebugController) (Value, error) {
 	var prog *Program
 	var err error
 	if filePath != "" {
@@ -525,7 +535,12 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 	if err != nil {
 		return nil, err
 	}
-	ev := newEvaluatorWithOptions(source, prog, in, out, args)
+	ev := newEvaluatorWithOptions(source, prog, in, out, args, filePath, dbg)
+	if dbg != nil {
+		dbg.setProgramContext(prog, source, ev)
+		dbg.PushFrame("<main>", filePath, 1, 1, ev.global)
+		defer dbg.PopFrame()
+	}
 	defer ev.Close()
 	ev.SetHeadlessScreen(headless)
 	ev.SetHeadlessNet(headless)
@@ -551,12 +566,12 @@ func evalProgramWithOptions(source string, filePath string, in io.Reader, out io
 
 // EvalProgram parses and executes `source`, writing `say` output to `out`.
 func EvalProgram(source string, out io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, "", os.Stdin, out, nil, false, nil)
+	return evalProgramWithOptions(source, "", os.Stdin, out, nil, false, nil, nil)
 }
 
 // EvalProgramFromFile parses and executes `source` resolved relative to `filePath`, writing `say` output to `out`.
 func EvalProgramFromFile(source string, filePath string, out io.Writer) (Value, error) {
-	return evalProgramWithOptions(source, filePath, os.Stdin, out, nil, false, nil)
+	return evalProgramWithOptions(source, filePath, os.Stdin, out, nil, false, nil, nil)
 }
 
 // ExecTopLevel runs a sequence of top-level statements in the evaluator's global environment.
@@ -604,7 +619,12 @@ func (ev *Evaluator) execBlock(stmts []Stmt, env *Env) (Value, *reportSignal, er
 }
 
 func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error) {
-	line, _ := stmt.Pos()
+	line, col := stmt.Pos()
+	if ev.debug != nil && !ev.inSwarmWorker {
+		if err := ev.debug.BeforeStmt(ev.filePath, line, col, env); err != nil {
+			return nil, nil, err
+		}
+	}
 	switch s := stmt.(type) {
 	case *AssignStmt:
 		ev.logTrace("line %d: %s = ...", line, s.Name)
@@ -1581,6 +1601,10 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 	fnEnv := NewFuncEnv(ev.global, collectAssignedNames(fn.Body))
 	for i, param := range fn.Params {
 		fnEnv.DefineParam(param, args[i])
+	}
+	if ev.debug != nil && !ev.inSwarmWorker {
+		ev.debug.PushFrame(fn.Name, ev.filePath, fn.Line, fn.Col, fnEnv)
+		defer ev.debug.PopFrame()
 	}
 
 	_, sig, err := ev.execBlock(fn.Body, fnEnv)

@@ -139,11 +139,14 @@ class EaseLspClient {
 }
 
 function resolveExecutable() {
-  const configured = vscode.workspace
-    .getConfiguration("ease")
-    .get("executablePath", "ease");
+  const cfg = vscode.workspace.getConfiguration("ease");
+  const configured = cfg.get("executablePath", "");
   if (configured && configured !== "ease") {
     return configured;
+  }
+  const serverPath = cfg.get("serverPath", "");
+  if (serverPath && serverPath !== "ease") {
+    return serverPath;
   }
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (root) {
@@ -189,47 +192,6 @@ async function runEaseSubcommand(subcommand, targetPath) {
   await vscode.tasks.executeTask(task);
 }
 
-class EaseDebugAdapter {
-  constructor() {
-    this._onDidSendMessage = new vscode.EventEmitter();
-    this.onDidSendMessage = this._onDidSendMessage.event;
-  }
-
-  handleMessage(message) {
-    if (message.type !== "request") return;
-    const sendResponse = (body = {}) => {
-      this._onDidSendMessage.fire({
-        seq: 0,
-        type: "response",
-        request_seq: message.seq,
-        success: true,
-        command: message.command,
-        body,
-      });
-    };
-
-    switch (message.command) {
-      case "initialize":
-        sendResponse({});
-        this._onDidSendMessage.fire({ seq: 0, type: "event", event: "initialized" });
-        break;
-      case "launch":
-        sendResponse({});
-        runEaseSubcommand("run", message.arguments && message.arguments.program).finally(() => {
-          this._onDidSendMessage.fire({ seq: 0, type: "event", event: "terminated" });
-        });
-        break;
-      default:
-        sendResponse({});
-        break;
-    }
-  }
-
-  dispose() {
-    this._onDidSendMessage.dispose();
-  }
-}
-
 async function activate(context) {
   const output = vscode.window.createOutputChannel("Ease Language");
   const diagnostics = vscode.languages.createDiagnosticCollection("ease");
@@ -241,8 +203,18 @@ async function activate(context) {
         {
           type: "ease",
           request: "launch",
-          name: "Run Ease File",
+          name: "Debug Ease File",
           program: "${file}",
+          args: [],
+          stopOnEntry: false,
+        },
+        {
+          type: "ease",
+          request: "launch",
+          name: "Debug Ease File (Stop on Entry)",
+          program: "${file}",
+          args: [],
+          stopOnEntry: true,
         },
       ];
     },
@@ -252,8 +224,10 @@ async function activate(context) {
         {
           type: "ease",
           request: "launch",
-          name: "Run Ease File",
+          name: "Debug Ease File",
           program: "${file}",
+          args: [],
+          stopOnEntry: false,
         },
         config || {}
       );
@@ -276,7 +250,7 @@ async function activate(context) {
     vscode.commands.registerCommand("ease.testFile", () => runEaseSubcommand("test")),
     vscode.debug.registerDebugAdapterDescriptorFactory("ease", {
       createDebugAdapterDescriptor() {
-        return new vscode.DebugAdapterInlineImplementation(new EaseDebugAdapter());
+        return new vscode.DebugAdapterExecutable(resolveExecutable(), ["dap"]);
       },
     }),
     vscode.debug.registerDebugConfigurationProvider(
@@ -350,8 +324,61 @@ async function activate(context) {
           return ci;
         });
       },
+    }),
+    vscode.languages.registerDefinitionProvider("ease", {
+      async provideDefinition(doc, position) {
+        if (!client.ready) return [];
+        const res = await client.sendRequest("textDocument/definition", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: position.line, character: position.character },
+        });
+        return (res || []).map(toVsCodeLocation);
+      },
+    }),
+    vscode.languages.registerHoverProvider("ease", {
+      async provideHover(doc, position) {
+        if (!client.ready) return null;
+        const res = await client.sendRequest("textDocument/hover", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: position.line, character: position.character },
+        });
+        if (!res || !res.contents) return null;
+        const md = new vscode.MarkdownString(res.contents.value || "");
+        if (res.range) {
+          const r = new vscode.Range(
+            res.range.start.line,
+            res.range.start.character,
+            res.range.end.line,
+            res.range.end.character
+          );
+          return new vscode.Hover(md, r);
+        }
+        return new vscode.Hover(md);
+      },
+    }),
+    vscode.languages.registerReferenceProvider("ease", {
+      async provideReferences(doc, position, context) {
+        if (!client.ready) return [];
+        const res = await client.sendRequest("textDocument/references", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: position.line, character: position.character },
+          context: { includeDeclaration: Boolean(context?.includeDeclaration) },
+        });
+        return (res || []).map(toVsCodeLocation);
+      },
     })
   );
+}
+
+function toVsCodeLocation(loc) {
+  const uri = vscode.Uri.parse(loc.uri);
+  const range = new vscode.Range(
+    loc.range.start.line,
+    loc.range.start.character,
+    loc.range.end.line,
+    loc.range.end.character
+  );
+  return new vscode.Location(uri, range);
 }
 
 function toVsCodeSymbol(sym) {
@@ -376,6 +403,10 @@ function toVsCodeSymbol(sym) {
       ? vscode.SymbolKind.Enum
       : sym.kind === 8
       ? vscode.SymbolKind.Field
+      : sym.kind === 2
+      ? vscode.SymbolKind.Module
+      : sym.kind === 14
+      ? vscode.SymbolKind.Constant
       : vscode.SymbolKind.Namespace;
   const out = new vscode.DocumentSymbol(sym.name, sym.detail || "", kind, range, sel);
   if (Array.isArray(sym.children)) {

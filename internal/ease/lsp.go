@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -76,6 +77,30 @@ type lspNotification struct {
 	Params  any    `json:"params"`
 }
 
+// LSPLocation represents a location inside a text document.
+type LSPLocation struct {
+	URI   string   `json:"uri"`
+	Range LSPRange `json:"range"`
+}
+
+// LSPMarkupContent represents Markdown or plaintext hover documentation.
+type LSPMarkupContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// LSPHover represents the result of a textDocument/hover request.
+type LSPHover struct {
+	Contents LSPMarkupContent `json:"contents"`
+	Range    *LSPRange        `json:"range,omitempty"`
+}
+
+type lspCachedDoc struct {
+	prog   *Program
+	source string
+	lines  []string
+}
+
 // LSPServer implements a stdio JSON-RPC 2.0 Language Server for Ease.
 type LSPServer struct {
 	in       *bufio.Reader
@@ -83,15 +108,17 @@ type LSPServer struct {
 	outMu    sync.Mutex
 	docsMu   sync.RWMutex
 	docs     map[string]string
+	lastGood map[string]*lspCachedDoc
 	shutdown bool
 }
 
 // NewLSPServer creates a new Ease Language Server reading from r and writing to w.
 func NewLSPServer(r io.Reader, w io.Writer) *LSPServer {
 	return &LSPServer{
-		in:   bufio.NewReader(r),
-		out:  w,
-		docs: make(map[string]string),
+		in:       bufio.NewReader(r),
+		out:      w,
+		docs:     make(map[string]string),
+		lastGood: make(map[string]*lspCachedDoc),
 	}
 }
 
@@ -135,8 +162,11 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 			"capabilities": map[string]any{
 				"textDocumentSync":       1, // Full document sync
 				"documentSymbolProvider": true,
+				"definitionProvider":     true,
+				"hoverProvider":          true,
+				"referencesProvider":     true,
 				"completionProvider": map[string]any{
-					"triggerCharacters": []string{".", " "},
+					"triggerCharacters": []string{".", ":", " "},
 				},
 			},
 			"serverInfo": map[string]any{
@@ -220,10 +250,55 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 			} `json:"textDocument"`
 		}
 		if err := json.Unmarshal(msg.Params, &params); err == nil {
-			symbols := DocumentSymbolsForURI(params.TextDocument.URI, s.getDoc(params.TextDocument.URI))
+			symbols := s.documentSymbolsForURI(params.TextDocument.URI)
 			s.sendResponse(msg.ID, symbols, nil)
 		} else {
 			s.sendResponse(msg.ID, []LSPDocumentSymbol{}, nil)
+		}
+
+	case "textDocument/definition":
+		var params struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position LSPPosition `json:"position"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err == nil {
+			locs := s.definitionForURI(params.TextDocument.URI, params.Position)
+			s.sendResponse(msg.ID, locs, nil)
+		} else {
+			s.sendResponse(msg.ID, []LSPLocation{}, nil)
+		}
+
+	case "textDocument/hover":
+		var params struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position LSPPosition `json:"position"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err == nil {
+			hover := s.hoverForURI(params.TextDocument.URI, params.Position)
+			s.sendResponse(msg.ID, hover, nil)
+		} else {
+			s.sendResponse(msg.ID, nil, nil)
+		}
+
+	case "textDocument/references":
+		var params struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position LSPPosition `json:"position"`
+			Context  struct {
+				IncludeDeclaration bool `json:"includeDeclaration"`
+			} `json:"context"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err == nil {
+			locs := s.referencesForURI(params.TextDocument.URI, params.Position, params.Context.IncludeDeclaration)
+			s.sendResponse(msg.ID, locs, nil)
+		} else {
+			s.sendResponse(msg.ID, []LSPLocation{}, nil)
 		}
 
 	case "textDocument/completion":
@@ -233,7 +308,7 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 			} `json:"textDocument"`
 		}
 		if err := json.Unmarshal(msg.Params, &params); err == nil {
-			items := CompletionItemsForURI(params.TextDocument.URI, s.getDoc(params.TextDocument.URI))
+			items := s.completionItemsForURI(params.TextDocument.URI)
 			s.sendResponse(msg.ID, items, nil)
 		} else {
 			s.sendResponse(msg.ID, []LSPCompletionItem{}, nil)
@@ -253,8 +328,17 @@ func (s *LSPServer) handleMessage(msg *lspMessage) (exit bool) {
 
 func (s *LSPServer) setDoc(uri, text string) {
 	s.docsMu.Lock()
-	defer s.docsMu.Unlock()
 	s.docs[uri] = text
+	s.docsMu.Unlock()
+	if prog, err := parseProgramForURI(uri, text); err == nil && prog != nil {
+		lines := splitLinesNormalized(text)
+		s.docsMu.Lock()
+		if s.lastGood == nil {
+			s.lastGood = make(map[string]*lspCachedDoc)
+		}
+		s.lastGood[uri] = &lspCachedDoc{prog: prog, source: text, lines: lines}
+		s.docsMu.Unlock()
+	}
 }
 
 func (s *LSPServer) getDoc(uri string) string {
@@ -267,6 +351,41 @@ func (s *LSPServer) deleteDoc(uri string) {
 	s.docsMu.Lock()
 	defer s.docsMu.Unlock()
 	delete(s.docs, uri)
+	delete(s.lastGood, uri)
+}
+
+func (s *LSPServer) getLastGood(uri string) *lspCachedDoc {
+	s.docsMu.RLock()
+	defer s.docsMu.RUnlock()
+	return s.lastGood[uri]
+}
+
+func (s *LSPServer) resolveProgramWithFallback(uri string) (*Program, string, []string, bool) {
+	src := s.getDoc(uri)
+	if src != "" {
+		if prog, err := parseProgramForURI(uri, src); err == nil && prog != nil {
+			lines := splitLinesNormalized(src)
+			s.docsMu.Lock()
+			if s.lastGood == nil {
+				s.lastGood = make(map[string]*lspCachedDoc)
+			}
+			s.lastGood[uri] = &lspCachedDoc{prog: prog, source: src, lines: lines}
+			s.docsMu.Unlock()
+			return prog, src, lines, true
+		}
+		if cached := s.getLastGood(uri); cached != nil && cached.prog != nil {
+			return cached.prog, cached.source, cached.lines, true
+		}
+	}
+	if filePath := fileURIToPath(uri); filePath != "" {
+		if raw, err := os.ReadFile(filePath); err == nil {
+			diskSrc := string(raw)
+			if prog, pErr := ParseProgramFromFile(diskSrc, filePath); pErr == nil && prog != nil {
+				return prog, diskSrc, splitLinesNormalized(diskSrc), true
+			}
+		}
+	}
+	return nil, "", nil, false
 }
 
 func fileURIToPath(uri string) string {
@@ -435,11 +554,57 @@ func DocumentSymbolsForURI(uri, source string) (symbols []LSPDocumentSymbol) {
 	if err != nil || prog == nil {
 		return []LSPDocumentSymbol{}
 	}
+	return documentSymbolsFromProgram(prog, splitLinesNormalized(source))
+}
 
-	lines := strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
-	symbols = make([]LSPDocumentSymbol, 0, len(prog.Defs)+len(prog.Unions)+len(prog.Functions)+len(prog.Checks))
+func (s *LSPServer) documentSymbolsForURI(uri string) []LSPDocumentSymbol {
+	prog, _, lines, ok := s.resolveProgramWithFallback(uri)
+	if !ok || prog == nil {
+		return []LSPDocumentSymbol{}
+	}
+	return documentSymbolsFromProgram(prog, lines)
+}
+
+func documentSymbolsFromProgram(prog *Program, lines []string) []LSPDocumentSymbol {
+	symbols := make([]LSPDocumentSymbol, 0, len(prog.Imports)+len(prog.Defs)+len(prog.Unions)+len(prog.Functions)+len(prog.Checks))
+
+	for _, imp := range prog.Imports {
+		label := imp.Name
+		detail := "import"
+		if imp.IsFileImport {
+			label = imp.Alias
+			if label == "" {
+				label = imp.Path
+			}
+			detail = imp.Path
+		}
+		r := symbolRange(lines, imp.Line, imp.Col, utf16Len(label)+7)
+		symbols = append(symbols, LSPDocumentSymbol{
+			Name:           label,
+			Detail:         detail,
+			Kind:           2, // Module
+			Range:          r,
+			SelectionRange: r,
+		})
+	}
+
+	for _, st := range prog.Body {
+		if cs, ok := st.(*ConstDeclStmt); ok {
+			r := symbolRange(lines, cs.Line, cs.Col, utf16Len(cs.Name)+4)
+			symbols = append(symbols, LSPDocumentSymbol{
+				Name:           cs.Name,
+				Detail:         "const",
+				Kind:           14, // Constant
+				Range:          r,
+				SelectionRange: r,
+			})
+		}
+	}
 
 	for _, d := range prog.Defs {
+		if d.Imported {
+			continue
+		}
 		r := symbolRange(lines, d.Line, d.Col, utf16Len(d.Name)+4)
 		children := make([]LSPDocumentSymbol, 0, len(d.Fields))
 		for _, f := range d.Fields {
@@ -462,6 +627,9 @@ func DocumentSymbolsForURI(uri, source string) (symbols []LSPDocumentSymbol) {
 	}
 
 	for _, u := range prog.Unions {
+		if u.Imported {
+			continue
+		}
 		r := symbolRange(lines, u.Line, u.Col, utf16Len(u.Name)+4)
 		symbols = append(symbols, LSPDocumentSymbol{
 			Name:           u.Name,
@@ -525,7 +693,17 @@ func CompletionItemsForURI(uri, source string) (items []LSPCompletionItem) {
 			items = []LSPCompletionItem{}
 		}
 	}()
-	items = make([]LSPCompletionItem, 0, len(keywords)+16)
+	prog, _ := parseProgramForURI(uri, source)
+	return completionItemsFromProgram(prog)
+}
+
+func (s *LSPServer) completionItemsForURI(uri string) []LSPCompletionItem {
+	prog, _, _, _ := s.resolveProgramWithFallback(uri)
+	return completionItemsFromProgram(prog)
+}
+
+func completionItemsFromProgram(prog *Program) []LSPCompletionItem {
+	items := make([]LSPCompletionItem, 0, len(keywords)+len(builtinDocs)+16)
 	for kw := range keywords {
 		items = append(items, LSPCompletionItem{
 			Label:  kw,
@@ -533,8 +711,14 @@ func CompletionItemsForURI(uri, source string) (items []LSPCompletionItem) {
 			Detail: "keyword",
 		})
 	}
-
-	if prog, err := parseProgramForURI(uri, source); err == nil && prog != nil {
+	for name, doc := range builtinDocs {
+		items = append(items, LSPCompletionItem{
+			Label:  name,
+			Kind:   3, // Function
+			Detail: doc.sig,
+		})
+	}
+	if prog != nil {
 		for _, d := range prog.Defs {
 			items = append(items, LSPCompletionItem{
 				Label:  d.Name,
@@ -557,7 +741,6 @@ func CompletionItemsForURI(uri, source string) (items []LSPCompletionItem) {
 			})
 		}
 	}
-
 	return items
 }
 
