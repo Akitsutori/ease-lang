@@ -2,6 +2,7 @@ package ease
 
 import (
 	"fmt"
+	"strings"
 )
 
 type typeDefInfo struct {
@@ -14,6 +15,7 @@ type modTypeInfo struct {
 	alias    string
 	origName string
 	source   string
+	prog     *Program
 	defs     map[string]*DefDecl
 	unions   map[string]*UnionDecl
 	funcs    map[string]*FuncDecl
@@ -212,6 +214,7 @@ func validateProgramTypesWithOptions(prog *Program, source string, allowInternal
 			alias:    alias,
 			origName: origName,
 			source:   imp.ModuleSource,
+			prog:     imp.ModuleProg,
 			defs:     make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
 			unions:   make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
 			funcs:    make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
@@ -1280,7 +1283,17 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			}
 		}
 		requireRecord := len(ex.Rows) > 0
-		return v.validateTypeTarget(ex.ElemType, ex.TypeLine, ex.TypeCol, "list as", requireRecord)
+		if err := v.validateTypeTarget(ex.ElemType, ex.TypeLine, ex.TypeCol, "list as", requireRecord); err != nil {
+			return err
+		}
+		if !v.inErrorTestExpr && len(ex.Rows) > 0 && v.defs[ex.ElemType] != nil {
+			for _, row := range ex.Rows {
+				if err := v.checkRecordWithUpdates(ex.ElemType, row, ex.Line, ex.Col); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 
 	case *ListExpr:
 		for _, el := range ex.Elements {
@@ -1674,6 +1687,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					break
 				}
 			}
+			if updErr == nil && !v.inErrorTestExpr && v.defs[baseSt.listElemType] != nil {
+				updErr = v.checkRecordWithUpdates(baseSt.listElemType, ex.Updates, ex.Line, ex.Col)
+			}
 			v.loopDepth--
 			v.popScope()
 			return updErr
@@ -1688,6 +1704,9 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			if err := v.checkNotVoidValue(upd.Value); err != nil {
 				return err
 			}
+		}
+		if !v.inErrorTestExpr && baseSt.exactRecord != "" && v.defs[baseSt.exactRecord] != nil {
+			return v.checkRecordWithUpdates(baseSt.exactRecord, ex.Updates, ex.Line, ex.Col)
 		}
 
 	case *WhereExpr:
@@ -2031,6 +2050,7 @@ func collectSubModules(prog *Program) map[string]modTypeInfo {
 			alias:    alias,
 			origName: origName,
 			source:   imp.ModuleSource,
+			prog:     imp.ModuleProg,
 			defs:     make(map[string]*DefDecl, len(imp.ModuleProg.Defs)),
 			unions:   make(map[string]*UnionDecl, len(imp.ModuleProg.Unions)),
 			funcs:    make(map[string]*FuncDecl, len(imp.ModuleProg.Functions)),
@@ -2067,6 +2087,148 @@ func hasConcreteTypeInfo(st varTypeState) bool {
 
 func varTypeStateSig(st varTypeState) string {
 	return st.exactBaseType + "|" + st.exactRecord + "|" + st.unionName + "|" + st.listElemType + "|" + st.inboxElemType + "|" + st.inlineUnionLabel
+}
+
+func (v *typeValidator) buildModuleValidator(mod modTypeInfo) *typeValidator {
+	known := make(map[string]typeDefInfo, len(mod.defs)+len(mod.unions))
+	defs := make(map[string]*DefDecl, len(mod.defs))
+	unions := make(map[string]*UnionDecl, len(mod.unions))
+	consts := make(map[string]int, len(mod.consts))
+	constExprs := make(map[string]Expr, len(mod.consts))
+	funcNames := make(map[string]int, len(mod.funcs))
+	funcDecls := make(map[string]*FuncDecl, len(mod.funcs))
+	modules := make(map[string]modTypeInfo, len(mod.modules))
+
+	for name, d := range mod.defs {
+		known[name] = typeDefInfo{line: d.Line, imported: d.Imported, isRecord: true}
+		defs[name] = d
+	}
+	for name, u := range mod.unions {
+		known[name] = typeDefInfo{line: u.Line, imported: u.Imported, isRecord: false}
+		unions[name] = u
+	}
+	for name, fn := range mod.funcs {
+		funcNames[name] = fn.Line
+		funcDecls[name] = fn
+	}
+	for name, expr := range mod.consts {
+		consts[name] = 0
+		constExprs[name] = expr
+	}
+	for alias, sub := range mod.modules {
+		modules[alias] = sub
+		for dName, d := range sub.defs {
+			qual := alias + "." + dName
+			known[qual] = typeDefInfo{line: d.Line, imported: true, isRecord: true}
+			defs[qual] = d
+		}
+		for uName, u := range sub.unions {
+			qual := alias + "." + uName
+			known[qual] = typeDefInfo{line: u.Line, imported: true, isRecord: false}
+			unions[qual] = u
+		}
+	}
+
+	rootScope := newTypeScope(nil)
+	mv := &typeValidator{
+		source:                mod.source,
+		known:                 known,
+		defs:                  defs,
+		unions:                unions,
+		consts:                consts,
+		constExprs:            constExprs,
+		funcNames:             funcNames,
+		funcDecls:             funcDecls,
+		modules:               modules,
+		resolvedUnions:        make(map[string][]resolvedUnionVariant, len(unions)),
+		globalScope:           rootScope,
+		scope:                 rootScope,
+		allowInternalBuiltins: mod.origName != "",
+		spawnFuncCache:        make(map[string]bool),
+		activeCallSpecs:       v.activeCallSpecs,
+		verifiedCallSpecs:     v.verifiedCallSpecs,
+		activeReturnInfer:     v.activeReturnInfer,
+		callSpecDepth:         v.callSpecDepth,
+	}
+	for name, u := range unions {
+		_, _ = mv.resolveUnion(name, u, make(map[string]bool))
+	}
+	if mod.prog != nil {
+		for _, s := range mod.prog.Body {
+			switch st := s.(type) {
+			case *ConstDeclStmt:
+				mv.consts[st.Name] = st.Line
+				mv.constExprs[st.Name] = st.Value
+				mv.globalScope.vars[st.Name] = mv.inferExprTypeState(st.Value)
+			case *AssignStmt:
+				mv.globalScope.vars[st.Name] = mv.inferExprTypeState(st.Value)
+			}
+		}
+	}
+	return mv
+}
+
+func unprefixVarTypeState(st varTypeState, modAlias string) varTypeState {
+	out := st.clone()
+	prefix := modAlias + "."
+	strip := func(s string) string {
+		return strings.TrimPrefix(s, prefix)
+	}
+	out.exactRecord = strip(out.exactRecord)
+	out.unionName = strip(out.unionName)
+	out.listElemType = strip(out.listElemType)
+	out.inboxElemType = strip(out.inboxElemType)
+	out.inlineUnionLabel = strip(out.inlineUnionLabel)
+	if len(out.excludedRecords) > 0 {
+		nextExcl := make(map[string]bool, len(out.excludedRecords))
+		for k, val := range out.excludedRecords {
+			nextExcl[strip(k)] = val
+		}
+		out.excludedRecords = nextExcl
+	}
+	if len(out.inlineUnionVariants) > 0 {
+		nextVars := make([]resolvedUnionVariant, len(out.inlineUnionVariants))
+		for i, vr := range out.inlineUnionVariants {
+			if vr.kind == variantRecord {
+				vr.recordName = strip(vr.recordName)
+			}
+			nextVars[i] = vr
+		}
+		out.inlineUnionVariants = nextVars
+	}
+	if len(out.remainingVariants) > 0 {
+		nextVars := make([]resolvedUnionVariant, len(out.remainingVariants))
+		for i, vr := range out.remainingVariants {
+			if vr.kind == variantRecord {
+				vr.recordName = strip(vr.recordName)
+			}
+			nextVars[i] = vr
+		}
+		out.remainingVariants = nextVars
+	}
+	return out
+}
+
+func prefixVarTypeState(st varTypeState, modAlias string, modDefs map[string]*DefDecl, modUnions map[string]*UnionDecl) varTypeState {
+	out := st.clone()
+	prefix := modAlias + "."
+	qualify := func(name string) string {
+		if name == "" || strings.Contains(name, ".") {
+			return name
+		}
+		if modDefs[name] != nil || modUnions[name] != nil {
+			return prefix + name
+		}
+		return name
+	}
+	out.exactRecord = qualify(out.exactRecord)
+	out.unionName = qualify(out.unionName)
+	out.listElemType = qualify(out.listElemType)
+	out.inboxElemType = qualify(out.inboxElemType)
+	if out.inlineUnionLabel != "" && !strings.HasPrefix(out.inlineUnionLabel, prefix) {
+		out.inlineUnionLabel = prefix + out.inlineUnionLabel
+	}
+	return out
 }
 
 func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
@@ -2115,82 +2277,60 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 	v.activeCallSpecs[sig] = true
 	v.callSpecDepth++
 
-	// Save validator state so specialized check runs in an isolated scope.
-	savedScope := v.scope
-	savedLoopDepth := v.loopDepth
-	savedSwarmDepth := v.swarmDepth
-	savedDirectInSwarm := v.directInSwarm
-	savedWorkerAssigned := v.workerAssigned
-	savedWorkerOuter := v.workerOuterScope
-	savedInErrorBlock := v.inErrorBlock
-	savedSource := v.source
-
-	var addedDefs []string
-	var addedFuncs []string
-	var addedMods []string
+	var err error
 	if isModCall {
-		if modInfo.source != "" {
-			v.source = modInfo.source
-		}
-		for name, d := range modInfo.defs {
-			if _, exists := v.defs[name]; !exists {
-				v.defs[name] = d
-				addedDefs = append(addedDefs, name)
+		targetV := v.buildModuleValidator(modInfo)
+		fnScope := targetV.pushScope()
+		targetV.inferFuncUnionParams(fn, fnScope)
+		for i, p := range fn.Params {
+			st := fnScope.vars[p]
+			if hasConcreteTypeInfo(argStates[i]) {
+				st = unprefixVarTypeState(argStates[i], ex.Module)
 			}
+			st.isParam = true
+			fnScope.vars[p] = st
 		}
-		for name, mfn := range modInfo.funcs {
-			if _, exists := v.funcDecls[name]; !exists {
-				v.funcDecls[name] = mfn
-				addedFuncs = append(addedFuncs, name)
+		err = targetV.checkStmts(fn.Body, true)
+	} else {
+		// Save validator state so specialized check runs in an isolated scope.
+		savedScope := v.scope
+		savedLoopDepth := v.loopDepth
+		savedSwarmDepth := v.swarmDepth
+		savedDirectInSwarm := v.directInSwarm
+		savedWorkerAssigned := v.workerAssigned
+		savedWorkerOuter := v.workerOuterScope
+		savedInErrorBlock := v.inErrorBlock
+
+		v.scope = newTypeScope(v.globalScope)
+		v.loopDepth = 0
+		v.swarmDepth = 0
+		v.directInSwarm = false
+		v.workerAssigned = nil
+		v.workerOuterScope = nil
+		v.inErrorBlock = false
+
+		fnScope := v.pushScope()
+		v.inferFuncUnionParams(fn, fnScope)
+		for i, p := range fn.Params {
+			st := fnScope.vars[p]
+			if hasConcreteTypeInfo(argStates[i]) {
+				st = argStates[i].clone()
 			}
+			st.isParam = true
+			fnScope.vars[p] = st
 		}
-		for alias, subMod := range modInfo.modules {
-			if _, exists := v.modules[alias]; !exists {
-				v.modules[alias] = subMod
-				addedMods = append(addedMods, alias)
-			}
-		}
+
+		err = v.checkStmts(fn.Body, true)
+
+		v.scope = savedScope
+		v.loopDepth = savedLoopDepth
+		v.swarmDepth = savedSwarmDepth
+		v.directInSwarm = savedDirectInSwarm
+		v.workerAssigned = savedWorkerAssigned
+		v.workerOuterScope = savedWorkerOuter
+		v.inErrorBlock = savedInErrorBlock
 	}
 
-	v.scope = newTypeScope(v.globalScope)
-	v.loopDepth = 0
-	v.swarmDepth = 0
-	v.directInSwarm = false
-	v.workerAssigned = nil
-	v.workerOuterScope = nil
-	v.inErrorBlock = false
-
-	fnScope := v.pushScope()
-	v.inferFuncUnionParams(fn, fnScope)
-	for i, p := range fn.Params {
-		st := fnScope.vars[p]
-		if hasConcreteTypeInfo(argStates[i]) {
-			st = argStates[i].clone()
-		}
-		st.isParam = true
-		fnScope.vars[p] = st
-	}
-
-	err := v.checkStmts(fn.Body, true)
-
-	// Restore validator state.
-	for _, name := range addedDefs {
-		delete(v.defs, name)
-	}
-	for _, name := range addedFuncs {
-		delete(v.funcDecls, name)
-	}
-	for _, alias := range addedMods {
-		delete(v.modules, alias)
-	}
-	v.scope = savedScope
-	v.loopDepth = savedLoopDepth
-	v.swarmDepth = savedSwarmDepth
-	v.directInSwarm = savedDirectInSwarm
-	v.workerAssigned = savedWorkerAssigned
-	v.workerOuterScope = savedWorkerOuter
-	v.inErrorBlock = savedInErrorBlock
-	v.source = savedSource
 	delete(v.activeCallSpecs, sig)
 	v.callSpecDepth--
 
@@ -2229,13 +2369,28 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 	v.activeReturnInfer[key] = true
 	defer delete(v.activeReturnInfer, key)
 
-	savedScope := v.scope
-	v.scope = newTypeScope(v.globalScope)
-	fnScope := v.pushScope()
-	v.inferFuncUnionParams(fn, fnScope)
+	targetV := v
+	var modInfo modTypeInfo
+	isMod := false
+	if modName != "" {
+		if mod, ok := v.modules[modName]; ok && mod.origName == "" {
+			modInfo = mod
+			isMod = true
+			targetV = v.buildModuleValidator(mod)
+		}
+	}
+
+	savedScope := targetV.scope
+	targetV.scope = newTypeScope(targetV.globalScope)
+	fnScope := targetV.pushScope()
+	targetV.inferFuncUnionParams(fn, fnScope)
 	for i, p := range fn.Params {
 		if i < len(argStates) && hasConcreteTypeInfo(argStates[i]) {
-			fnScope.vars[p] = argStates[i].clone()
+			if isMod {
+				fnScope.vars[p] = unprefixVarTypeState(argStates[i], modName)
+			} else {
+				fnScope.vars[p] = argStates[i].clone()
+			}
 		}
 	}
 
@@ -2245,34 +2400,34 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 		for _, s := range stmts {
 			switch st := s.(type) {
 			case *AssignStmt:
-				v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
+				targetV.setVarInCurrentOrExisting(st.Name, targetV.inferExprTypeState(st.Value))
 			case *ConstDeclStmt:
-				v.scope.vars[st.Name] = v.inferExprTypeState(st.Value)
+				targetV.scope.vars[st.Name] = targetV.inferExprTypeState(st.Value)
 			case *ReturnStmt:
-				retStates = append(retStates, v.inferExprTypeState(st.Value))
+				retStates = append(retStates, targetV.inferExprTypeState(st.Value))
 			case *CheckGuardStmt:
 				if st.IsEffectBlock {
-					bScope := v.pushScope()
-					v.applyCondNarrowing(bScope, st.Cond, true)
+					bScope := targetV.pushScope()
+					targetV.applyCondNarrowing(bScope, st.Cond, true)
 					walkStmts(st.Body)
-					v.popScope()
+					targetV.popScope()
 					if len(st.ElseBody) > 0 {
-						eScope := v.pushScope()
-						v.applyCondNarrowing(eScope, st.Cond, false)
+						eScope := targetV.pushScope()
+						targetV.applyCondNarrowing(eScope, st.Cond, false)
 						walkStmts(st.ElseBody)
-						v.popScope()
-					} else if v.stmtAlwaysReturnsExpr(st.Body) {
-						v.applyCondNarrowing(v.scope, st.Cond, false)
+						targetV.popScope()
+					} else if targetV.stmtAlwaysReturnsExpr(st.Body) {
+						targetV.applyCondNarrowing(targetV.scope, st.Cond, false)
 					}
 				} else {
 					for _, r := range st.Rules {
 						if r.Action != nil {
-							aScope := v.pushScope()
-							v.applyCondNarrowing(aScope, r.Cond, true)
+							aScope := targetV.pushScope()
+							targetV.applyCondNarrowing(aScope, r.Cond, true)
 							walkStmts([]Stmt{r.Action})
-							v.popScope()
+							targetV.popScope()
 						}
-						v.applyCondNarrowing(v.scope, r.Cond, false)
+						targetV.applyCondNarrowing(targetV.scope, r.Cond, false)
 					}
 					if len(st.ElseBody) > 0 {
 						walkStmts(st.ElseBody)
@@ -2280,29 +2435,29 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 				}
 			case *MatchStmt:
 				for _, arm := range st.Arms {
-					v.pushScope()
+					targetV.pushScope()
 					if arm.Action != nil {
 						walkStmts([]Stmt{arm.Action})
 					} else {
 						walkStmts(arm.Body)
 					}
-					v.popScope()
+					targetV.popScope()
 				}
 				if len(st.ElseBody) > 0 {
-					v.pushScope()
+					targetV.pushScope()
 					walkStmts(st.ElseBody)
-					v.popScope()
+					targetV.popScope()
 				}
 			}
 		}
 	}
 	walkStmts(fn.Body)
-	v.scope = savedScope
+	targetV.scope = savedScope
 
 	if len(retStates) == 0 {
 		return varTypeState{}
 	}
-	// Check if all return states agree on a structured list/record/inbox type.
+	var out varTypeState
 	first := retStates[0]
 	if first.listElemType != "" {
 		allMatch := true
@@ -2313,10 +2468,10 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 			}
 		}
 		if allMatch {
-			return varTypeState{listElemType: first.listElemType}
+			out = varTypeState{listElemType: first.listElemType}
 		}
 	}
-	if first.exactRecord != "" {
+	if !hasConcreteTypeInfo(out) && first.exactRecord != "" {
 		allMatch := true
 		for _, rs := range retStates[1:] {
 			if rs.exactRecord != first.exactRecord {
@@ -2325,10 +2480,22 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 			}
 		}
 		if allMatch {
-			return varTypeState{exactRecord: first.exactRecord}
+			out = varTypeState{exactRecord: first.exactRecord}
 		}
 	}
-	if first.inboxElemType != "" {
+	if !hasConcreteTypeInfo(out) && first.unionName != "" {
+		allMatch := true
+		for _, rs := range retStates[1:] {
+			if rs.unionName != first.unionName {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			out = varTypeState{unionName: first.unionName}
+		}
+	}
+	if !hasConcreteTypeInfo(out) && first.inboxElemType != "" {
 		allMatch := true
 		for _, rs := range retStates[1:] {
 			if rs.inboxElemType != first.inboxElemType {
@@ -2337,10 +2504,16 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 			}
 		}
 		if allMatch {
-			return varTypeState{inboxElemType: first.inboxElemType}
+			out = varTypeState{inboxElemType: first.inboxElemType}
 		}
 	}
-	return v.unifyScalarTypeStates(retStates)
+	if !hasConcreteTypeInfo(out) {
+		out = targetV.unifyScalarTypeStates(retStates)
+	}
+	if isMod {
+		return prefixVarTypeState(out, modName, modInfo.defs, modInfo.unions)
+	}
+	return out
 }
 
 func isConditionExpr(e Expr) bool {
@@ -2394,4 +2567,193 @@ func (v *typeValidator) checkNotStandaloneCondition(e Expr) error {
 
 func (v *typeValidator) staticConcreteType(st varTypeState) string {
 	return v.staticTypeKind(st, false)
+}
+
+func (v *typeValidator) checkRecordWithUpdates(recName string, updates []WithFieldUpdate, fallbackLine, fallbackCol int) error {
+	d := v.defs[recName]
+	if d == nil {
+		return nil
+	}
+	fieldByName := make(map[string]DefField, len(d.Fields))
+	for _, f := range d.Fields {
+		fieldByName[f.Name] = f
+	}
+	modPrefix := ""
+	if dot := strings.IndexByte(recName, '.'); dot >= 0 {
+		modPrefix = recName[:dot+1]
+	}
+
+	for _, upd := range updates {
+		line, col := upd.Line, upd.Col
+		if line == 0 {
+			line, col = fallbackLine, fallbackCol
+		}
+		f, ok := fieldByName[upd.Name]
+		if !ok {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("%s has no field %q", recName, upd.Name),
+				fmt.Sprintf("Available fields on %s: %s.", recName, defFieldNames(d)),
+			)
+		}
+
+		valSt := v.inferExprTypeState(upd.Value)
+		if !hasConcreteTypeInfo(valSt) {
+			continue
+		}
+
+		// 1. Inline or named union field constraint.
+		if len(f.Allowed) > 0 {
+			if variants, label, ok := v.fieldUnionVariants(recName, f.Name); ok && len(variants) > 0 {
+				if err := v.checkValueAgainstUnionVariants(upd.Value, valSt, variants, label, line, col); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if id, isId := f.Default.(*IdentExpr); isId {
+			uName := ""
+			if modPrefix != "" && len(v.resolvedUnions[modPrefix+id.Name]) > 0 {
+				uName = modPrefix + id.Name
+			} else if len(v.resolvedUnions[id.Name]) > 0 {
+				uName = id.Name
+			}
+			if uName != "" {
+				if err := v.checkValueAgainstUnionVariants(upd.Value, valSt, v.resolvedUnions[uName], uName, line, col); err != nil {
+					return err
+				}
+				continue
+			}
+			wantRec := ""
+			if modPrefix != "" && v.defs[modPrefix+id.Name] != nil {
+				wantRec = modPrefix + id.Name
+			} else if v.defs[id.Name] != nil {
+				wantRec = id.Name
+			}
+			if wantRec != "" {
+				if valSt.exactBaseType != "" || valSt.listElemType != "" || valSt.inboxElemType != "" || (valSt.exactRecord != "" && valSt.exactRecord != wantRec) {
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						fmt.Sprintf("Field '%s.%s' expected %s, got %s", recName, f.Name, wantRec, v.staticConcreteType(valSt)),
+						fmt.Sprintf("Assign a '%s' value to field %q.", wantRec, f.Name),
+					)
+				}
+				continue
+			}
+		}
+
+		// 2. Plain default-typed fields (number, text, list).
+		switch defEx := f.Default.(type) {
+		case *NumberExpr:
+			if (valSt.exactBaseType != "" && valSt.exactBaseType != "number") || valSt.exactRecord != "" || valSt.listElemType != "" || valSt.inboxElemType != "" {
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					fmt.Sprintf("Field '%s.%s' expected number, got %s", recName, f.Name, v.staticConcreteType(valSt)),
+					fmt.Sprintf("Assign a number to field %q.", f.Name),
+				)
+			}
+		case *UnaryExpr:
+			if defEx.Op == "-" {
+				if (valSt.exactBaseType != "" && valSt.exactBaseType != "number") || valSt.exactRecord != "" || valSt.listElemType != "" || valSt.inboxElemType != "" {
+					return newError(
+						"TypeError",
+						line,
+						col,
+						v.source,
+						fmt.Sprintf("Field '%s.%s' expected number, got %s", recName, f.Name, v.staticConcreteType(valSt)),
+						fmt.Sprintf("Assign a number to field %q.", f.Name),
+					)
+				}
+			}
+		case *StringExpr, *InterpStringExpr:
+			if (valSt.exactBaseType != "" && valSt.exactBaseType != "text") || valSt.exactRecord != "" || valSt.listElemType != "" || valSt.inboxElemType != "" {
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					fmt.Sprintf("Field '%s.%s' expected text, got %s", recName, f.Name, v.staticConcreteType(valSt)),
+					fmt.Sprintf("Assign text to field %q.", f.Name),
+				)
+			}
+		case *TypedListExpr, *ListExpr:
+			if valSt.exactBaseType != "" || valSt.exactRecord != "" || valSt.inboxElemType != "" {
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					fmt.Sprintf("Field '%s.%s' expected list, got %s", recName, f.Name, v.staticConcreteType(valSt)),
+					fmt.Sprintf("Assign a list to field %q.", f.Name),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (v *typeValidator) checkValueAgainstUnionVariants(valExpr Expr, valSt varTypeState, variants []resolvedUnionVariant, label string, line, col int) error {
+	if s, ok := valExpr.(*StringExpr); ok {
+		for _, vr := range variants {
+			if (vr.kind == variantBaseType && vr.baseType == "text") || (vr.kind == variantStringLit && vr.strVal == s.Value) {
+				return nil
+			}
+		}
+		allowed := make([]string, len(variants))
+		for i, vr := range variants {
+			allowed[i] = vr.display()
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Invalid value %q for %s (%s)", s.Value, label, strings.Join(allowed, " | ")),
+			fmt.Sprintf("Valid values for %s: %s.", label, strings.Join(allowed, " | ")),
+		)
+	}
+	if n, ok := valExpr.(*NumberExpr); ok {
+		for _, vr := range variants {
+			if (vr.kind == variantBaseType && vr.baseType == "number") || (vr.kind == variantNumberLit && vr.numVal == n.Value) {
+				return nil
+			}
+		}
+		allowed := make([]string, len(variants))
+		for i, vr := range variants {
+			allowed[i] = vr.display()
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Invalid value %s for %s (%s)", n.Raw, label, strings.Join(allowed, " | ")),
+			fmt.Sprintf("Valid values for %s: %s.", label, strings.Join(allowed, " | ")),
+		)
+	}
+	if valSt.exactRecord != "" {
+		for _, vr := range variants {
+			if vr.kind == variantRecord && vr.recordName == valSt.exactRecord {
+				return nil
+			}
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Record %q is not a member of %s", valSt.exactRecord, label),
+			fmt.Sprintf("Pass a valid member of %s.", label),
+		)
+	}
+	return nil
 }

@@ -2337,3 +2337,181 @@ end
 		})
 	}
 }
+
+func TestCrossModuleCallSiteAsTypeAndUnion(t *testing.T) {
+	dir := t.TempDir()
+	modPath := filepath.Join(dir, "mod.ease")
+	modSrc := `
+def Config
+    port = 0
+end
+
+def Err
+    msg = ""
+end
+
+def Resp = Config | Err
+
+to load_cfg raw
+    m = raw as json
+    -> m as Config
+end
+
+to load_resp raw
+    m = raw as json
+    -> m as Resp
+end
+
+to unwrap_port resp
+    check resp is Err -> 0
+    -> resp.port
+end
+`
+	if err := os.WriteFile(modPath, []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write mod.ease: %v", err)
+	}
+
+	mainPath := filepath.Join(dir, "main.ease")
+	mainSrc := `
+import "./mod.ease" as sol
+
+cfg = sol:load_cfg '{"port": 80}'
+r1  = sol:load_resp '{"port": 443}'
+r2  = sol:load_resp '{"msg": "offline"}'
+
+say "{cfg.port}:{sol:unwrap_port r1}:{sol:unwrap_port r2}"
+
+test "cross-module call-site as type and union"
+    c = sol:load_cfg '{"port": 80}'
+    c is sol.Config
+    c.port is 80
+
+    resp_ok = sol:load_resp '{"port": 443}'
+    resp_ok is sol.Config
+    sol:unwrap_port resp_ok is 443
+
+    resp_err = sol:load_resp '{"msg": "boom"}'
+    resp_err is sol.Err
+    sol:unwrap_port resp_err is 0
+end
+`
+	var out bytes.Buffer
+	if _, err := EvalProgramFromFile(mainSrc, mainPath, &out); err != nil {
+		t.Fatalf("EvalProgramFromFile failed: %v", err)
+	}
+	if got, want := strings.TrimSpace(out.String()), "80:443:0"; got != want {
+		t.Fatalf("unexpected output: got %q, want %q", got, want)
+	}
+	report, err := RunChecksFromFile(mainSrc, mainPath)
+	if err != nil {
+		t.Fatalf("RunChecksFromFile failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 6 {
+		t.Fatalf("expected 6 passed / 0 failed, got %+v", report)
+	}
+
+	// Returned record type is mapped back to sol.Config so downstream field typos are caught statically.
+	badTypoSrc := `
+import "./mod.ease" as sol
+cfg = sol:load_cfg '{"port": 80}'
+say cfg.prot
+`
+	if _, err := ParseProgramFromFile(badTypoSrc, mainPath); err == nil || !strings.Contains(err.Error(), `Config has no field "prot"`) {
+		t.Fatalf("expected static field typo error on returned sol.Config, got: %v", err)
+	}
+
+	// Returned union type is mapped back to sol.Resp so unnarrowed field access is caught statically.
+	badUnionFieldSrc := `
+import "./mod.ease" as sol
+r = sol:load_resp '{"port": 443}'
+say r.port
+`
+	if _, err := ParseProgramFromFile(badUnionFieldSrc, mainPath); err == nil || !strings.Contains(err.Error(), "Cannot read field '.port'") {
+		t.Fatalf("expected static unnarrowed union field error on returned sol.Resp, got: %v", err)
+	}
+}
+
+func TestQualifiedStdlibAndModuleRecordWithFieldCheck(t *testing.T) {
+	dir := t.TempDir()
+	modPath := filepath.Join(dir, "mod.ease")
+	modSrc := `
+def Config
+    port = 80
+    mode = "dev" | "prod"
+end
+`
+	if err := os.WriteFile(modPath, []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write mod.ease: %v", err)
+	}
+	mainPath := filepath.Join(dir, "main.ease")
+
+	// 1. Valid qualified stdlib & module `with` and `list as ... with` pass cleanly.
+	happySrc := `
+import screen
+import "./mod.ease" as sol
+
+lbl = screen.label with x = 10, y = 20, content = "SCORE", size = 18, color = "white"
+lbl2 = lbl with content = "SCORE: 10"
+labels = list as screen.label with
+    x = 0, y = 0, content = "HUD"
+end
+labels2 = labels with content = "HUD2"
+cfg = sol.Config with port = 443, mode = "prod"
+say "{lbl2.content}:{labels2.1.content}:{cfg.port}"
+`
+	if _, err := ParseProgramFromFile(happySrc, mainPath); err != nil {
+		t.Fatalf("expected valid qualified with/list-with to pass, got: %v", err)
+	}
+
+	// 2. Invalid field names & types on qualified stdlib and module records fail statically at ParseProgram time.
+	negCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "screen.label unknown field text",
+			src:     "import screen\nlbl = screen.label with text = \"SCORE\"\n",
+			wantSub: `screen.label has no field "text"`,
+		},
+		{
+			name:    "variable of screen.label unknown field text",
+			src:     "import screen\nlbl = screen.label with content = \"A\"\nlbl2 = lbl with text = \"B\"\n",
+			wantSub: `screen.label has no field "text"`,
+		},
+		{
+			name:    "list as screen.label with unknown field text",
+			src:     "import screen\nxs = list as screen.label with\n    text = \"SCORE\"\nend\n",
+			wantSub: `screen.label has no field "text"`,
+		},
+		{
+			name:    "batch with on list of screen.label unknown field",
+			src:     "import screen\nxs = list as screen.label\nys = xs with text = \"SCORE\"\n",
+			wantSub: `screen.label has no field "text"`,
+		},
+		{
+			name:    "screen.label wrong field value type",
+			src:     "import screen\nlbl = screen.label with size = \"big\"\n",
+			wantSub: `Field 'screen.label.size' expected number, got text`,
+		},
+		{
+			name:    "module sol.Config unknown field typo",
+			src:     "import \"./mod.ease\" as sol\ncfg = sol.Config with typo = 1\n",
+			wantSub: `sol.Config has no field "typo"`,
+		},
+		{
+			name:    "module sol.Config invalid inline union literal",
+			src:     "import \"./mod.ease\" as sol\ncfg = sol.Config with mode = \"staging\"\n",
+			wantSub: `Invalid value "staging" for sol.Config.mode`,
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgramFromFile(tc.src, mainPath)
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected TypeError containing %q, got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
