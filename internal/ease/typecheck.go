@@ -33,15 +33,18 @@ type fieldSchema struct {
 }
 
 type varTypeState struct {
-	unionName           string
-	exactRecord         string
-	exactNonRecord      bool
-	exactBaseType       string
-	listElemType        string
-	inboxElemType       string
-	excludedRecords     map[string]bool
-	inlineUnionLabel    string
-	inlineUnionVariants []resolvedUnionVariant
+	unionName            string
+	exactRecord          string
+	exactNonRecord       bool
+	exactBaseType        string
+	listElemType         string
+	inboxElemType        string
+	isParam              bool
+	excludedRecords      map[string]bool
+	inlineUnionLabel     string
+	inlineUnionVariants  []resolvedUnionVariant
+	hasRemainingTracking bool
+	remainingVariants    []resolvedUnionVariant
 }
 
 func (s varTypeState) clone() varTypeState {
@@ -51,6 +54,9 @@ func (s varTypeState) clone() varTypeState {
 		for k, v := range s.excludedRecords {
 			out.excludedRecords[k] = v
 		}
+	}
+	if len(s.remainingVariants) > 0 {
+		out.remainingVariants = append([]resolvedUnionVariant(nil), s.remainingVariants...)
 	}
 	return out
 }
@@ -75,6 +81,10 @@ func validateProgramTypes(prog *Program, source string) error {
 }
 
 func validateProgramTypesWithMode(prog *Program, source string, allowInternalBuiltins bool) error {
+	return validateProgramTypesWithOptions(prog, source, allowInternalBuiltins, false)
+}
+
+func validateProgramTypesWithOptions(prog *Program, source string, allowInternalBuiltins bool, allowTrailingValueExpr bool) error {
 	known := make(map[string]typeDefInfo, len(prog.Defs)+len(prog.Unions))
 	defs := make(map[string]*DefDecl, len(prog.Defs))
 	unions := make(map[string]*UnionDecl, len(prog.Unions))
@@ -233,23 +243,24 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 
 	rootScope := newTypeScope(nil)
 	v := &typeValidator{
-		source:                source,
-		known:                 known,
-		defs:                  defs,
-		unions:                unions,
-		consts:                consts,
-		constExprs:            constExprs,
-		funcNames:             funcNames,
-		funcDecls:             funcDecls,
-		modules:               modules,
-		resolvedUnions:        make(map[string][]resolvedUnionVariant, len(unions)),
-		globalScope:           rootScope,
-		scope:                 rootScope,
-		allowInternalBuiltins: allowInternalBuiltins,
-		spawnFuncCache:        make(map[string]bool),
-		activeCallSpecs:       make(map[string]bool),
-		verifiedCallSpecs:     make(map[string]bool),
-		activeReturnInfer:     make(map[string]bool),
+		source:                 source,
+		known:                  known,
+		defs:                   defs,
+		unions:                 unions,
+		consts:                 consts,
+		constExprs:             constExprs,
+		funcNames:              funcNames,
+		funcDecls:              funcDecls,
+		modules:                modules,
+		resolvedUnions:         make(map[string][]resolvedUnionVariant, len(unions)),
+		globalScope:            rootScope,
+		scope:                  rootScope,
+		allowInternalBuiltins:  allowInternalBuiltins,
+		allowTrailingValueExpr: allowTrailingValueExpr,
+		spawnFuncCache:         make(map[string]bool),
+		activeCallSpecs:        make(map[string]bool),
+		verifiedCallSpecs:      make(map[string]bool),
+		activeReturnInfer:      make(map[string]bool),
 	}
 
 	if err := v.resolveAndValidateUnions(prog); err != nil {
@@ -269,9 +280,11 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 		}
 	}
 
+	v.isTopLevelBody = true
 	if err := v.checkStmts(prog.Body, false); err != nil {
 		return err
 	}
+	v.isTopLevelBody = false
 
 	for _, fn := range prog.Functions {
 		for _, p := range fn.Params {
@@ -279,16 +292,37 @@ func validateProgramTypesWithMode(prog *Program, source string, allowInternalBui
 				return err
 			}
 		}
+		if !stmtsHaveReturn(fn.Body) && len(fn.Body) == 0 {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				v.source,
+				fmt.Sprintf("Procedure '%s' has an empty body and no '->' return", fn.Name),
+				fmt.Sprintf("Add statements with side effects (e.g. 'say', 'put', 'close') or return a value with '-> <expr>' in 'to %s'.", fn.Name),
+			)
+		}
 		fnScope := v.pushScope()
 		v.inferFuncUnionParams(fn, fnScope)
+		for _, p := range fn.Params {
+			st := fnScope.vars[p]
+			st.isParam = true
+			fnScope.vars[p] = st
+		}
 		err := v.checkStmts(fn.Body, true)
-		v.popScope()
 		if err != nil {
+			v.popScope()
 			return err
 		}
-		if err := v.checkFuncReturnConsistency(fn); err != nil {
+		if err := v.checkUnusedLocals(fn.Body, fn.Params); err != nil {
+			v.popScope()
 			return err
 		}
+		if err := v.checkFuncReturnConsistency(fn, fnScope); err != nil {
+			v.popScope()
+			return err
+		}
+		v.popScope()
 	}
 
 	for _, chk := range prog.Checks {
@@ -320,6 +354,7 @@ var internalStdlibBuiltins = map[string]string{
 	"synth_play":     "synth:play",
 	"sys_args":       "system.arguments",
 	"sys_exit":       "system:exit",
+	"sys_run":        "system:run",
 }
 
 func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
@@ -853,6 +888,9 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *CallExpr:
 		if ex.Module != "" {
+			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "system" && ex.Callee == "run" {
+				return varTypeState{exactRecord: ex.Module + ".process_report"}
+			}
 			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "random" {
 				switch ex.Callee {
 				case "sys_args":
@@ -883,6 +921,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		switch ex.Callee {
 		case "sys_args":
 			return varTypeState{listElemType: "text"}
+		case "sys_run":
+			return varTypeState{exactRecord: "process_report"}
 		case "append":
 			if len(ex.Args) >= 1 {
 				argSt := v.inferExprTypeState(ex.Args[0])
@@ -1854,6 +1894,26 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				)
 			}
 		}
+		if !v.inErrorTestExpr && len(ex.Args) == 1 && ex.Module != "" {
+			if mod, isMod := v.modules[ex.Module]; isMod && mod.origName == "system" && ex.Callee == "run" {
+				argSt := v.inferExprTypeState(ex.Args[0])
+				wantRec := ex.Module + ".command"
+				if argSt.exactNonRecord || argSt.exactBaseType != "" || argSt.listElemType != "" || argSt.inboxElemType != "" || (argSt.exactRecord != "" && argSt.exactRecord != wantRec) {
+					gotType := v.staticConcreteType(argSt)
+					if gotType == "" {
+						gotType = "value"
+					}
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("'system:run' expects a '%s' record, got %s", wantRec, gotType),
+						fmt.Sprintf("Pass '%s with program = \"...\"' to 'system:run'.", wantRec),
+					)
+				}
+			}
+		}
 		if !v.inErrorTestExpr && ex.Module == "" && ex.Callee == "save" && len(ex.Args) == 2 {
 			dataSt := v.inferExprTypeState(ex.Args[1])
 			if dataSt.exactRecord != "" || dataSt.listElemType != "" || dataSt.unionName != "" || dataSt.inboxElemType != "" || (dataSt.exactBaseType != "" && dataSt.exactBaseType != "text") {
@@ -2103,9 +2163,12 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 	fnScope := v.pushScope()
 	v.inferFuncUnionParams(fn, fnScope)
 	for i, p := range fn.Params {
+		st := fnScope.vars[p]
 		if hasConcreteTypeInfo(argStates[i]) {
-			fnScope.vars[p] = argStates[i].clone()
+			st = argStates[i].clone()
 		}
+		st.isParam = true
+		fnScope.vars[p] = st
 	}
 
 	err := v.checkStmts(fn.Body, true)
@@ -2198,6 +2261,8 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 						v.applyCondNarrowing(eScope, st.Cond, false)
 						walkStmts(st.ElseBody)
 						v.popScope()
+					} else if v.stmtAlwaysReturnsExpr(st.Body) {
+						v.applyCondNarrowing(v.scope, st.Cond, false)
 					}
 				} else {
 					for _, r := range st.Rules {

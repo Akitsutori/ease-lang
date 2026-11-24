@@ -107,6 +107,59 @@ end
 	}
 }
 
+func TestCLIRunCIFlagAndSystemRunSubprocess(t *testing.T) {
+	bin := buildTestEaseBinary(t)
+	tmpDir := t.TempDir()
+
+	// 1. `ease run <file> --ci` runs tests then headless program (ask EOF exits cleanly).
+	ciScript := filepath.Join(tmpDir, "ci_demo.ease")
+	ciSrc := `to dbl x -> x * 2
+
+test "dbl"
+    dbl 4 is 8
+end
+
+say "before-ask"
+name = ask "Name?"
+say "hi:{name}"
+`
+	if err := os.WriteFile(ciScript, []byte(ciSrc), 0o644); err != nil {
+		t.Fatalf("write ci_demo.ease: %v", err)
+	}
+	outCI, errCI := exec.Command(bin, "run", ciScript, "--ci").CombinedOutput()
+	if errCI != nil {
+		t.Fatalf("ease run --ci failed: %v\n%s", errCI, outCI)
+	}
+	gotCI := string(outCI)
+	if !strings.Contains(gotCI, "1 passed, 0 failed") || !strings.Contains(gotCI, "before-ask") {
+		t.Fatalf("unexpected --ci output:\n%s", gotCI)
+	}
+
+	// 2. Removed top-level `--check` flag is rejected cleanly.
+	errOld := exec.Command(bin, "--check", ciScript).Run()
+	if exitErr, ok := errOld.(*exec.ExitError); !ok || exitErr.ExitCode() != 2 {
+		t.Fatalf("expected exit code 2 for removed --check flag, got: %v", errOld)
+	}
+
+	// 3. `system:run` invoking the built ease binary captures non-zero exit code 2 as process_report.
+	childScript := filepath.Join(tmpDir, "child_exit2.ease")
+	if err := os.WriteFile(childScript, []byte("import system\nsay \"child-out\"\nsystem:exit 2\n"), 0o644); err != nil {
+		t.Fatalf("write child_exit2.ease: %v", err)
+	}
+	parentScript := filepath.Join(tmpDir, "parent_run.ease")
+	parentSrc := "import system\ncmd = system.command with\n    program = '" + bin + "'\n    args    = list 'run', '" + childScript + "'\nend\nrep = system:run cmd\nsay \"code={rep.code}|out={trim rep.stdout}\"\n"
+	if err := os.WriteFile(parentScript, []byte(parentSrc), 0o644); err != nil {
+		t.Fatalf("write parent_run.ease: %v", err)
+	}
+	outRun, errRun := exec.Command(bin, "run", parentScript).CombinedOutput()
+	if errRun != nil {
+		t.Fatalf("parent system:run failed: %v\n%s", errRun, outRun)
+	}
+	if got := strings.TrimSpace(string(outRun)); got != "code=2|out=child-out" {
+		t.Fatalf("unexpected system:run subprocess output: got %q, want %q", got, "code=2|out=child-out")
+	}
+}
+
 func TestReplParityAndTestBlocks(t *testing.T) {
 	input := strings.Join([]string{
 		"k = list 12, 13, 14",

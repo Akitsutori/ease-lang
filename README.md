@@ -30,11 +30,10 @@ to stamp_done note
 end
 
 to log_line note
-    check
-        note.status is "done"      -> "Room {note.room}: fulfilled {note.kind}"
-        note.status is "escalated" -> "Front desk alert: invalid room number"
-        note.status is "waiting"   -> "Room {note.room}: still waiting for {note.kind}"
-    end
+    st = note.status as SlipStatus
+    check st is "done"      -> "Room {note.room}: fulfilled {note.kind}"
+    check st is "escalated" -> "Front desk alert: invalid room number"
+    check st is "waiting"   -> "Room {note.room}: still waiting for {note.kind}"
 end
 
 slip = guest_note with room = 13, kind = "towels"
@@ -229,7 +228,7 @@ end
 Notice how nothing new had to be invented for graphics:
 - **`fps = 60` (or `"unlimited"`):** The painter sets `fps = 60` once on `screen.screen`, then advances the lantern directly with `it.index` — no delta-time math, and `"unlimited"` unlocks VSync/FPS whenever needed.
 - **`events = inbox as screen.event`:** Clicking the window close button (`X`) puts `"close"` into `events` and closes it; pressing `Escape` calls `close events`, which closes the OS window on the next tick.
-- **Headless `--check` & `ease test`:** In CI or headless tests, `screen:open` fires deterministic sample events (`"key"`, `"click"`, `"close"`) and closes `events` after 3 frames so graphics programs never hang automated test suites.
+- **Headless `--ci` & `ease test`:** In CI or headless tests, `screen:open` fires deterministic sample events (`"key"`, `"click"`, `"close"`) and closes `events` after 3 frames so graphics programs never hang automated test suites.
 
 ---
 

@@ -20,29 +20,23 @@ def entry_gate
 end
 
 to evaluate_entry pass door
-    check
-        pass is not ticket -> "Ungültiger Ticket-Typ"
-        door is not door_state -> "Unbekannter Türzustand"
-        door is "locked" -> "Tür ist verschlossen"
-        pass is "none" -> "Kein Einlass ohne Ticket"
-        pass is "vip" -> "VIP-Lounge geöffnet"
-    end
+    check pass is not ticket     -> "Ungültiger Ticket-Typ"
+    check door is not door_state -> "Unbekannter Türzustand"
+    check door is "locked"       -> "Tür ist verschlossen"
+    check pass is "none"         -> "Kein Einlass ohne Ticket"
+    check pass is "vip"          -> "VIP-Lounge geöffnet"
     -> "Standard-Einlass gewährt"
 end
 
 to process_response res
-    check
-        res is "OK"         -> "Erfolgreich verarbeitet"
-        res is "FEHLER"     -> "Unbekannter Fehler"
-        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
-    end
+    check res is "OK"         -> "Erfolgreich verarbeitet"
+    check res is "FEHLER"     -> "Unbekannter Fehler"
+    check res is ErrorMessage -> "Fehler {res.code}: {res.message}"
 end
 
 to log_only_success res
-    check
-        res is "OK" -> "Hat geklappt"
-        else        -> "Irgendetwas anderes ist passiert"
-    end
+    check res is "OK" -> "Hat geklappt"
+    -> "Irgendetwas anderes ist passiert"
 end
 
 test "Union Types & Werteraum-Prüfung"

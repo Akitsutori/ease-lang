@@ -1,23 +1,19 @@
-# Feature 05: Check-Guards (Einzeiler ->, Effekt-Block & Verdict-Tabelle)
+# Feature 05: Check-Guards (Einzeiler `check <cond> -> <val>` & Block `check <cond> ... end`)
 
 to validate_score name score
-    check
-        name is not text -> "Name muss Text sein"
-        name is ""       -> "Name fehlt"
-        score is not number -> "Punktzahl muss Zahl sein"
-        score < 0           -> "Punktzahl darf nicht negativ sein"
-    end
+    check name is not text    -> "Name muss Text sein"
+    check name is ""          -> "Name fehlt"
+    check score is not number -> "Punktzahl muss Zahl sein"
+    check score < 0           -> "Punktzahl darf nicht negativ sein"
     -> "OK: {name} hat {score} Punkte"
 end
 
 to review_article title words
-    check
-        title is not text   -> "rejected"
-        title is ""         -> "rejected"
-        words is not number -> "rejected"
-        words < 100         -> "rejected"
-        else                -> "published"
-    end
+    check title is not text   -> "rejected"
+    check title is ""         -> "rejected"
+    check words is not number -> "rejected"
+    check words < 100         -> "rejected"
+    -> "published"
 end
 
 status_msg = "init"

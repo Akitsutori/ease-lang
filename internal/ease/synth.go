@@ -375,7 +375,7 @@ func (ev *Evaluator) execSynthPlay(args []Value, line, col int) (Value, error) {
 			col,
 			ev.source,
 			fmt.Sprintf("synth:play audio device initialization failed: %v", err),
-			"Check audio output device availability or run headless with '--check'.",
+			"Check audio output device availability or run headless with '--ci'.",
 		)
 	}
 	defer func() {

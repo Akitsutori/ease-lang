@@ -96,7 +96,7 @@ func runCLI() (exitCode int) {
 	case "help", "--help", "-h":
 		printUsage()
 		return 0
-	case "--check", "-c":
+	case "--ci":
 		return cmdRun(os.Args[1:])
 	default:
 		// Convenience: allow `ease.exe program.ease` directly.
@@ -318,7 +318,7 @@ func cmdRun(args []string) int {
 
 func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 	file := ""
-	runCheckFirst := false
+	ciMode := false
 	traceMode := false
 	jsonMode := false
 	var progArgs []string
@@ -333,8 +333,8 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 			continue
 		}
 		switch a {
-		case "--check", "-c":
-			runCheckFirst = true
+		case "--ci":
+			ciMode = true
 		case "--trace", "-v":
 			traceMode = true
 		case "--json":
@@ -348,7 +348,7 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 		}
 	}
 	if file == "" {
-		fmt.Fprintln(errOut, "Usage: ease run <file.ease> [--json] [--check] [--trace] [-- args...]")
+		fmt.Fprintln(errOut, "Usage: ease run <file.ease> [--json] [--ci] [--trace] [-- args...]")
 		return 2
 	}
 
@@ -361,7 +361,7 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 		}
 		return 1
 	}
-	if runCheckFirst {
+	if ciMode {
 		if code := executeChecksWithWriters(string(src), file, traceMode, false, jsonMode, out, errOut); code != 0 {
 			return code
 		}
@@ -374,7 +374,7 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 		traceOut = errOut
 	}
 	var errEval error
-	if runCheckFirst {
+	if ciMode {
 		_, errEval = ease.EvalProgramWithOptions(string(src), file, ease.EvalOptions{
 			In:       strings.NewReader(""),
 			Out:      out,
@@ -875,7 +875,7 @@ func runRepl(in io.Reader, out, errOut io.Writer) int {
 			if preamble != "" {
 				fullSrc = preamble + "\n" + chunk
 			}
-			parsed, err := ease.ParseProgram(fullSrc)
+			parsed, err := ease.ParseProgramForRepl(fullSrc)
 			if err != nil {
 				if ease.IsIncompleteBlockError(err) {
 					return
@@ -974,7 +974,7 @@ func printUsage() {
 	fmt.Println("Ease Programming Language CLI")
 	fmt.Println("")
 	fmt.Println("Usage:")
-	fmt.Println("  ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (with optional tests/trace/JSON)")
+	fmt.Println("  ease run <file.ease> [--json] [--ci] [--trace]       Run an Ease program (with optional CI/trace/JSON)")
 	fmt.Println("  ease serve <file.ease> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]")
 	fmt.Println("                                                       Run a persistent service with hot-reload and opt-in loopback debug port")
 	fmt.Println("  ease check <file.ease> [--json]                      Parse and type-check without executing")

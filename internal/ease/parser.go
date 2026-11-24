@@ -55,19 +55,35 @@ func ParseProgram(source string) (*Program, error) {
 
 // ParseProgramFromFile lexes and parses `source` resolving relative file imports against `filePath`.
 func ParseProgramFromFile(source, filePath string) (*Program, error) {
-	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil, false)
+	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil, false, false)
 }
 
 // ParseProgramWithArities lexes and parses `source` with pre-populated function arities (e.g. for REPL chunks).
 func ParseProgramWithArities(source string, extraArities map[string]int) (*Program, error) {
-	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities, false)
+	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities, false, false)
+}
+
+// ParseProgramForRepl parses and validates an interactive REPL chunk, allowing the final
+// top-level non-condition expression to be printed while enforcing all file rules everywhere else.
+func ParseProgramForRepl(source string) (*Program, error) {
+	return parseProgramWithContext(source, "", map[string]bool{}, nil, nil, false, true)
+}
+
+// ParseProgramFromFileForRepl is like ParseProgramForRepl with relative file imports resolved against filePath.
+func ParseProgramFromFileForRepl(source, filePath string) (*Program, error) {
+	return parseProgramWithContext(source, filePath, map[string]bool{}, nil, nil, false, true)
+}
+
+// ParseProgramWithAritiesForRepl parses an interactive debugger/watch expression with pre-populated arities.
+func ParseProgramWithAritiesForRepl(source string, extraArities map[string]int) (*Program, error) {
+	return parseProgramWithContext(source, "", map[string]bool{}, nil, extraArities, false, true)
 }
 
 func parseProgramWithSeen(source string, seen map[string]bool) (*Program, error) {
-	return parseProgramWithContext(source, "", seen, nil, nil, false)
+	return parseProgramWithContext(source, "", seen, nil, nil, false, false)
 }
 
-func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int, allowInternalBuiltins bool) (*Program, error) {
+func parseProgramWithContext(source, sourcePath string, seen map[string]bool, activeStack []string, extraArities map[string]int, allowInternalBuiltins bool, allowTrailingValueExpr bool) (*Program, error) {
 	tokens, err := NewLexer(source).Tokenize()
 	if err != nil {
 		return nil, err
@@ -101,7 +117,7 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 	if err := resolveProgramImports(prog, source, seen); err != nil {
 		return nil, err
 	}
-	if err := validateProgramTypesWithMode(prog, source, allowInternalBuiltins); err != nil {
+	if err := validateProgramTypesWithOptions(prog, source, allowInternalBuiltins, allowTrailingValueExpr); err != nil {
 		return nil, err
 	}
 	return prog, nil
@@ -671,51 +687,104 @@ func (p *Parser) parseTakeStmt() (Stmt, error) {
 func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	chkTok := p.advance() // consume `check`
 
-	// Form 1 (single-line) or Form 2 (multi-line effect block): `check <cond> ...`
-	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) {
-		cond, err := p.parseExpr()
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected condition expression after 'check'",
+			"Write 'check <cond> -> <value | end>' on one line, or 'check <cond>' followed by a statement block and 'end'.",
+		)
+	}
+
+	// Form 1 (single-line) or Form 2 (multi-line block): `check <cond> ...`
+	cond, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if arrowTok := p.current(); p.match(TOK_ARROW) {
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Single-line 'check <cond> -> <value | end>' cannot span multiple lines",
+				"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
+			)
+		}
+		action, err := p.parseArrowAction(arrowTok)
 		if err != nil {
 			return nil, err
 		}
-		if arrowTok := p.current(); p.match(TOK_ARROW) {
-			if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
-				tok := p.current()
-				return nil, newError(
-					"SyntaxError",
-					tok.Line,
-					tok.Col,
-					p.source,
-					"Single-line 'check <cond> -> <value | end>' cannot span multiple lines",
-					"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
-				)
-			}
-			action, err := p.parseArrowAction(arrowTok)
-			if err != nil {
-				return nil, err
-			}
-			return &CheckGuardStmt{
-				posInfo: posInfo{Line: chkTok.Line, Col: chkTok.Col},
-				Rules: []CheckRule{
-					{Line: chkTok.Line, Col: chkTok.Col, Cond: cond, Action: action},
-				},
-			}, nil
-		}
+		return &CheckGuardStmt{
+			posInfo: posInfo{Line: chkTok.Line, Col: chkTok.Col},
+			Rules: []CheckRule{
+				{Line: chkTok.Line, Col: chkTok.Col, Cond: cond, Action: action},
+			},
+		}, nil
+	}
 
-		// Form 2: Multi-line effect block: `check <cond>\n  stmts...\n  [else\n  stmts...]\nend`
-		if err := p.expectStmtEnd("'check <condition>'"); err != nil {
+	// Form 2: Multi-line block: `check <cond>\n  stmts...\n  [else\n  stmts...]\nend`
+	if err := p.expectStmtEnd("'check <condition>'"); err != nil {
+		return nil, err
+	}
+	p.skipNewlines()
+	var body []Stmt
+	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
+		if p.check(TOK_EOF) {
+			return nil, newError(
+				"SyntaxError",
+				chkTok.Line,
+				chkTok.Col,
+				p.source,
+				"'check' block is missing 'end'",
+				"Close every 'check' block with 'end'.",
+			)
+		}
+		var s Stmt
+		var err error
+		if p.inTestBlock {
+			s, err = p.parseTestItem()
+		} else {
+			s, err = p.parseStmt()
+		}
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, s)
+		p.skipNewlines()
+	}
+
+	var elseBody []Stmt
+	if p.match(TOK_ELSE) {
+		if p.match(TOK_ARROW) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"'else ->' is not valid in a 'check' block",
+				"Put 'else' on its own line followed by statements (and '-> <value>' if returning).",
+			)
+		}
+		if err := p.expectStmtEnd("'else'"); err != nil {
 			return nil, err
 		}
 		p.skipNewlines()
-		var body []Stmt
-		for !p.check(TOK_END) && !p.check(TOK_ELSE) {
+		for !p.check(TOK_END) {
 			if p.check(TOK_EOF) {
 				return nil, newError(
 					"SyntaxError",
 					chkTok.Line,
 					chkTok.Col,
 					p.source,
-					"'check' block is missing 'end'",
-					"Close every 'check' block with 'end'.",
+					"'check ... else' block is missing 'end'",
+					"Close every 'check ... else' block with 'end'.",
 				)
 			}
 			var s Stmt
@@ -728,165 +797,25 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 			if err != nil {
 				return nil, err
 			}
-			body = append(body, s)
+			elseBody = append(elseBody, s)
 			p.skipNewlines()
-		}
-
-		var elseBody []Stmt
-		if p.match(TOK_ELSE) {
-			if p.match(TOK_ARROW) {
-				tok := p.current()
-				return nil, newError(
-					"SyntaxError",
-					tok.Line,
-					tok.Col,
-					p.source,
-					"'else ->' is not used in a 'check <condition>' effect block",
-					"Put 'else' on its own line followed by statements, or use 'check' alone on the first line for a verdict table.",
-				)
-			}
-			if err := p.expectStmtEnd("'else'"); err != nil {
-				return nil, err
-			}
-			p.skipNewlines()
-			for !p.check(TOK_END) {
-				if p.check(TOK_EOF) {
-					return nil, newError(
-						"SyntaxError",
-						chkTok.Line,
-						chkTok.Col,
-						p.source,
-						"'check ... else' block is missing 'end'",
-						"Close every 'check ... else' block with 'end'.",
-					)
-				}
-				var s Stmt
-				var err error
-				if p.inTestBlock {
-					s, err = p.parseTestItem()
-				} else {
-					s, err = p.parseStmt()
-				}
-				if err != nil {
-					return nil, err
-				}
-				elseBody = append(elseBody, s)
-				p.skipNewlines()
-			}
-		}
-
-		if !p.match(TOK_END) {
-			tok := p.current()
-			return nil, newError("SyntaxError", tok.Line, tok.Col, p.source, "Expected 'end' to close 'check' block", "Add 'end' after your 'check' block.")
-		}
-		if err := p.expectStmtEnd("'check' block"); err != nil {
-			return nil, err
-		}
-		return &CheckGuardStmt{
-			posInfo:       posInfo{Line: chkTok.Line, Col: chkTok.Col},
-			IsBlock:       true,
-			IsEffectBlock: true,
-			Cond:          cond,
-			Body:          body,
-			ElseBody:      elseBody,
-		}, nil
-	}
-
-	// Form 3: Multi-line verdict table: `check\n  cond -> <value | end>\n  [else ...]\nend`
-	p.skipNewlines()
-	var rules []CheckRule
-	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
-		if p.check(TOK_EOF) {
-			return nil, newError(
-				"SyntaxError",
-				chkTok.Line,
-				chkTok.Col,
-				p.source,
-				"'check' block is missing 'end'",
-				"Close every 'check' block with 'end'.",
-			)
-		}
-		ruleTok := p.current()
-		cond, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		arrowTok := p.current()
-		if !p.match(TOK_ARROW) {
-			cur := p.current()
-			return nil, newError(
-				"SyntaxError",
-				cur.Line,
-				cur.Col,
-				p.source,
-				"Every rule inside a 'check ... end' verdict table must have '-> <value | end>'",
-				minusSpaceHint(cur, "Write '<condition> -> <value>' (or put the condition on the 'check' header line for an effect block)."),
-			)
-		}
-		action, err := p.parseArrowAction(arrowTok)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, CheckRule{Line: ruleTok.Line, Col: ruleTok.Col, Cond: cond, Action: action})
-		p.skipNewlines()
-	}
-
-	var elseBody []Stmt
-	if p.match(TOK_ELSE) {
-		if arrowTok := p.current(); p.match(TOK_ARROW) {
-			action, err := p.parseArrowAction(arrowTok)
-			if err != nil {
-				return nil, err
-			}
-			elseBody = append(elseBody, action)
-			p.skipNewlines()
-		} else {
-			p.skipNewlines()
-			for !p.check(TOK_END) {
-				if p.check(TOK_EOF) {
-					return nil, newError(
-						"SyntaxError",
-						chkTok.Line,
-						chkTok.Col,
-						p.source,
-						"'check ... else' block is missing 'end'",
-						"Close every 'check ... else' block with 'end'.",
-					)
-				}
-				s, err := p.parseStmt()
-				if err != nil {
-					return nil, err
-				}
-				elseBody = append(elseBody, s)
-				p.skipNewlines()
-			}
 		}
 	}
 
 	if !p.match(TOK_END) {
 		tok := p.current()
-		return nil, newError("SyntaxError", tok.Line, tok.Col, p.source, "Expected 'end' to close 'check' block", "Add 'end' after your check rules.")
+		return nil, newError("SyntaxError", tok.Line, tok.Col, p.source, "Expected 'end' to close 'check' block", "Add 'end' after your 'check' block.")
 	}
 	if err := p.expectStmtEnd("'check' block"); err != nil {
 		return nil, err
 	}
-
-	if len(rules) == 0 && len(elseBody) == 0 {
-		return nil, newError(
-			"SyntaxError",
-			chkTok.Line,
-			chkTok.Col,
-			p.source,
-			"'check' block requires at least one 'cond -> <value | end>' rule",
-			"Write '<condition> -> <value>' inside 'check ... end'.",
-		)
-	}
-
 	return &CheckGuardStmt{
-		posInfo:  posInfo{Line: chkTok.Line, Col: chkTok.Col},
-		IsBlock:  true,
-		Rules:    rules,
-		ElseBody: elseBody,
+		posInfo:       posInfo{Line: chkTok.Line, Col: chkTok.Col},
+		IsBlock:       true,
+		IsEffectBlock: true,
+		Cond:          cond,
+		Body:          body,
+		ElseBody:      elseBody,
 	}, nil
 }
 

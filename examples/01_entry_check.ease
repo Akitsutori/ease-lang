@@ -4,25 +4,21 @@
 # ==============================================================================
 
 to allow_entry name age
-    check
-        name is not text  -> "Name muss Text sein"
-        name is ""        -> "Name darf nicht leer sein"
-        age is not number -> "Alter muss eine Zahl sein"
-        age < 18          -> "Du bist {age}. Das ist jung"
-        age > 120         -> "Ungültiges Alter"
-    end
+    check name is not text  -> "Name muss Text sein"
+    check name is ""        -> "Name darf nicht leer sein"
+    check age is not number -> "Alter muss eine Zahl sein"
+    check age < 18          -> "Du bist {age}. Das ist jung"
+    check age > 120         -> "Ungültiges Alter"
 
     -> "Willkommen {name}, du darfst rein!"
 end
 
 to validate_vip code age
-    check
-        code is not text      -> "invalid"
-        code is not "VIP2026" -> "invalid"
-        age is not number     -> "invalid"
-        age < 18              -> "invalid"
-        else                  -> "valid"
-    end
+    check code is not text      -> "invalid"
+    check code is not "VIP2026" -> "invalid"
+    check age is not number     -> "invalid"
+    check age < 18              -> "invalid"
+    -> "valid"
 end
 
 test "Einlassregeln & VIP-Prüfung"

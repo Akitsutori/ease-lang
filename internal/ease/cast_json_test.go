@@ -65,11 +65,9 @@ import network
 to parse_age raw -> raw as number
 
 to validate_age age
-    check
-        age is not number -> "Ungültiges Zahlenformat"
-        age < 0           -> "Alter kann nicht negativ sein"
-        age > 130         -> "Alter ist unrealistisch"
-    end
+    check age is not number -> "Ungültiges Zahlenformat"
+    check age < 0           -> "Alter kann nicht negativ sein"
+    check age > 130         -> "Alter ist unrealistisch"
     -> age
 end
 
@@ -301,7 +299,7 @@ func TestStrictAsRuntimeErrors(t *testing.T) {
 
 func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 	// Rule 1: Every runtime list is *ListValue with inferred or explicit ElemType.
-	val, err := EvalProgram("range 1 3\n", &bytes.Buffer{})
+	val, err := EvalProgram("xs = range 1 3\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("range eval failed: %v", err)
 	}
@@ -310,7 +308,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: number, len: 3}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram("list 10, 20\n", &bytes.Buffer{})
+	val, err = EvalProgram("xs = list 10, 20\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("list literal eval failed: %v", err)
 	}
@@ -319,7 +317,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: number, len: 2}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram("def p\n  x = 1\nend\ninst = p with x = 2\nfields inst\n", &bytes.Buffer{})
+	val, err = EvalProgram("def p\n  x = 1\nend\ninst = p with x = 2\nfs = fields inst\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("fields eval failed: %v", err)
 	}
@@ -328,7 +326,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: text, len: 1}, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`'[1, 2]' as json`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`arr = '[1, 2]' as json`+"\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("as json array failed: %v", err)
 	}
@@ -337,7 +335,7 @@ func TestUnifiedHomogeneousListValueSemantics(t *testing.T) {
 		t.Fatalf("expected *ListValue{ElemType: number, len: 2} from as json, got %T %+v", val, val)
 	}
 
-	val, err = EvalProgram(`'[]' as json`+"\n", &bytes.Buffer{})
+	val, err = EvalProgram(`arr = '[]' as json`+"\n", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("as json empty array failed: %v", err)
 	}

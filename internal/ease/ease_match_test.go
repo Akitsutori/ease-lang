@@ -91,7 +91,7 @@ to classify msg
     end
   else
     fallback = "unknown"
-    "{fallback}:{msg}"
+    -> "{fallback}:{msg}"
   end
   -> res
 end

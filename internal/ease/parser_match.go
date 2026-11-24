@@ -226,16 +226,16 @@ func (p *Parser) parseMatchPattern() (MatchPattern, error) {
 	}
 }
 
-func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool, error) {
+func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, Expr, bool, error) {
 	if !p.match(TOK_ELSE) {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	var elseBody []Stmt
 	if arrowTok := p.current(); p.match(TOK_ARROW) {
 		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
 			cur := p.current()
 			if isExpr {
-				return nil, true, newError(
+				return nil, nil, true, newError(
 					"SyntaxError",
 					cur.Line,
 					cur.Col,
@@ -244,7 +244,7 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool,
 					"Write 'else -> <expression>' on the same line.",
 				)
 			}
-			return nil, true, newError(
+			return nil, nil, true, newError(
 				"SyntaxError",
 				cur.Line,
 				cur.Col,
@@ -256,22 +256,21 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool,
 		if isExpr {
 			elseExpr, err := p.parseExpr()
 			if err != nil {
-				return nil, true, err
+				return nil, nil, true, err
 			}
 			if err := p.expectStmtEnd("'match' else branch"); err != nil {
-				return nil, true, err
+				return nil, nil, true, err
 			}
-			elLine, elCol := elseExpr.Pos()
-			elseBody = append(elseBody, &ExprStmt{posInfo: posInfo{Line: elLine, Col: elCol}, Expression: elseExpr})
-		} else {
-			action, err := p.parseArrowAction(arrowTok)
-			if err != nil {
-				return nil, true, err
-			}
-			elseBody = append(elseBody, action)
+			p.skipNewlines()
+			return nil, elseExpr, true, nil
 		}
+		action, err := p.parseArrowAction(arrowTok)
+		if err != nil {
+			return nil, nil, true, err
+		}
+		elseBody = append(elseBody, action)
 		p.skipNewlines()
-		return elseBody, true, nil
+		return elseBody, nil, true, nil
 	}
 
 	if !p.match(TOK_NEWLINE) {
@@ -280,7 +279,7 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool,
 		if isExpr {
 			hint = "Write 'else -> <expression>' or start a block on the next line."
 		}
-		return nil, true, newError(
+		return nil, nil, true, newError(
 			"SyntaxError",
 			cur.Line,
 			cur.Col,
@@ -292,7 +291,7 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool,
 	p.skipNewlines()
 	for !p.check(TOK_END) {
 		if p.check(TOK_EOF) {
-			return nil, true, newError(
+			return nil, nil, true, newError(
 				"SyntaxError",
 				matchTok.Line,
 				matchTok.Col,
@@ -303,35 +302,37 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, bool,
 		}
 		s, err := p.parseStmt()
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
 		elseBody = append(elseBody, s)
 		p.skipNewlines()
 	}
 	if isExpr {
 		if len(elseBody) == 0 {
-			return nil, true, newError(
+			return nil, nil, true, newError(
 				"SyntaxError",
 				matchTok.Line,
 				matchTok.Col,
 				p.source,
-				"'match' expression 'else' block must end with an expression",
-				"Add a fallback expression before 'end', or write 'else -> <expression>'.",
+				"'match' expression 'else' block must end with '-> <expression>'",
+				"End the 'else' block with '-> <fallback_expression>', or write 'else -> <expression>'.",
 			)
 		}
-		if _, ok := elseBody[len(elseBody)-1].(*ExprStmt); !ok {
+		ret, ok := elseBody[len(elseBody)-1].(*ReturnStmt)
+		if !ok {
 			elLine, elCol := elseBody[len(elseBody)-1].Pos()
-			return nil, true, newError(
+			return nil, nil, true, newError(
 				"SyntaxError",
 				elLine,
 				elCol,
 				p.source,
-				"'match' expression 'else' block must end with an expression",
-				"End the 'else' block with the fallback value expression.",
+				"'match' expression 'else' block must end with '-> <expression>'",
+				"Use explicit '-> <fallback_expression>' at the end of the 'else' block (implicit returns are not allowed).",
 			)
 		}
+		return elseBody[:len(elseBody)-1], ret.Value, true, nil
 	}
-	return elseBody, true, nil
+	return elseBody, nil, true, nil
 }
 
 func segsOrSlice(s []MatchSegment) []MatchSegment {
@@ -467,7 +468,7 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 		)
 	}
 
-	elseBody, _, err := p.parseMatchElseBlock(matchTok, false)
+	elseBody, _, _, err := p.parseMatchElseBlock(matchTok, false)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +604,7 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 		)
 	}
 
-	elseBody, hasElse, err := p.parseMatchElseBlock(matchTok, true)
+	elseBody, elseVal, hasElse, err := p.parseMatchElseBlock(matchTok, true)
 	if err != nil {
 		return nil, err
 	}
@@ -621,11 +622,12 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 	}
 
 	return &MatchExpr{
-		posInfo:  posInfo{Line: matchTok.Line, Col: matchTok.Col},
-		Target:   target,
-		Arms:     arms,
-		HasElse:  hasElse,
-		ElseBody: elseBody,
+		posInfo:   posInfo{Line: matchTok.Line, Col: matchTok.Col},
+		Target:    target,
+		Arms:      arms,
+		HasElse:   hasElse,
+		ElseBody:  elseBody,
+		ElseValue: elseVal,
 	}, nil
 }
 

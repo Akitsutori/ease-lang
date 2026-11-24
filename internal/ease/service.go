@@ -572,7 +572,7 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 			if stmtsHaveReturn(fn.Body) {
 				fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
 			} else {
-				fmt.Fprintf(&b, "to %s%s\nend\n", fn.Name, params)
+				fmt.Fprintf(&b, "to %s%s\n  say \"\"\nend\n", fn.Name, params)
 			}
 		}
 	}
@@ -593,7 +593,7 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 		if stmtsHaveReturn(fn.Body) {
 			fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
 		} else {
-			fmt.Fprintf(&b, "to %s%s\nend\n", fn.Name, params)
+			fmt.Fprintf(&b, "to %s%s\n  say \"\"\nend\n", fn.Name, params)
 		}
 	}
 
@@ -637,7 +637,7 @@ func (s *Service) EvalDebugChunk(chunk string) (string, error) {
 	}
 
 	fullSrc := preamble + norm + "\n"
-	fullProg, err := ParseProgramFromFile(fullSrc, s.entryPath)
+	fullProg, err := ParseProgramFromFileForRepl(fullSrc, s.entryPath)
 	if err != nil {
 		return "", err
 	}

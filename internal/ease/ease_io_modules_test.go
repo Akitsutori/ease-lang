@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestStandaloneBundleRoundTrip(t *testing.T) {
@@ -119,7 +120,7 @@ func TestUTF8ValidationNFCAndTextBuiltins(t *testing.T) {
 	}
 
 	// 4. Valid NFD over stdin (`ask`) is normalized to NFC.
-	nfdVal, err := EvalProgramWithInput("ask \"\"\n", strings.NewReader("a\u0308\n"), &bytes.Buffer{})
+	nfdVal, err := EvalProgramWithInput("res = ask \"\"\n", strings.NewReader("a\u0308\n"), &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("ask NFD failed: %v", err)
 	}
@@ -454,7 +455,7 @@ end
 	if _, err := ParseProgramFromFile(nonExh, mainPath); err != nil {
 		// Note: r is exactRecord billing.invoice here unless inferred as union, so test an inline/casted union value:
 	}
-	nonExhUnion := "import \"./billing.ease\" as billing\nr = (billing.invoice with id = \"1\", net = 1) as billing.outcome\nto check_r x\n  check\n    x is billing.invoice -> x.id\n  end\nend\n"
+	nonExhUnion := "import \"./billing.ease\" as billing\nr = (billing.invoice with id = \"1\", net = 1) as billing.outcome\nto check_r x\n  check x is billing.invoice -> x.id\nend\n"
 	if _, err := ParseProgramFromFile(nonExhUnion, mainPath); err == nil || !strings.Contains(err.Error(), "Non-exhaustive check") {
 		t.Fatalf("expected non-exhaustive check error for billing.outcome, got: %v", err)
 	}
@@ -498,7 +499,7 @@ end
 		t.Fatalf("expected 3 passed / 0 failed, got %+v", report)
 	}
 
-	// 2. `ease run --check` (headless) exits cleanly at `ask` EOF without hanging or failing.
+	// 2. `ease run --ci` (headless) exits cleanly at `ask` EOF without hanging or failing.
 	var headlessOut bytes.Buffer
 	if _, err := EvalProgramHeadlessWithTrace(interactiveSrc, strings.NewReader(""), &headlessOut, nil); err != nil {
 		t.Fatalf("EvalProgramHeadlessWithTrace failed on interactive ask loop: %v", err)
@@ -514,7 +515,7 @@ end
 		t.Fatalf("expected single iteration output before EOF, got %q", runOut.String())
 	}
 
-	// 4. Trailing `def` constants after an `ask` EOF and pre-`ask` spawned workers do not break or hang `RunChecks` / headless `--check`.
+	// 4. Trailing `def` constants after an `ask` EOF and pre-`ask` spawned workers do not break or hang `RunChecks` / headless `--ci`.
 	spawnAndTrailingConstSrc := `to drain box
   take box
     say it
@@ -691,6 +692,9 @@ say cli:first_arg
 		{"system:exit wrong static type", "import system\nsystem:exit (list 1, 2)\n"},
 		{"direct sys_args", "say sys_args\n"},
 		{"direct sys_exit", "sys_exit 0\n"},
+		{"direct sys_run", "say sys_run 1\n"},
+		{"system:run wrong arg type", "import system\nrep = system:run \"echo\"\nsay rep.code\n"},
+		{"system:run result field typo", "import system\ncmd = system.command with program = \"go\"\nrep = system:run cmd\nsay rep.typo\n"},
 	}
 	for _, tc := range negCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -698,5 +702,93 @@ say cli:first_arg
 				t.Fatalf("expected static parse/typecheck error for %s, got nil", tc.name)
 			}
 		})
+	}
+}
+
+func TestRollingBufferWrapAndUTF8Healing(t *testing.T) {
+	// 1. Exact fit without wrap
+	rb := newRollingBuffer(64)
+	msg := strings.Repeat("a", 64)
+	if _, err := rb.Write([]byte(msg)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if got := string(rb.Bytes()); got != msg {
+		t.Fatalf("exact fit mismatch: got %d bytes, want 64", len(got))
+	}
+
+	// 2. Wrap-around retains the tail
+	rb2 := newRollingBuffer(64)
+	_, _ = rb2.Write([]byte(strings.Repeat("x", 50)))
+	_, _ = rb2.Write([]byte(strings.Repeat("y", 40)))
+	got2 := string(rb2.Bytes())
+	want2 := strings.Repeat("x", 24) + strings.Repeat("y", 40)
+	if got2 != want2 {
+		t.Fatalf("wrap tail mismatch:\ngot:  %q\nwant: %q", got2, want2)
+	}
+
+	// 3. Multi-byte UTF-8 rune split across truncation boundary heals cleanly
+	rb3 := newRollingBuffer(64)
+	// Prefix with 63 'a's + 3-byte euro sign '€' (total 66 bytes -> drops first 2 bytes, wait:
+	// let's put 1 'a' + '€' (3 bytes) + 63 'b's = 67 bytes -> drops first 3 bytes (a + 2 bytes of €),
+	// leaving 1 trailing continuation byte of € followed by 63 'b's!)
+	payload := "a€" + strings.Repeat("b", 63)
+	_, _ = rb3.Write([]byte(payload))
+	healed := rb3.Bytes()
+	if !utf8.Valid(healed) {
+		t.Fatalf("expected healed rolling buffer to be valid UTF-8, got %x", healed)
+	}
+	if got := string(healed); got != strings.Repeat("b", 63) {
+		t.Fatalf("expected 63 'b's after UTF-8 boundary healing, got %q", got)
+	}
+
+	// 4. 4-byte emoji split across incremental writes heals cleanly
+	rb4 := newRollingBuffer(64)
+	_, _ = rb4.Write([]byte("😀" + strings.Repeat("z", 63))) // 67 bytes -> drops 3 bytes of 😀, 1 continuation byte remains
+	healed4 := rb4.Bytes()
+	if !utf8.Valid(healed4) || string(healed4) != strings.Repeat("z", 63) {
+		t.Fatalf("expected 4-byte emoji healing to yield 63 'z's, got valid=%v str=%q", utf8.Valid(healed4), string(healed4))
+	}
+}
+
+func TestSystemRunExecutionAndValidation(t *testing.T) {
+	src := `import system
+
+test "system:run captures exit 0, non-zero process_report, and rejects invalid config"
+    ok_cmd = system.command with
+        program = "go"
+        args    = list "version"
+    end
+    ok_cmd.timeout is 30
+    ok_cmd.max_mb is 10
+    rep = system:run ok_cmd
+    rep is system.process_report
+    rep.code is 0
+    contains rep.stdout "go version"
+
+    # Non-zero exit code returns process_report (NOT RuntimeError)
+    bad_sub = system.command with
+        program = "go"
+        args    = list "no_such_subcommand_ease_test"
+    end
+    bad_rep = system:run bad_sub
+    bad_rep is system.process_report
+    bad_rep.code > 0
+    count bad_rep.stderr > 0
+
+    # Programmer/OS errors raise RuntimeError
+    system:run system.command is error
+    system:run (system.command with program = "") is error
+    system:run (system.command with program = "go", timeout = 0) is error
+    system:run (system.command with program = "go", max_mb = 0) is error
+    system:run (system.command with program = "go", max_mb = 600) is error
+    system:run (system.command with program = "definitely_missing_binary_ease_999") is error
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 14 {
+		t.Fatalf("expected 14 passed / 0 failed, got passed=%d failed=%d results=%+v", report.Passed, report.Failed, report.Results)
 	}
 }

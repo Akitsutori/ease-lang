@@ -100,16 +100,16 @@ jobs:
           echo "==> ease ast examples/051_network.ease"
           ./${{ matrix.bin }} ast examples/051_network.ease
 
-          echo "==> ease run --check (headless)"
-          ./${{ matrix.bin }} run examples/00_hello_world.ease --check
-          ./${{ matrix.bin }} run examples/06_window.ease --check
-          ./${{ matrix.bin }} run examples/07_http_server.ease --check
-          ./${{ matrix.bin }} run examples/08_haunted_hotel.ease --check
-          ./${{ matrix.bin }} run examples/09_clinic_simulation.ease --check
-          ./${{ matrix.bin }} run examples/10_game_server.ease --check
-          ./${{ matrix.bin }} run examples/11_chords_and_melodies.ease --check
-          ./${{ matrix.bin }} run examples/fibonacci.ease --check
-          ./${{ matrix.bin }} run examples/showcase.ease --check
+          echo "==> ease run --ci (headless)"
+          ./${{ matrix.bin }} run examples/00_hello_world.ease --ci
+          ./${{ matrix.bin }} run examples/06_window.ease --ci
+          ./${{ matrix.bin }} run examples/07_http_server.ease --ci
+          ./${{ matrix.bin }} run examples/08_haunted_hotel.ease --ci
+          ./${{ matrix.bin }} run examples/09_clinic_simulation.ease --ci
+          ./${{ matrix.bin }} run examples/10_game_server.ease --ci
+          ./${{ matrix.bin }} run examples/11_chords_and_melodies.ease --ci
+          ./${{ matrix.bin }} run examples/fibonacci.ease --ci
+          ./${{ matrix.bin }} run examples/showcase.ease --ci
 
       - name: Verify standalone executable bundling (ease build)
         shell: bash

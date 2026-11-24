@@ -529,7 +529,7 @@ func (dc *DebugController) EvaluateInFrame(frameID int, exprText string) (DebugV
 	}
 
 	// Parse inside a dummy `to __watch` or top-level chunk using known arities.
-	parsed, err := ParseProgramWithArities(trimmed+"\n", arities)
+	parsed, err := ParseProgramWithAritiesForRepl(trimmed+"\n", arities)
 	if err != nil {
 		return DebugVariable{}, err
 	}

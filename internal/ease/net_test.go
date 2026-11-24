@@ -155,7 +155,7 @@ close requests
 		t.Fatalf("EvalProgramHeadlessWithTrace failed: %v", err)
 	}
 	if strings.TrimSpace(out.String()) != "0" {
-		t.Fatalf("expected port 0 in headless --check mode, got %q", out.String())
+		t.Fatalf("expected port 0 in headless --ci mode, got %q", out.String())
 	}
 }
 

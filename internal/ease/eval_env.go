@@ -205,7 +205,7 @@ func (e *Env) Define(name string, val Value, mutable bool) {
 
 func (e *Env) DefineParam(name string, val Value) {
 	e.mu.Lock()
-	e.vars[name] = binding{val: val, mutable: true, isParam: true}
+	e.vars[name] = binding{val: val, mutable: false, isParam: true}
 	e.mu.Unlock()
 }
 
@@ -266,6 +266,16 @@ func (e *Env) DefineOrAssign(name string, val Value, line, col int, source strin
 		if ok {
 			if !b.mutable {
 				cur.mu.Unlock()
+				if b.isParam {
+					return newError(
+						"RuntimeError",
+						line,
+						col,
+						source,
+						fmt.Sprintf("Cannot reassign function parameter %q", name),
+						fmt.Sprintf("Parameters are read-only inputs; bind a new local variable name (e.g. 'next_%s = ...') instead.", name),
+					)
+				}
 				return newError(
 					"RuntimeError",
 					line,

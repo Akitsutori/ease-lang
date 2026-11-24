@@ -466,10 +466,11 @@ type MatchArmExpr struct {
 // MatchExpr represents `match <target> ... end` in expression position.
 type MatchExpr struct {
 	posInfo
-	Target   Expr
-	Arms     []MatchArmExpr
-	HasElse  bool
-	ElseBody []Stmt
+	Target    Expr
+	Arms      []MatchArmExpr
+	HasElse   bool
+	ElseBody  []Stmt
+	ElseValue Expr
 }
 
 func (*MatchExpr) exprNode() {}

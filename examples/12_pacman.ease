@@ -183,13 +183,13 @@ to add_ghost_shapes shapes gx gy body_color fright tick
         end
     end
     # Ghost head + body + eyes
-    shapes = append shapes (screen.circle with x = cx, y = cy - 2, size = 14, color = col, style = "solid")
-    shapes = append shapes (screen.box with x = cx - 14, y = cy - 2, width = 28, height = 14, color = col, style = "solid")
-    shapes = append shapes (screen.circle with x = cx - 5, y = cy - 4, size = 4, color = "white", style = "solid")
-    shapes = append shapes (screen.circle with x = cx + 5, y = cy - 4, size = 4, color = "white", style = "solid")
-    shapes = append shapes (screen.circle with x = cx - 4, y = cy - 4, size = 2, color = "midnight", style = "solid")
-    shapes = append shapes (screen.circle with x = cx + 6, y = cy - 4, size = 2, color = "midnight", style = "solid")
-    -> shapes
+    out = append shapes (screen.circle with x = cx, y = cy - 2, size = 14, color = col, style = "solid")
+    out = append out (screen.box with x = cx - 14, y = cy - 2, width = 28, height = 14, color = col, style = "solid")
+    out = append out (screen.circle with x = cx - 5, y = cy - 4, size = 4, color = "white", style = "solid")
+    out = append out (screen.circle with x = cx + 5, y = cy - 4, size = 4, color = "white", style = "solid")
+    out = append out (screen.circle with x = cx - 4, y = cy - 4, size = 2, color = "midnight", style = "solid")
+    out = append out (screen.circle with x = cx + 6, y = cy - 4, size = 2, color = "midnight", style = "solid")
+    -> out
 end
 
 to build_pacman_scene maze st

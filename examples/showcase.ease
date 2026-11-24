@@ -1,23 +1,82 @@
-# Ease Language Showcase: Baupläne, Union Types, check-Guards & Listen
+# ==============================================================================
+# Ease Canonical Showcase
+# Complete, runnable reference for Ease's strict, bracket-free core:
+#   - Constants, records (`def`), immutable `with`, and closed unions
+#   - One-liner `to`, value functions (immutable params), and `void` procedures
+#   - Two-form `check` only (`check <cond> -> <val|end>` & `check <cond> ... end`)
+#   - Sequential union rest-narrowing & exhaustive union functions
+#   - Pattern matching (`match ... end`) with typed captures & explicit `->`
+#   - 1-based lists, `where`, `contains`, `loop`, `swarm loop`, and `inbox`/`spawn`
+#   - Strict `as json` / `as <def>` boundaries & `as <type> or <fallback>`
+# ==============================================================================
 
+# 1. Constants, Closed Unions & Domain Records
+def tax_rate = 0.19
 def role = "admin" | "member" | "guest"
+def status = "OK" | "RETRY"
+
+def ErrorMessage
+    code    = 500
+    message = "Unknown error"
+end
+
+def outcome = status | ErrorMessage
 
 def account
-    name   = "Gast"
-    role   = "guest"
-    status = "active" | "inactive"
+    name   = "Guest"
+    role   = "guest" | "member" | "admin"
+    state  = "active" | "inactive"
+    points = 0
 end
 
+# 2. One-liner Function & Void Procedure
+to with_tax net -> round (net * (1 + tax_rate) * 100) / 100
+
+to announce tag msg
+    say "[{tag}] {msg}"
+end
+
+# 3. Two-Form `check` Guards & Sequential Union Exhaustiveness / Rest-Narrowing
 to greet user
-    check
-        user is not account       -> "Ungültiges Konto"
-        user.role is not role     -> "Unbekannte Rolle"
-        user.status is "inactive" -> "Konto deaktiviert"
-        user.role is "admin"      -> "Admin-Zugang für {user.name}"
-    end
-    -> "Willkommen, {user.name}!"
+    check user is not account       -> "Invalid account"
+    check user.role is not role     -> "Unknown role"
+    check user.state is "inactive"  -> "Account inactive"
+    check user.role is "admin"      -> "Admin access for {user.name}"
+    -> "Welcome, {user.name}!"
 end
 
+# Exhaustive sequential union check (no dummy trailing `->` needed)
+to describe_outcome res
+    check res is "OK"         -> "Processed successfully"
+    check res is "RETRY"      -> "Temporary retry requested"
+    check res is ErrorMessage -> "Error {res.code}: {res.message}"
+end
+
+# Rest-narrowing after exiting Form 2 guard: `res` is narrowed to `ErrorMessage`
+to error_code_or_zero res
+    check res is not ErrorMessage
+        -> 0
+    end
+    -> res.code
+end
+
+# 4. Pattern Matching (`match`) with Typed Captures & Explicit `->` in `else`
+to parse_port line
+    port = match line
+        "PORT={p as number}" -> p
+        else
+            -> 8080
+    end
+    -> port
+end
+
+to extract_admin_names lines
+    -> match lines
+        "admin:{name}" -> name
+    end
+end
+
+# 5. Loops, 1-Based Lists, `where`, `contains` & Immutable Parameters
 to sum_squares nums
     total = 0
     loop nums
@@ -26,20 +85,114 @@ to sum_squares nums
     -> total
 end
 
-test "Showcase Kernfeatures"
-    ada = account with name = "Ada", role = "admin"
-    bob = account with name = "Bob", role = "member", status = "inactive"
-
-    greet ada is "Admin-Zugang für Ada"
-    greet bob is "Konto deaktiviert"
-    guest = account with status = "active"
-    greet guest is "Willkommen, Gast!"
-
-    xs = range 1 5
-    count xs is 5
-    sum_squares xs is 55
+to first_over limit nums
+    found = 0
+    loop nums
+        check it > limit
+            found = it
+            -> end
+        end
+    end
+    -> found
 end
 
-ada = account with name = "Ada", role = "admin"
-say greet ada
-say "Summe der Quadrate 1..5: {sum_squares range 1 5}"
+# 6. Background Worker (`spawn` + `inbox`)
+to collect_jobs box
+    count_done = 0
+    take box
+        count_done = count_done + it
+    end
+    announce "worker" "processed total = {count_done}"
+end
+
+# ==============================================================================
+# Built-in Unit Tests (`ease test examples/showcase.ease`)
+# ==============================================================================
+test "Records, Unions, Two-Form check & Rest-Narrowing"
+    ada = account with name = "Ada", role = "admin", points = 10
+    bob = account with name = "Bob", role = "member", state = "inactive"
+    guest = account with state = "active"
+
+    greet ada is "Admin access for Ada"
+    greet bob is "Account inactive"
+    greet guest is "Welcome, Guest!"
+
+    err = (ErrorMessage with code = 503, message = "Unavailable") as outcome
+    ok_res = "OK" as outcome
+    describe_outcome ok_res is "Processed successfully"
+    describe_outcome "RETRY" is "Temporary retry requested"
+    describe_outcome err is "Error 503: Unavailable"
+    error_code_or_zero ok_res is 0
+    error_code_or_zero err is 503
+
+    (account with role = "root") is error
+end
+
+test "Pattern Matching, Lists, where, contains & Loops"
+    parse_port "PORT=9000" is 9000
+    parse_port "HOST=localhost" is 8080
+
+    log_lines = list "admin:Ada", "guest:Bob", "admin:Lin"
+    admins = extract_admin_names log_lines
+    admins is list "Ada", "Lin"
+    contains admins "Ada"
+    not contains admins "Bob"
+
+    nums = range 1 5
+    count nums is 5
+    nums.1 is 1
+    (nums with .1 = 99).1 is 99
+    sum_squares nums is 55
+    first_over 3 nums is 4
+
+    roster = list as account with
+        name = "Ada", role = "admin", points = 10
+        name = "Bob", role = "member", points = 25
+    end
+    boosted = roster with points = it.points + 5
+    boosted.1.points is 15
+    boosted.2.points is 30
+    high = boosted where it.points >= 20
+    count high is 1
+    high.1.name is "Bob"
+end
+
+test "JSON Boundaries, Fallbacks & Concurrency"
+    raw_map = '{"name": "Ada", "role": "admin", "state": "active", "points": 42}' as json
+    decoded = raw_map as account
+    decoded is account
+    decoded.points is 42
+
+    ("42" as number or 0) is 42
+    ("nope" as number or 0) is 0
+    ("INVALID" as status or "OK") is "OK"
+    with_tax 100 is 119
+
+    doubled = swarm loop range 1 4
+        -> it * 2
+    end
+    doubled is list 2, 4, 6, 8
+
+    ch = inbox as number
+    put ch 10
+    put ch 20
+    close ch
+    acc = 0
+    take ch
+        acc = acc + it
+    end
+    acc is 30
+end
+
+# ==============================================================================
+# Runnable Entrypoint (`ease examples/showcase.ease`)
+# ==============================================================================
+ada = account with name = "Ada", role = "admin", points = 50
+announce "greet" (greet ada)
+announce "math" "sum_squares(1..5) = {sum_squares (range 1 5)}, with_tax(100) = {with_tax 100}"
+
+jobs = inbox as number
+spawn collect_jobs jobs
+put jobs 7
+put jobs 13
+close jobs

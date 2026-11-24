@@ -171,9 +171,11 @@ res = swarm loop range 0 5
   txt = network:fetch client "/{it}"
   check txt is "4"
     bad4 = "err-at-4" as number
+    -> "{bad4}"
   end
   check txt is "2"
     bad2 = "err-at-2" as number
+    -> "{bad2}"
   end
   -> txt
 end

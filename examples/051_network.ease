@@ -36,10 +36,8 @@ to load_verified_user client user_id
     raw = parsed as api_user
 
     # Stufe 2: Fachliche Inhaltsvalidität (`check`)
-    check
-        raw.name is "" -> fetch_report with status = "domain_rejected", note = "Kein Name hinterlegt"
-        raw.id > 3     -> fetch_report with status = "domain_rejected", note = "Nur Stammnutzer (ID 1-3) zugelassen"
-    end
+    check raw.name is "" -> fetch_report with status = "domain_rejected", note = "Kein Name hinterlegt"
+    check raw.id > 3     -> fetch_report with status = "domain_rejected", note = "Nur Stammnutzer (ID 1-3) zugelassen"
 
     -> fetch_report with status = "ok", user = raw, note = "Verifiziert"
 end

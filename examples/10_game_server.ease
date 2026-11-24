@@ -104,14 +104,12 @@ to start_game_server world http_reqs tcp_clients http_port tcp_port
 
     check bound_http is 0
         close_all http_reqs tcp_clients world
-        -> 0
+    else
+        spawn run_world world
+        spawn accept_http http_reqs world
+        spawn accept_tcp tcp_clients world
+        say "Game server ready: HTTP http://127.0.0.1:{bound_http}, TCP 127.0.0.1:{bound_tcp}"
     end
-
-    spawn run_world world
-    spawn accept_http http_reqs world
-    spawn accept_tcp tcp_clients world
-    say "Game server ready: HTTP http://127.0.0.1:{bound_http}, TCP 127.0.0.1:{bound_tcp}"
-    -> bound_http
 end
 
 test "game server handles parallel HTTP chat/status and TCP inbox cleanly"

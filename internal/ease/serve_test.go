@@ -46,6 +46,7 @@ func TestServeWorkerCrashIsolation(t *testing.T) {
 to crash_when_told req
     network:reply_text req 500 "crashing"
     bad = 1 / 0
+    say bad
 end
 
 to handle_req req

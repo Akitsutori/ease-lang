@@ -51,15 +51,19 @@ to bad_interp val -> "Wert: {val}"
 
 # 6. Schleifen-Hilfsfunktionen für Negativtests
 to bad_loop x
+    seen = 0
     loop x
-        it
+        seen = seen + it
     end
+    -> seen
 end
 
 to bad_loop_range a b
+    seen = 0
     loop range a b
-        it
+        seen = seen + it
     end
+    -> seen
 end
 
 # ============================================================================

@@ -9,7 +9,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse bool, elseBody []Stmt, env *Env, line, col int) (*ListValue, error) {
+func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse bool, elseBody []Stmt, elseVal Expr, env *Env, line, col int) (*ListValue, error) {
 	if lv.ElemType != "" && lv.ElemType != "text" {
 		return nil, newError(
 			"RuntimeError",
@@ -77,7 +77,8 @@ func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse b
 		}
 
 		if !matchedAny && hasElse {
-			val, sig, err := ev.execBlock(elseBody, NewEnv(itemEnv))
+			elseEnv := NewEnv(itemEnv)
+			val, sig, err := ev.execBlock(elseBody, elseEnv)
 			if err != nil {
 				return nil, err
 			}
@@ -86,6 +87,11 @@ func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse b
 					return nil, newError("RuntimeError", line, col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
 				}
 				val = sig.val
+			} else if elseVal != nil {
+				val, err = ev.EvalExpr(elseVal, elseEnv)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if err := ev.checkNotConditionValue(val, line, col); err != nil {
 				return nil, err

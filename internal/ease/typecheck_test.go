@@ -139,11 +139,9 @@ to handle res
 end
 
 to process_response res
-    check
-        res is "OK"         -> "Erfolgreich verarbeitet"
-        res is "FEHLER"     -> "Unbekannter Fehler"
-        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
-    end
+    check res is "OK"         -> "Erfolgreich verarbeitet"
+    check res is "FEHLER"     -> "Unbekannter Fehler"
+    check res is ErrorMessage -> "Fehler {res.code}: {res.message}"
 end
 
 to log_only_success res
@@ -155,10 +153,8 @@ to log_only_success res
 end
 
 to inspect_check res
-    check
-        res is ErrorMessage -> "check:{res.code}:{res.message}"
-        else                -> "other"
-    end
+    check res is ErrorMessage -> "check:{res.code}:{res.message}"
+    -> "other"
 end
 
 to unwrap_err_guard res
@@ -167,10 +163,8 @@ to unwrap_err_guard res
 end
 
 to server_error_only res
-    check
-        res is ErrorMessage and res.code >= 500 -> "server:{res.code}:{res.message}"
-        else                                    -> "handled"
-    end
+    check res is ErrorMessage and res.code >= 500 -> "server:{res.code}:{res.message}"
+    -> "handled"
 end
 
 err_rec = ErrorMessage with code = 404, message = "Not Found"
@@ -263,10 +257,8 @@ def status = "OK" | "FEHLER"
 def outcome = status | ErrorMessage
 
 to process res
-    check
-        res is status       -> "status-ok"
-        res is ErrorMessage -> "err:{res.code}"
-    end
+    check res is status       -> "status-ok"
+    check res is ErrorMessage -> "err:{res.code}"
 end
 `
 	if _, err := ParseProgram(subUnionCheck); err != nil {
@@ -385,11 +377,9 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
-    check
-        res is "OK"         -> "{res.code}"
-        res is "FEHLER"     -> "err"
-        res is ErrorMessage -> "{res.code}"
-    end
+    check res is "OK"         -> "{res.code}"
+    check res is "FEHLER"     -> "err"
+    check res is ErrorMessage -> "{res.code}"
 end
 `,
 			want: []string{"Cannot read field '.code'", "non-record"},
@@ -404,11 +394,9 @@ end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
     say "{res.code}"
-    check
-        res is "OK"         -> "ok"
-        res is "FEHLER"     -> "err"
-        res is ErrorMessage -> "{res.code}"
-    end
+    check res is "OK"         -> "ok"
+    check res is "FEHLER"     -> "err"
+    check res is ErrorMessage -> "{res.code}"
 end
 `,
 			want: []string{"Cannot read field '.code'", "outcome", "before narrowing"},
@@ -422,9 +410,10 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
-    check
-        res is ErrorMessage -> "{res.code}"
-        else                -> "{res.code}"
+    check res is ErrorMessage
+        -> "{res.code}"
+    else
+        -> "{res.code}"
     end
 end
 `,
@@ -439,11 +428,9 @@ def ErrorMessage
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
 to bad res
-    check
-        res is "OK"         -> "ok"
-        res is "FEHLER"     -> "err"
-        res is ErrorMessage -> "{res.nonexistent}"
-    end
+    check res is "OK"         -> "ok"
+    check res is "FEHLER"     -> "err"
+    check res is ErrorMessage -> "{res.nonexistent}"
 end
 `,
 			want: []string{"ErrorMessage has no field \"nonexistent\""},
@@ -459,14 +446,12 @@ end
 def outcome = "OK" | "FEHLER" | "TIMEOUT" | ErrorMessage
 
 to process_response res
-    check
-        res is "OK"         -> "Erfolgreich verarbeitet"
-        res is "FEHLER"     -> "Unbekannter Fehler"
-        res is ErrorMessage -> "Fehler {res.code}: {res.message}"
-    end
+    check res is "OK"         -> "Erfolgreich verarbeitet"
+    check res is "FEHLER"     -> "Unbekannter Fehler"
+    check res is ErrorMessage -> "Fehler {res.code}: {res.message}"
 end
 `,
-			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"TIMEOUT\"", "Add a branch for \"TIMEOUT\" or add an 'else -> ...' fallback."},
+			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"TIMEOUT\"", "Add a branch for \"TIMEOUT\" or add a final '-> ...' fallback."},
 		},
 		{
 			name: "narrowing field outside check branch on union variable",
@@ -488,23 +473,16 @@ end
 			want: []string{"Cannot read field '.code'", "outcome", "before narrowing"},
 		},
 		{
-			name: "exhaustiveness and narrowing inside loop over pushed union list",
+			name: "exhaustiveness on sequential check guards missing FEHLER",
 			src: `
 def ErrorMessage
     code    = 500
     message = "Unknown error"
 end
 def outcome = "OK" | "FEHLER" | ErrorMessage
-items = list as outcome
-items = append items "OK"
-to check_items items
-    loop items
-        check
-            it is "OK"         -> "ok"
-            it is ErrorMessage -> "{it.code}"
-        end
-    end
-    -> "done"
+to check_item x
+    check x is "OK"         -> "ok"
+    check x is ErrorMessage -> "{x.code}"
 end
 `,
 			want: []string{"Non-exhaustive check on 'outcome'", "Missing case: \"FEHLER\""},
@@ -1621,11 +1599,9 @@ to shipping weight
 end
 
 to classify n
-    check
-        n < 0  -> "neg"
-        n is 0 -> "zero"
-        else   -> "pos"
-    end
+    check n < 0  -> "neg"
+    check n is 0 -> "zero"
+    -> "pos"
 end
 
 to dispatch cmd
@@ -1707,9 +1683,9 @@ end
 			wantSub: "'proc' is a procedure (void) and does not return a value",
 		},
 		{
-			name:    "legacy bare precondition checklist in check rejected",
+			name:    "legacy bare check verdict table rejected",
 			src:     "to f x\n  check\n    x > 0\n  else\n    \"bad\"\n  end\n  -> \"ok\"\nend\n",
-			wantSub: "Every rule inside a 'check ... end' verdict table must have '-> <value | end>'",
+			wantSub: "Expected condition expression after 'check'",
 		},
 		{
 			name:    "network:reply_text is void",
@@ -1976,10 +1952,8 @@ to book_hall
 end
 
 to describe_outcome out
-    check
-        out is Hall            -> out.rows.2.chairs.3.state
-        out is BookingRejected -> out.reason
-    end
+    check out is Hall            -> out.rows.2.chairs.3.state
+    check out is BookingRejected -> out.reason
 end
 
 p = Parent
@@ -2189,5 +2163,177 @@ say res + 1
 `
 	if _, err := ParseProgram(recSrc); err != nil {
 		t.Fatalf("expected recursive fib to typecheck cleanly, got: %v", err)
+	}
+}
+
+func TestStrictValueDisciplineImmutableParamsAndTwoFormCheck(t *testing.T) {
+	// 1. Happy path covering immutable params (with local copies), World B void procedures,
+	//    explicit match-else `->`, sequential union rest-narrowing (record + scalar + Form 2),
+	//    and exhaustive sequential union guards without dummy trailing `->`.
+	happySrc := `
+def Ok
+    value = 0
+end
+def Err
+    msg = ""
+end
+def Result = Ok | Err
+def MaybeNum = number | "none"
+def Light = "red" | "yellow" | "green"
+
+to bump_local x
+    cur = x
+    cur = cur + 1
+    -> cur
+end
+
+to log_note msg
+    say "note:{msg}"
+end
+
+to unwrap_form1 r
+    check r is Err -> 0
+    -> r.value
+end
+
+to unwrap_form2 r
+    check r is Err
+        log_note r.msg
+        -> 0
+    end
+    -> r.value
+end
+
+to plus_one v
+    check v is "none" -> 0
+    -> v + 1
+end
+
+to light_action l
+    check l is "red"    -> "stop"
+    check l is "yellow" -> "slow"
+    check l is "green"  -> "go"
+end
+
+to parse_cmd raw
+    res = match raw
+        "ping" -> "pong"
+        else
+            log_note "fallback:{raw}"
+            -> "unknown"
+    end
+    -> res
+end
+
+test "strict value discipline, rest-narrowing, and exhaustive sequential check"
+    bump_local 4 is 5
+    ok_res = (Ok with value = 42) as Result
+    err_res = (Err with msg = "boom") as Result
+    unwrap_form1 ok_res is 42
+    unwrap_form1 err_res is 0
+    unwrap_form2 ok_res is 42
+    unwrap_form2 err_res is 0
+
+    m1 = 9 as MaybeNum
+    m2 = "none" as MaybeNum
+    plus_one m1 is 10
+    plus_one m2 is 0
+
+    light_action "red" is "stop"
+    light_action "yellow" is "slow"
+    light_action "green" is "go"
+
+    parse_cmd "ping" is "pong"
+    parse_cmd "xyz" is "unknown"
+end
+`
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed on happy strict-discipline program: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 12 {
+		t.Fatalf("expected 12 passed / 0 failed, got %+v", report)
+	}
+
+	// REPL mode still permits a trailing pure value expression at top-level.
+	if _, err := ParseProgramForRepl("x = 10\nx + 5\n"); err != nil {
+		t.Fatalf("expected ParseProgramForRepl to allow trailing value expr, got: %v", err)
+	}
+
+	// 2. Negative cases
+	negCases := []struct {
+		name    string
+		src     string
+		wantSub string
+	}{
+		{
+			name:    "immutable param direct reassignment",
+			src:     "to f x\n  x = x + 1\n  -> x\nend\n",
+			wantSub: `Cannot reassign function parameter "x"`,
+		},
+		{
+			name:    "immutable param nested reassignment",
+			src:     "to f x\n  check x > 0\n    x = 0\n  end\n  -> x\nend\n",
+			wantSub: `Cannot reassign function parameter "x"`,
+		},
+		{
+			name:    "unused standalone pure expression at top-level",
+			src:     "x = 1\nx + 2\n",
+			wantSub: "Unused value expression has no effect",
+		},
+		{
+			name:    "unused standalone pure expression in function",
+			src:     "to f x\n  x + 1\n  -> x\nend\n",
+			wantSub: "Unused value expression has no effect",
+		},
+		{
+			name:    "discarded return value of function call",
+			src:     "to add a b -> a + b\nadd 1 2\n",
+			wantSub: "Return value of 'add' is unused",
+		},
+		{
+			name:    "unused local variable inside function",
+			src:     "to f x\n  tmp = x + 1\n  -> x\nend\n",
+			wantSub: `Local variable "tmp" is assigned but never used`,
+		},
+		{
+			name:    "unused local variable inside swarm loop",
+			src:     "xs = swarm loop range 1 3\n  dead = it * 2\n  -> it\nend\nsay count xs\n",
+			wantSub: `Local variable "dead" is assigned but never used`,
+		},
+		{
+			name:    "match expr else without explicit arrow rejected",
+			src:     "to f raw\n  res = match raw\n    \"a\" -> 1\n    else\n      say raw\n      2\n  end\n  -> res\nend\n",
+			wantSub: "must end with '-> <expression>'",
+		},
+		{
+			name:    "empty void procedure rejected",
+			src:     "to noop\nend\n",
+			wantSub: "Procedure 'noop' has an empty body and no '->' return",
+		},
+		{
+			name:    "bare check verdict table rejected",
+			src:     "to f x\n  check\n    x > 0 -> 1\n  end\n  -> 0\nend\n",
+			wantSub: "Expected condition expression after 'check'",
+		},
+		{
+			name:    "else arrow in check block rejected",
+			src:     "to f x\n  check x > 0\n    -> 1\n  else -> 0\n  end\nend\n",
+			wantSub: "'else ->' is not valid in a 'check' block",
+		},
+		{
+			name:    "non-exhaustive sequential union check",
+			src:     "def RGB = \"r\" | \"g\" | \"b\"\nto pick c\n  check c is \"r\" -> 1\n  check c is \"g\" -> 2\nend\n",
+			wantSub: `Non-exhaustive check on 'RGB' (Missing case: "b")`,
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantSub, err)
+			}
+		})
 	}
 }

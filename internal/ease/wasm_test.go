@@ -307,8 +307,8 @@ to fib n
 end
 
 to rebind_add n
-  n = n + 10
-  -> n
+  res = n + 10
+  -> res
 end
 
 to main

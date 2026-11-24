@@ -26,10 +26,8 @@ to count_down start
 end
 
 to classify n
-    check
-        n > 0 -> "positiv"
-        else  -> "nicht-positiv"
-    end
+    check n > 0 -> "positiv"
+    -> "nicht-positiv"
 end
 
 test "Listen, Schleifen & Verzweigungen"

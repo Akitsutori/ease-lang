@@ -54,11 +54,10 @@ to start_server port
     bound_port = network:serve_http port requests
     check bound_port is 0
         close requests
-        -> 0
+    else
+        say "HTTP server listening on http://127.0.0.1:{bound_port}"
+        serve_loop requests
     end
-    say "HTTP server listening on http://127.0.0.1:{bound_port}"
-    serve_loop requests
-    -> bound_port
 end
 
 start_server 8080

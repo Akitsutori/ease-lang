@@ -250,6 +250,9 @@ func (v *typeValidator) checkSwarmLoopExpr(ex *SwarmLoopExpr) error {
 	}
 
 	if !v.inErrorTestExpr {
+		if err := v.checkUnusedLocals(ex.Body, nil); err != nil {
+			return err
+		}
 		if stmtsHaveReturn(ex.Body) && !v.stmtAlwaysReturnsExpr(ex.Body) {
 			return newError(
 				"TypeError",

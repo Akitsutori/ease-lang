@@ -813,43 +813,52 @@ func (v *typeValidator) findMatchingUnionForVariants(tested []resolvedUnionVaria
 	sort.Strings(names)
 
 	type candidate struct {
-		name  string
-		count int
+		name         string
+		count        int
+		exactMatches int
 	}
 	var candidates []candidate
 	for _, name := range names {
 		uVars := v.resolvedUnions[name]
 		allIn := true
 		hasRec := false
+		exactKeys := make(map[string]bool, len(uVars))
 		for _, uv := range uVars {
+			exactKeys[uv.key()] = true
 			if uv.kind == variantRecord {
 				hasRec = true
-				break
 			}
 		}
 		if requireRecordInUnion && !hasRec {
 			continue
 		}
+		exact := 0
 		for _, tv := range tested {
 			if !v.variantCoveredByUnion(tv, uVars) {
 				allIn = false
 				break
 			}
+			if exactKeys[tv.key()] {
+				exact++
+			}
 		}
 		if allIn {
-			candidates = append(candidates, candidate{name: name, count: len(uVars)})
+			candidates = append(candidates, candidate{name: name, count: len(uVars), exactMatches: exact})
 		}
 	}
 	if len(candidates) == 0 {
 		return "", false
 	}
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].exactMatches != candidates[j].exactMatches {
+			return candidates[i].exactMatches > candidates[j].exactMatches
+		}
 		if candidates[i].count != candidates[j].count {
 			return candidates[i].count < candidates[j].count
 		}
 		return candidates[i].name < candidates[j].name
 	})
-	if len(candidates) == 1 || candidates[0].count < candidates[1].count {
+	if len(candidates) == 1 || candidates[0].exactMatches > candidates[1].exactMatches || candidates[0].count < candidates[1].count {
 		return candidates[0].name, true
 	}
 	return "", false

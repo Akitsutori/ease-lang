@@ -181,24 +181,20 @@ end
 func TestEntryCheckFeatures(t *testing.T) {
 	src := `
 to allow_entry name age
-    check
-        name is not text  -> "Name muss Text sein"
-        name is ""        -> "Name darf nicht leer sein"
-        age is not number -> "Alter muss eine Zahl sein"
-        age < 18          -> "Du bist {age}. Das ist jung"
-        age > 120         -> "Ungültiges Alter"
-    end
+    check name is not text  -> "Name muss Text sein"
+    check name is ""        -> "Name darf nicht leer sein"
+    check age is not number -> "Alter muss eine Zahl sein"
+    check age < 18          -> "Du bist {age}. Das ist jung"
+    check age > 120         -> "Ungültiges Alter"
 
     -> "Willkommen {name}, du darfst rein!"
 end
 
 to is_valid_vip code age
-    check
-        code is not text     -> "invalid"
-        code is not "VIP2026" -> "invalid"
-        age is not number    -> "invalid"
-        age < 18             -> "invalid"
-    end
+    check code is not text      -> "invalid"
+    check code is not "VIP2026" -> "invalid"
+    check age is not number     -> "invalid"
+    check age < 18              -> "invalid"
 
     -> "valid"
 end
@@ -330,12 +326,10 @@ func TestUnionTypesAndBareCalls(t *testing.T) {
 def ticket = "vip" | "standard" | "none"
 
 to check_access age pass
-    check
-        pass is not ticket -> "Ungültiges Ticket"
-        age < 18           -> "Abgelehnt: zu jung"
-        pass is "none"     -> "Abgelehnt: kein Ticket"
-        pass is "vip"      -> "Willkommen in der Lounge"
-    end
+    check pass is not ticket -> "Ungültiges Ticket"
+    check age < 18           -> "Abgelehnt: zu jung"
+    check pass is "none"     -> "Abgelehnt: kein Ticket"
+    check pass is "vip"      -> "Willkommen in der Lounge"
     -> "Willkommen im Hauptbereich"
 end
 
@@ -562,10 +556,8 @@ func TestInclusiveRangeAndHeadlessScreen(t *testing.T) {
 import screen
 
 to move_x x key
-    check
-        key is "right" -> x + 6
-        key is "left"  -> x - 6
-    end
+    check key is "right" -> x + 6
+    check key is "left"  -> x - 6
     -> x
 end
 
@@ -1176,27 +1168,16 @@ say describe 1
 		t.Fatalf("unexpected output: got %q, want %q", got, "got pos")
 	}
 
-	// 5. Rebinding a function parameter locally is allowed and never mutates the caller.
+	// 5. Reassigning a function parameter is rejected statically at ParseProgram time.
 	paramReassignSrc := `
 to inc n
     n = n + 1
     -> n
 end
-to push_four xs
-    xs = append xs 4
-    -> xs
-end
-x = 1
-base = list 1, 2, 3
-res = push_four base
-say "{inc x}|{x}|{count res}|{count base}"
+say inc 1
 `
-	var outParam bytes.Buffer
-	if _, err := EvalProgram(paramReassignSrc, &outParam); err != nil {
-		t.Fatalf("expected local parameter rebinding to succeed, got: %v", err)
-	}
-	if got := strings.TrimSpace(outParam.String()); got != "2|1|4|3" {
-		t.Fatalf("unexpected parameter rebinding output: got %q, want %q", got, "2|1|4|3")
+	if _, err := ParseProgram(paramReassignSrc); err == nil || !strings.Contains(err.Error(), `Cannot reassign function parameter "n"`) {
+		t.Fatalf("expected static parameter reassignment TypeError, got: %v", err)
 	}
 
 	// 6. 'if ... end' is removed from Ease.
@@ -1220,8 +1201,8 @@ func TestIssue8CheckFormsArrowSemanticsAndTopLevelValueError(t *testing.T) {
 	}
 
 	bareBlock := "x = 1\ncheck\n    x > 0\nend\n"
-	if _, err := ParseProgram(bareBlock); err == nil || !strings.Contains(err.Error(), "Every rule inside a 'check ... end' verdict table must have '-> <value | end>'") {
-		t.Fatalf("expected parse error for check verdict block without '->', got: %v", err)
+	if _, err := ParseProgram(bareBlock); err == nil || !strings.Contains(err.Error(), "Expected condition expression after 'check'") {
+		t.Fatalf("expected parse error for bare check verdict block, got: %v", err)
 	}
 
 	// 2. Arrow semantics in functions & loops vs effect blocks:
@@ -1278,7 +1259,7 @@ say first_big nums
 
 func TestHardeningEvalRepeatHTTPPoolingScreenCloseAndListDefaults(t *testing.T) {
 	// 1. Loop range limit (Finding 2 / maxListSize)
-	_, err := EvalProgram("loop range 1 1000001\n    1\nend\n", &bytes.Buffer{})
+	_, err := EvalProgram("loop range 1 1000001\n    say it\nend\n", &bytes.Buffer{})
 	var easeErr *EaseError
 	if err == nil || !errors.As(err, &easeErr) || easeErr.Stage != "RuntimeError" || !strings.Contains(easeErr.Message, "range too large") {
 		t.Fatalf("expected RuntimeError for oversized loop range, got: %v", err)
@@ -1468,9 +1449,7 @@ pairs = list as text
 loop range 1 2
     outer = it
     loop range 10 12
-        check
-            it is 11 -> end
-        end
+        check it is 11 -> end
         pairs = append pairs "{outer}:{it}:{it.index}"
     end
 end
@@ -1637,12 +1616,12 @@ loop range 1 3 say it end
 		},
 		{
 			name: "func collides with builtin",
-			src:  "to count x\n  x\nend\n",
+			src:  "to count x\n  -> x\nend\n",
 			want: "Cannot define function \"count\": it conflicts with a built-in function",
 		},
 		{
 			name: "param collides with function",
-			src:  "to add a b\n  a + b\nend\nto f add\n  1\nend\n",
+			src:  "to add a b\n  -> a + b\nend\nto f add\n  -> 1\nend\n",
 			want: "Cannot name parameter \"add\" the same as a 'to' function",
 		},
 	}
@@ -2035,7 +2014,7 @@ say "a" + "\u0308" is "ä"
 end
 
 to bad_add a b
-  a + b
+  -> a + b
 end
 
 say "hello " + "world"

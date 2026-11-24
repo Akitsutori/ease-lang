@@ -47,7 +47,7 @@ type Evaluator struct {
 	debug          *DebugController
 }
 
-// SetHeadlessScreen toggles headless screen simulation for `--check` / CI tests.
+// SetHeadlessScreen toggles headless screen simulation for `--ci` / CI tests.
 func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	ev.headlessScreen = headless
 	for _, modEv := range ev.modules {
@@ -55,7 +55,7 @@ func (ev *Evaluator) SetHeadlessScreen(headless bool) {
 	}
 }
 
-// SetHeadlessNet toggles headless TCP listener simulation for `--check` mode.
+// SetHeadlessNet toggles headless TCP listener simulation for `--ci` mode.
 func (ev *Evaluator) SetHeadlessNet(headless bool) {
 	ev.headlessNet = headless
 	for _, modEv := range ev.modules {
@@ -63,7 +63,7 @@ func (ev *Evaluator) SetHeadlessNet(headless bool) {
 	}
 }
 
-// SetHeadlessAudio toggles silent headless audio simulation for `--check` / CI tests.
+// SetHeadlessAudio toggles silent headless audio simulation for `--ci` / CI tests.
 func (ev *Evaluator) SetHeadlessAudio(headless bool) {
 	ev.headlessAudio = headless
 	for _, modEv := range ev.modules {
@@ -1495,7 +1495,8 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				}
 				return val, nil
 			}
-			val, sig, err := ev.execBlock(e.ElseBody, NewEnv(env))
+			elseEnv := NewEnv(env)
+			val, sig, err := ev.execBlock(e.ElseBody, elseEnv)
 			if err != nil {
 				return nil, err
 			}
@@ -1504,6 +1505,11 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
 				}
 				val = sig.val
+			} else if e.ElseValue != nil {
+				val, err = ev.EvalExpr(e.ElseValue, elseEnv)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if err := ev.checkNotConditionValue(val, e.Line, e.Col); err != nil {
 				return nil, err
@@ -1511,7 +1517,7 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			return val, nil
 
 		case *ListValue:
-			return ev.evalMatchList(tv, e.Arms, e.HasElse, e.ElseBody, env, e.Line, e.Col)
+			return ev.evalMatchList(tv, e.Arms, e.HasElse, e.ElseBody, e.ElseValue, env, e.Line, e.Col)
 
 		default:
 			return nil, newError(
@@ -1598,7 +1604,11 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 	ev.callDepth++
 	defer func() { ev.callDepth-- }()
 
-	fnEnv := NewFuncEnv(ev.global, collectAssignedNames(fn.Body))
+	assigned := collectAssignedNames(fn.Body)
+	for _, param := range fn.Params {
+		delete(assigned, param)
+	}
+	fnEnv := NewFuncEnv(ev.global, assigned)
 	for i, param := range fn.Params {
 		fnEnv.DefineParam(param, args[i])
 	}

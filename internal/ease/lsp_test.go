@@ -58,7 +58,7 @@ def Player
 end
 
 to heal amount
-    amount + 10
+    -> amount + 10
 end
 `
 	syms := DocumentSymbolsForSource(src)
@@ -216,7 +216,7 @@ func TestLSPUnicodeUTF16DiagnosticsAndSymbols(t *testing.T) {
 			diags[0].Range.Start.Character, diags[0].Range.End.Character)
 	}
 
-	symSrc := "def größe\n    länge = 1\nend\nto prüfe ö\n    ö\nend\n"
+	symSrc := "def größe\n    länge = 1\nend\nto prüfe ö\n    -> ö\nend\n"
 	syms := DocumentSymbolsForSource(symSrc)
 	if len(syms) != 2 {
 		t.Fatalf("expected 2 symbols, got %d", len(syms))

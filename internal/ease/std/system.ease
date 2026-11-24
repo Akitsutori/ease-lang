@@ -1,6 +1,22 @@
 def ok = 0
 def arguments = sys_args
 
+def command
+    program = ""
+    args    = list as text
+    dir     = ""
+    timeout = 30
+    max_mb  = 10
+end
+
+def process_report
+    code   = 0
+    stdout = ""
+    stderr = ""
+end
+
 to exit reason
     sys_exit reason
 end
+
+to run cmd -> sys_run cmd

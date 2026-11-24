@@ -289,15 +289,19 @@ func (v *typeValidator) checkMatchExpr(ex *MatchExpr) error {
 		}
 	}
 
-	if ex.HasElse && len(ex.ElseBody) > 0 {
+	if ex.HasElse {
 		v.pushScope()
 		err := v.checkStmts(ex.ElseBody, false)
-		if err == nil {
-			if lastEs, ok := ex.ElseBody[len(ex.ElseBody)-1].(*ExprStmt); ok {
-				err = v.checkNotCondition(lastEs.Expression)
-				if err == nil && treatAsList {
-					err = v.checkMatchListResultExpr(&expectedType, lastEs.Expression, true)
-				}
+		if err == nil && ex.ElseValue != nil {
+			err = v.checkExpr(ex.ElseValue)
+			if err == nil {
+				err = v.checkNotCondition(ex.ElseValue)
+			}
+			if err == nil {
+				err = v.checkNotVoidValue(ex.ElseValue)
+			}
+			if err == nil && treatAsList {
+				err = v.checkMatchListResultExpr(&expectedType, ex.ElseValue, true)
 			}
 		}
 		v.popScope()
@@ -390,16 +394,15 @@ func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
 		v.popScope()
 	}
 
-	if ex.HasElse && len(ex.ElseBody) > 0 {
+	if ex.HasElse {
 		elseScope := v.pushScope()
-		for i, s := range ex.ElseBody {
-			if i < len(ex.ElseBody)-1 {
-				if as, ok := s.(*AssignStmt); ok {
-					elseScope.vars[as.Name] = v.inferExprTypeState(as.Value)
-				}
-			} else if es, ok := s.(*ExprStmt); ok {
-				states = append(states, v.inferExprTypeState(es.Expression))
+		for _, s := range ex.ElseBody {
+			if as, ok := s.(*AssignStmt); ok {
+				elseScope.vars[as.Name] = v.inferExprTypeState(as.Value)
 			}
+		}
+		if ex.ElseValue != nil {
+			states = append(states, v.inferExprTypeState(ex.ElseValue))
 		}
 		v.popScope()
 	}

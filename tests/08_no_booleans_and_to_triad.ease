@@ -49,10 +49,8 @@ def shipping_plan
 end
 
 to plan_shipment amount risk_level
-    check
-        risk_level is "high" -> shipping_plan with status = "manual_review", reason = "high risk"
-        amount < 50          -> shipping_plan with status = "below_minimum", reason = "minimum 50"
-    end
+    check risk_level is "high" -> shipping_plan with status = "manual_review", reason = "high risk"
+    check amount < 50          -> shipping_plan with status = "below_minimum", reason = "minimum 50"
     -> shipping_plan with status = "ship", reason = "ready"
 end
 

@@ -2,6 +2,8 @@ package ease
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 )
 
 func (v *typeValidator) stmtAlwaysReturnsExpr(stmts []Stmt) bool {
@@ -111,7 +113,7 @@ func (v *typeValidator) findFirstReturn(stmts []Stmt) (int, int, bool) {
 
 // checkFuncReturnConsistency ensures functions that return a value via `-> <expr>`
 // return a value on every execution path (while functions without `->` are `void` procedures).
-func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
+func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl, fnScope *typeScope) error {
 	if fn == nil {
 		return nil
 	}
@@ -120,6 +122,51 @@ func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
 	}
 	if v.stmtAlwaysReturnsExpr(fn.Body) {
 		return nil
+	}
+	if fnScope != nil {
+		names := make([]string, 0, len(fnScope.vars))
+		for name := range fnScope.vars {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			st := fnScope.vars[name]
+			if st.hasRemainingTracking && len(st.remainingVariants) == 0 {
+				return nil
+			}
+		}
+		for _, name := range names {
+			st := fnScope.vars[name]
+			if st.hasRemainingTracking && len(st.remainingVariants) > 0 {
+				label := st.unionName
+				if label == "" {
+					label = st.inlineUnionLabel
+				}
+				missingLabels := make([]string, len(st.remainingVariants))
+				for i, mv := range st.remainingVariants {
+					missingLabels[i] = mv.display()
+				}
+				missingText := strings.Join(missingLabels, ", ")
+				caseWord := "Missing case"
+				branchWord := "a branch"
+				if len(missingLabels) > 1 {
+					caseWord = "Missing cases"
+					branchWord = "branches"
+				}
+				line, col, hasRet := v.findFirstReturn(fn.Body)
+				if !hasRet {
+					line, col = fn.Pos()
+				}
+				return newError(
+					"TypeError",
+					line,
+					col,
+					v.source,
+					fmt.Sprintf("Non-exhaustive check on '%s' (%s: %s)", label, caseWord, missingText),
+					fmt.Sprintf("Add %s for %s or add a final '-> ...' fallback.", branchWord, missingText),
+				)
+			}
+		}
 	}
 	line, col, hasRet := v.findFirstReturn(fn.Body)
 	if !hasRet {
@@ -136,45 +183,53 @@ func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl) error {
 }
 
 type typeValidator struct {
-	source                string
-	known                 map[string]typeDefInfo
-	defs                  map[string]*DefDecl
-	unions                map[string]*UnionDecl
-	consts                map[string]int
-	constExprs            map[string]Expr
-	funcNames             map[string]int
-	funcDecls             map[string]*FuncDecl
-	modules               map[string]modTypeInfo
-	resolvedUnions        map[string][]resolvedUnionVariant
-	globalScope           *typeScope
-	scope                 *typeScope
-	allowInternalBuiltins bool
-	spawnFuncCache        map[string]bool
-	activeCallSpecs       map[string]bool
-	verifiedCallSpecs     map[string]bool
-	activeReturnInfer     map[string]bool
-	callSpecDepth         int
-	inErrorTestExpr       bool
-	inErrorBlock          bool
-	inTestBlock           bool
-	loopDepth             int
-	swarmDepth            int
-	directInSwarm         bool
-	workerAssigned        map[string]bool
-	workerOuterScope      *typeScope
+	source                 string
+	known                  map[string]typeDefInfo
+	defs                   map[string]*DefDecl
+	unions                 map[string]*UnionDecl
+	consts                 map[string]int
+	constExprs             map[string]Expr
+	funcNames              map[string]int
+	funcDecls              map[string]*FuncDecl
+	modules                map[string]modTypeInfo
+	resolvedUnions         map[string][]resolvedUnionVariant
+	globalScope            *typeScope
+	scope                  *typeScope
+	allowInternalBuiltins  bool
+	allowTrailingValueExpr bool
+	isTopLevelBody         bool
+	inTrailingReplExpr     bool
+	spawnFuncCache         map[string]bool
+	activeCallSpecs        map[string]bool
+	verifiedCallSpecs      map[string]bool
+	activeReturnInfer      map[string]bool
+	callSpecDepth          int
+	inErrorTestExpr        bool
+	inErrorBlock           bool
+	inTestBlock            bool
+	loopDepth              int
+	swarmDepth             int
+	directInSwarm          bool
+	workerAssigned         map[string]bool
+	workerOuterScope       *typeScope
 }
 
 func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
+	wasTop := v.isTopLevelBody
+	v.isTopLevelBody = false
 	for i, s := range stmts {
+		prevTrailing := v.inTrailingReplExpr
+		v.inTrailingReplExpr = wasTop && v.allowTrailingValueExpr && i == len(stmts)-1
+		var err error
 		switch st := s.(type) {
 		case *CheckGuardStmt:
-			if err := v.checkCheckGuardStmt(stmts, i, st, inFunction); err != nil {
-				return err
-			}
+			err = v.checkCheckGuardStmt(stmts, i, st, inFunction)
 		default:
-			if err := v.checkStmt(s, inFunction); err != nil {
-				return err
-			}
+			err = v.checkStmt(s, inFunction)
+		}
+		v.inTrailingReplExpr = prevTrailing
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -252,12 +307,26 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotVoidValue(st.Value); err != nil {
 			return err
 		}
-		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
+		valSt := v.inferExprTypeState(st.Value)
+		valSt.isParam = false
+		v.setVarInCurrentOrExisting(st.Name, valSt)
 		return nil
 
 	case *AssignStmt:
 		if err := v.checkNameNotCallable(st.Name, st.Line, st.Col, "variable"); err != nil {
 			return err
+		}
+		if !v.inErrorTestExpr {
+			if cur, ok := v.lookupVar(st.Name); ok && cur.isParam {
+				return newError(
+					"TypeError",
+					st.Line,
+					st.Col,
+					v.source,
+					fmt.Sprintf("Cannot reassign function parameter %q", st.Name),
+					fmt.Sprintf("Parameters are read-only inputs; bind a new local variable name (e.g. 'next_%s = ...') instead.", st.Name),
+				)
+			}
 		}
 		if err := v.checkExpr(st.Value); err != nil {
 			return err
@@ -268,7 +337,9 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotVoidValue(st.Value); err != nil {
 			return err
 		}
-		v.setVarInCurrentOrExisting(st.Name, v.inferExprTypeState(st.Value))
+		valSt := v.inferExprTypeState(st.Value)
+		valSt.isParam = false
+		v.setVarInCurrentOrExisting(st.Name, valSt)
 		return nil
 
 	case *SayStmt:
@@ -284,10 +355,19 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkExpr(st.Expression); err != nil {
 			return err
 		}
-		if v.inTestBlock {
+		if v.inTestBlock || v.inErrorTestExpr {
 			return nil
 		}
-		return v.checkNotStandaloneCondition(st.Expression)
+		if err := v.checkNotStandaloneCondition(st.Expression); err != nil {
+			return err
+		}
+		if v.isEffectfulExprStmt(st.Expression) {
+			return nil
+		}
+		if v.inTrailingReplExpr {
+			return nil
+		}
+		return v.unusedExprStmtError(st.Expression)
 
 	case *LoopEndStmt:
 		if v.directInSwarm {
@@ -533,6 +613,8 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 			if err != nil {
 				return err
 			}
+		} else if v.stmtAlwaysExitsBlock(st.Body, inFunction) {
+			v.applyCondNarrowing(v.scope, st.Cond, false)
 		}
 		return nil
 	}
@@ -568,34 +650,117 @@ func (v *typeValidator) checkCheckGuardStmt(blockStmts []Stmt, idx int, st *Chec
 	}
 	v.popScope()
 
-	// Narrow post-check outer scope when early-exiting guards rule out non-record cases.
+	// Narrow post-check outer scope when early-exiting guards rule out cases.
 	if len(st.ElseBody) == 0 {
 		for _, r := range st.Rules {
-			if stmtAlwaysExits(r.Action, inFunction) {
+			if v.stmtAlwaysExitsStmt(r.Action, inFunction) {
 				v.applyCondNarrowing(v.scope, r.Cond, false)
 			}
 		}
 	}
 
-	hasFallback := inFunction && idx < len(blockStmts)-1 && allRulesReturnExpr(st.Rules)
-	return v.checkCheckExhaustiveness(st, hasFallback)
+	return nil
 }
 
-func stmtAlwaysExits(s Stmt, inFunction bool) bool {
+func (v *typeValidator) stmtAlwaysExitsStmt(s Stmt, inFunction bool) bool {
 	if s == nil {
 		return false
 	}
-	_, ok := s.(*ReturnStmt)
-	return ok && inFunction
-}
-
-func allRulesReturnExpr(rules []CheckRule) bool {
-	if len(rules) == 0 {
+	switch s.(type) {
+	case *ReturnStmt:
+		return inFunction
+	case *LoopEndStmt:
+		return v.loopDepth > 0
+	default:
 		return false
 	}
-	for _, r := range rules {
-		if _, isRet := r.Action.(*ReturnStmt); !isRet {
+}
+
+func (v *typeValidator) stmtAlwaysExitsBlock(stmts []Stmt, inFunction bool) bool {
+	if inFunction && v.stmtAlwaysReturnsExpr(stmts) {
+		return true
+	}
+	if v.loopDepth > 0 {
+		for _, s := range stmts {
+			if _, isEnd := s.(*LoopEndStmt); isEnd {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (v *typeValidator) subtractRemainingVariants(next *varTypeState, removed []resolvedUnionVariant) bool {
+	if len(removed) == 0 {
+		return false
+	}
+	if !next.hasRemainingTracking {
+		var base []resolvedUnionVariant
+		if next.unionName != "" {
+			base = v.resolvedUnions[next.unionName]
+		} else if len(next.inlineUnionVariants) > 0 {
+			base = next.inlineUnionVariants
+		}
+		if len(base) == 0 {
 			return false
+		}
+		next.remainingVariants = append([]resolvedUnionVariant(nil), base...)
+		next.hasRemainingTracking = true
+	}
+
+	coveredKeys := make(map[string]bool, len(removed))
+	coveredText := false
+	coveredNumber := false
+	for _, rv := range removed {
+		coveredKeys[rv.key()] = true
+		if rv.kind == variantBaseType {
+			if rv.baseType == "text" {
+				coveredText = true
+			} else if rv.baseType == "number" {
+				coveredNumber = true
+			}
+		}
+	}
+
+	var kept []resolvedUnionVariant
+	for _, vr := range next.remainingVariants {
+		if coveredKeys[vr.key()] {
+			continue
+		}
+		if vr.kind == variantStringLit && coveredText {
+			continue
+		}
+		if vr.kind == variantNumberLit && coveredNumber {
+			continue
+		}
+		kept = append(kept, vr)
+	}
+	next.remainingVariants = kept
+
+	// Rest-narrowing when remaining variants uniquely determine a record or base scalar type.
+	if len(kept) == 1 && kept[0].kind == variantRecord {
+		next.exactRecord = kept[0].recordName
+		next.exactNonRecord = false
+		next.exactBaseType = ""
+	} else if len(kept) > 0 {
+		allText := true
+		allNumber := true
+		for _, vr := range kept {
+			if !((vr.kind == variantBaseType && vr.baseType == "text") || vr.kind == variantStringLit) {
+				allText = false
+			}
+			if !((vr.kind == variantBaseType && vr.baseType == "number") || vr.kind == variantNumberLit) {
+				allNumber = false
+			}
+		}
+		if allText {
+			next.exactRecord = ""
+			next.exactNonRecord = true
+			next.exactBaseType = "text"
+		} else if allNumber {
+			next.exactRecord = ""
+			next.exactNonRecord = true
+			next.exactBaseType = "number"
 		}
 	}
 	return true
@@ -633,6 +798,7 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 			}
 			cur, _ := v.lookupVar(id.Name)
 			next := cur.clone()
+			updated := false
 
 			switch rhs := c.Right.(type) {
 			case *IdentExpr:
@@ -649,7 +815,7 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 						}
 						next.excludedRecords[rhs.Name] = true
 					}
-					scope.vars[id.Name] = next
+					updated = true
 				} else if uVars, isU := v.resolvedUnions[rhs.Name]; isU {
 					if effective {
 						next.unionName = rhs.Name
@@ -664,7 +830,7 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 							next.exactRecord = ""
 							next.exactNonRecord = true
 						}
-						scope.vars[id.Name] = next
+						updated = true
 					}
 				}
 			case *FieldExpr:
@@ -684,7 +850,7 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 								}
 								next.excludedRecords[qual] = true
 							}
-							scope.vars[id.Name] = next
+							updated = true
 						} else if uVars, isU := v.resolvedUnions[qual]; isU {
 							if effective {
 								next.unionName = qual
@@ -699,7 +865,7 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 									next.exactRecord = ""
 									next.exactNonRecord = true
 								}
-								scope.vars[id.Name] = next
+								updated = true
 							}
 						}
 					}
@@ -708,8 +874,19 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 				if effective {
 					next.exactRecord = ""
 					next.exactNonRecord = true
-					scope.vars[id.Name] = next
+					updated = true
 				}
+			}
+
+			if !effective {
+				if removed, ok := v.exprToPatternVariants(c.Right); ok {
+					if v.subtractRemainingVariants(&next, removed) {
+						updated = true
+					}
+				}
+			}
+			if updated {
+				scope.vars[id.Name] = next
 			}
 		}
 	case *TypeCheckExpr:
@@ -731,7 +908,240 @@ func (v *typeValidator) applyCondNarrowing(scope *typeScope, cond Expr, truthy b
 					next.exactBaseType = ""
 				}
 				scope.vars[id.Name] = next
+			} else if !effective && (c.TypeName == "text" || c.TypeName == "number") {
+				if v.subtractRemainingVariants(&next, []resolvedUnionVariant{{kind: variantBaseType, baseType: c.TypeName}}) {
+					scope.vars[id.Name] = next
+				}
 			}
 		}
 	}
+}
+
+func (v *typeValidator) isEffectfulExprStmt(e Expr) bool {
+	if sl, ok := e.(*SwarmLoopExpr); ok {
+		return !stmtsHaveReturn(sl.Body)
+	}
+	_, isVoid := v.voidBuiltinCallName(e)
+	return isVoid
+}
+
+func (v *typeValidator) unusedExprStmtError(e Expr) error {
+	line, col := e.Pos()
+	if ce, ok := e.(*CallExpr); ok {
+		callee := ce.Callee
+		if ce.Module != "" {
+			callee = ce.Module + ":" + ce.Callee
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Return value of '%s' is unused", callee),
+			fmt.Sprintf("Assign the result to a variable (e.g. 'res = %s ...') or return it with '->'.", callee),
+		)
+	}
+	return newError(
+		"TypeError",
+		line,
+		col,
+		v.source,
+		"Unused value expression has no effect",
+		"Use '-> <expr>' to return this value, or assign it to a variable with 'name = <expr>'.",
+	)
+}
+
+func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
+	paramSet := make(map[string]bool, len(params))
+	for _, p := range params {
+		paramSet[p] = true
+	}
+	reads := make(map[string]bool)
+	var collectReadsExpr func(e Expr)
+	var collectReadsStmts func(list []Stmt)
+
+	collectReadsExpr = func(e Expr) {
+		if e == nil {
+			return
+		}
+		switch ex := e.(type) {
+		case *IdentExpr:
+			reads[ex.Name] = true
+		case *InterpStringExpr:
+			for _, part := range ex.Parts {
+				if part.IsExpr {
+					collectReadsExpr(part.Expr)
+				}
+			}
+		case *FieldExpr:
+			collectReadsExpr(ex.Target)
+		case *IndexExpr:
+			collectReadsExpr(ex.Target)
+			collectReadsExpr(ex.Index)
+		case *UnaryExpr:
+			collectReadsExpr(ex.Right)
+		case *BinaryExpr:
+			collectReadsExpr(ex.Left)
+			collectReadsExpr(ex.Right)
+		case *TypeCheckExpr:
+			collectReadsExpr(ex.Target)
+		case *CastExpr:
+			collectReadsExpr(ex.Target)
+			collectReadsExpr(ex.Fallback)
+		case *CallExpr:
+			for _, arg := range ex.Args {
+				collectReadsExpr(arg)
+			}
+		case *ListExpr:
+			for _, el := range ex.Elements {
+				collectReadsExpr(el)
+			}
+		case *TypedListExpr:
+			for _, row := range ex.Rows {
+				for _, u := range row {
+					collectReadsExpr(u.Value)
+				}
+			}
+		case *WithExpr:
+			collectReadsExpr(ex.Base)
+			for _, u := range ex.Updates {
+				collectReadsExpr(u.Value)
+			}
+			for _, iu := range ex.IndexUpdates {
+				collectReadsExpr(iu.Index)
+				collectReadsExpr(iu.Value)
+			}
+		case *WhereExpr:
+			collectReadsExpr(ex.Target)
+			for _, c := range ex.Conditions {
+				collectReadsExpr(c)
+			}
+		case *MatchExpr:
+			collectReadsExpr(ex.Target)
+			for _, arm := range ex.Arms {
+				collectReadsExpr(arm.Value)
+			}
+			collectReadsStmts(ex.ElseBody)
+			collectReadsExpr(ex.ElseValue)
+		case *SwarmLoopExpr:
+			collectReadsExpr(ex.Iterable)
+			collectReadsStmts(ex.Body)
+		}
+	}
+
+	collectReadsStmts = func(list []Stmt) {
+		for _, s := range list {
+			switch st := s.(type) {
+			case *AssignStmt:
+				collectReadsExpr(st.Value)
+			case *ConstDeclStmt:
+				collectReadsExpr(st.Value)
+			case *SayStmt:
+				collectReadsExpr(st.Value)
+			case *ExprStmt:
+				collectReadsExpr(st.Expression)
+			case *ReturnStmt:
+				collectReadsExpr(st.Value)
+			case *SpawnStmt:
+				if st.Call != nil {
+					collectReadsExpr(st.Call)
+				}
+			case *LoopStmt:
+				collectReadsExpr(st.Iterable)
+				collectReadsStmts(st.Body)
+			case *TakeStmt:
+				collectReadsExpr(st.Inbox)
+				collectReadsStmts(st.Body)
+			case *CheckGuardStmt:
+				collectReadsExpr(st.Cond)
+				collectReadsStmts(st.Body)
+				for _, r := range st.Rules {
+					collectReadsExpr(r.Cond)
+					if r.Action != nil {
+						collectReadsStmts([]Stmt{r.Action})
+					}
+				}
+				collectReadsStmts(st.ElseBody)
+			case *MatchStmt:
+				collectReadsExpr(st.Target)
+				for _, arm := range st.Arms {
+					if arm.Action != nil {
+						collectReadsStmts([]Stmt{arm.Action})
+					}
+					collectReadsStmts(arm.Body)
+				}
+				collectReadsStmts(st.ElseBody)
+			}
+		}
+	}
+
+	collectReadsStmts(stmts)
+
+	var checkDecls func(list []Stmt) error
+	checkDecls = func(list []Stmt) error {
+		for _, s := range list {
+			switch st := s.(type) {
+			case *AssignStmt:
+				if !paramSet[st.Name] && !reads[st.Name] {
+					return newError(
+						"TypeError",
+						st.Line,
+						st.Col,
+						v.source,
+						fmt.Sprintf("Local variable %q is assigned but never used", st.Name),
+						fmt.Sprintf("Use '%s' in a subsequent expression, return it with '-> %s', or remove the unused assignment.", st.Name, st.Name),
+					)
+				}
+			case *ConstDeclStmt:
+				if !paramSet[st.Name] && !reads[st.Name] {
+					return newError(
+						"TypeError",
+						st.Line,
+						st.Col,
+						v.source,
+						fmt.Sprintf("Local variable %q is assigned but never used", st.Name),
+						fmt.Sprintf("Use '%s' in a subsequent expression, return it with '-> %s', or remove the unused assignment.", st.Name, st.Name),
+					)
+				}
+			case *LoopStmt:
+				if err := checkDecls(st.Body); err != nil {
+					return err
+				}
+			case *TakeStmt:
+				if err := checkDecls(st.Body); err != nil {
+					return err
+				}
+			case *CheckGuardStmt:
+				if err := checkDecls(st.Body); err != nil {
+					return err
+				}
+				for _, r := range st.Rules {
+					if r.Action != nil {
+						if err := checkDecls([]Stmt{r.Action}); err != nil {
+							return err
+						}
+					}
+				}
+				if err := checkDecls(st.ElseBody); err != nil {
+					return err
+				}
+			case *MatchStmt:
+				for _, arm := range st.Arms {
+					if arm.Action != nil {
+						if err := checkDecls([]Stmt{arm.Action}); err != nil {
+							return err
+						}
+					}
+					if err := checkDecls(arm.Body); err != nil {
+						return err
+					}
+				}
+				if err := checkDecls(st.ElseBody); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return checkDecls(stmts)
 }

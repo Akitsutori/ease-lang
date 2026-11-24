@@ -45,7 +45,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │   ├── lsp.go                   # Language Server Protocol (`ease lsp`) diagnostics, outline, completion & cache
 │   ├── lsp_nav.go               # LSP Go-to-Definition, Hover & Find References (local & cross-file)
 │   ├── cast.go                  # Strict `as` casting, `or` fallback coercion, JSON/CSV formatting & parsing
-│   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--check` simulation)
+│   ├── screen.go                # Ebitengine main-thread renderer (60/"unlimited" TPS, shapes, `screen.event` inbox, `--ci` simulation)
 │   ├── stdlib.go                # Embedded `std/*.ease` loader (`//go:embed`) and `EASE_STD` disk override
 │   ├── bundle.go                # Standalone executable packer (`EASE_BUNDLE_V1`)
 │   ├── wasm_enc.go              # Pure-Go WebAssembly 1.0 binary encoder (sections, LEB128, opcodes)
@@ -77,7 +77,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 │       ├── random.ease          # `random` stdlib module (`roll`, `pick`, `shuffle`)
 │       ├── screen.ease          # `screen` stdlib module (`fps_mode`, `event`, 2D shapes, `open` & `present`)
 │       ├── synth.ease           # `synth` stdlib module (`wave_kind`, `melody`, `play`)
-│       └── system.ease          # `system` stdlib module (`arguments`, `ok`, `exit`)
+│       └── system.ease          # `system` stdlib module (`arguments`, `ok`, `exit`, `command`, `process_report`, `run`)
 ├── examples/                    # Runnable examples (00–11, fibonacci, showcase) and reference specs
 ├── tests/                       # Language feature test files (01–16) executed via `ease test`
 └── .github/workflows/ci.yml     # Cross-platform CI pipeline (Ubuntu Linux with -race, and Windows)
@@ -91,7 +91,7 @@ The entire Ease toolchain lives in a single, self-contained Go module:
 | **Parser & Diagnostics** | `internal/ease/parser*.go`, `errors.go` | Improve beginner-friendly error messages, source spans, and actionable recovery hints |
 | **Typechecker** | `internal/ease/typecheck*.go` | Extend static validation, union narrowing, format contracts, and concurrency checks |
 | **Evaluator & Built-ins** | `internal/ease/eval*.go`, `builtins.go` | Add well-tested built-in verbs, tighten edge-case handling, and keep runtime limits safe |
-| **Graphics & Input (`screen`)** | `internal/ease/screen.go`, `std/screen.ease` | Extend drawing primitives or input events while preserving deterministic `--check` headless behavior |
+| **Graphics & Input (`screen`)** | `internal/ease/screen.go`, `std/screen.ease` | Extend drawing primitives or input events while preserving deterministic `--ci` headless behavior |
 | **Examples & Feature Tests** | `examples/*.ease`, `tests/*.ease`, `internal/ease/ease*_test.go` | Expand regression coverage, edge-case specs, and clear real-world examples |
 | **Docs & Developer Tooling** | `README.md`, `CONTRIBUTING.md`, `.github/workflows/` | Keep the BNF grammar and docs aligned with the parser, improve CI, or add editor syntax support |
 
@@ -118,9 +118,9 @@ go test -race -v ./...
 go build -o ease ./cmd/ease
 
 for f in tests/*.ease; do ./ease test "$f"; done
-./ease run examples/06_window.ease --check
-./ease run examples/07_http_server.ease --check
-./ease run examples/08_haunted_hotel.ease --check
+./ease run examples/06_window.ease --ci
+./ease run examples/07_http_server.ease --ci
+./ease run examples/08_haunted_hotel.ease --ci
 ./ease test examples/08_haunted_hotel.ease
 ```
 
@@ -132,9 +132,9 @@ go test -v ./...
 go build -o ease.exe .\cmd\ease
 
 Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
-.\ease.exe run examples\06_window.ease --check
-.\ease.exe run examples\07_http_server.ease --check
-.\ease.exe run examples\08_haunted_hotel.ease --check
+.\ease.exe run examples\06_window.ease --ci
+.\ease.exe run examples\07_http_server.ease --ci
+.\ease.exe run examples\08_haunted_hotel.ease --ci
 .\ease.exe test examples\08_haunted_hotel.ease
 ```
 
@@ -143,7 +143,7 @@ Get-ChildItem tests\*.ease | ForEach-Object { .\ease.exe test $_.FullName }
 **CLI Reference:**
 
 ```text
-ease run <file.ease> [--json] [--check] [--trace]    Run an Ease program (optionally running tests first, tracing, or emitting JSON)
+ease run <file.ease> [--json] [--ci] [--trace]       Run an Ease program (optionally running tests/headless CI, tracing, or emitting JSON)
 ease serve <file.ease> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]
                                                      Run a persistent service with crash-isolated workers, live hot-reload & opt-in loopback debug port
 ease check <file.ease> [--json]                      Parse and type-check without executing

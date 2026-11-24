@@ -33,3 +33,17 @@ test "system:exit rejects invalid exit codes, empty messages, and wrong types"
     system:exit "   " is error
     system:exit (list 1, 2) is error
 end
+
+test "system.command defaults and system:run error validation"
+    cmd = system.command with program = "demo"
+    cmd.timeout is 30
+    cmd.max_mb is 10
+    count cmd.args is 0
+    cmd.dir is ""
+
+    system:run system.command is error
+    system:run (system.command with program = "") is error
+    system:run (system.command with program = "demo", timeout = 0) is error
+    system:run (system.command with program = "demo", max_mb = 0) is error
+    system:run (system.command with program = "definitely_missing_binary_ease_999") is error
+end

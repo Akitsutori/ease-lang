@@ -45,7 +45,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 							"Check available standard modules under std/, e.g. 'import network'.",
 						)
 					}
-					modProg, modErr := parseProgramWithContext(modSrc, "", map[string]bool{}, activeStack, nil, true)
+					modProg, modErr := parseProgramWithContext(modSrc, "", map[string]bool{}, activeStack, nil, true, false)
 					if modErr != nil {
 						return nil, modErr
 					}
@@ -92,7 +92,7 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 					}
 					modSrc := string(rawBytes)
 					nextStack := append(slices.Clone(activeStack), absPath)
-					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil, false)
+					modProg, modErr := parseProgramWithContext(modSrc, absPath, map[string]bool{}, nextStack, nil, false, false)
 					if modErr != nil {
 						return nil, modErr
 					}

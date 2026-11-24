@@ -1,18 +1,14 @@
 import screen
 
 to move_x x key
-    check
-        key is "right" -> x + 6
-        key is "left"  -> x - 6
-    end
+    check key is "right" -> x + 6
+    check key is "left"  -> x - 6
     -> x
 end
 
 to clamp_x x min_x max_x
-    check
-        x < min_x -> min_x
-        x > max_x -> max_x
-    end
+    check x < min_x -> min_x
+    check x > max_x -> max_x
     -> x
 end
 
