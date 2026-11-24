@@ -2515,3 +2515,64 @@ say "{lbl2.content}:{labels2.1.content}:{cfg.port}"
 		})
 	}
 }
+
+func TestUnclosedCheckInsideFunctionDiagnosticHint(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name: "bare check absorbs to end before test block",
+			src:  "to f x\n  check x > 0\n  -> x\nend\n\ntest \"t\"\n  f 1 is 1\nend\n",
+			wantSubs: []string{
+				"SyntaxError",
+				"Nested 'test' blocks are not allowed",
+				"Function 'to f' (started at line 1) is still open",
+				"'check' at line 2",
+			},
+		},
+		{
+			name: "unclosed check directly enclosing nested test",
+			src:  "to f x\n  check x > 0\n  test \"t\"\n    f 1 is 1\n  end\nend\n",
+			wantSubs: []string{
+				"SyntaxError",
+				"Unclosed 'check' block started at line 2",
+				"add '-> <value | end>' on line 2",
+			},
+		},
+		{
+			name: "bare check absorbs to end before EOF",
+			src:  "to f x\n  check x > 0\n  -> x\nend\n",
+			wantSubs: []string{
+				"SyntaxError",
+				"Function 'to f' is missing a closing 'end'",
+				"'check' at line 2",
+			},
+		},
+		{
+			name: "unclosed loop directly enclosing nested to",
+			src:  "to f x\n  loop range 1 3\n    say it\n  to g y -> y\nend\n",
+			wantSubs: []string{
+				"SyntaxError",
+				"Nested 'to' function definitions are not allowed",
+				"Unclosed 'loop' block started at line 2",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected SyntaxError, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}

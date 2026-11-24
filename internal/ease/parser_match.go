@@ -365,6 +365,8 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 		)
 	}
 	p.skipNewlines()
+	p.pushBlock("match", "", matchTok.Line)
+	defer p.popBlock()
 
 	var arms []MatchArmStmt
 	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
@@ -375,7 +377,7 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 				matchTok.Col,
 				p.source,
 				"'match' block is missing 'end'",
-				"Close every 'match' block with 'end'.",
+				p.eofBlockHint("Close every 'match' block with 'end'."),
 			)
 		}
 		armTok := p.current()
@@ -537,6 +539,8 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 		)
 	}
 	p.skipNewlines()
+	p.pushBlock("match", "", matchTok.Line)
+	defer p.popBlock()
 
 	var arms []MatchArmExpr
 	for !p.check(TOK_END) && !p.check(TOK_ELSE) {

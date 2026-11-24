@@ -361,6 +361,8 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 		)
 	}
 	p.skipNewlines()
+	p.pushBlock("to", nameTok.Lexeme, toTok.Line)
+	defer p.popBlock()
 
 	var body []Stmt
 	for !p.check(TOK_END) {
@@ -371,7 +373,7 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 				toTok.Col,
 				p.source,
 				fmt.Sprintf("Function 'to %s' is missing a closing 'end'", nameTok.Lexeme),
-				"Every 'to ...' block must end with 'end' on its own line.",
+				p.eofBlockHint("Every 'to ...' block must end with 'end' on its own line."),
 			)
 		}
 		stmt, err := p.parseStmt()
@@ -590,6 +592,8 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 	prevInTest := p.inTestBlock
 	p.inTestBlock = true
 	defer func() { p.inTestBlock = prevInTest }()
+	p.pushBlock("test", title, tTok.Line)
+	defer p.popBlock()
 
 	var body []Stmt
 	for !p.check(TOK_END) {
@@ -600,7 +604,7 @@ func (p *Parser) parseTopTestBlock() (*CheckBlock, error) {
 				tTok.Col,
 				p.source,
 				"'test' block is missing 'end'",
-				"Close every 'test' block with 'end'.",
+				p.eofBlockHint("Close every 'test' block with 'end'."),
 			)
 		}
 		item, err := p.parseTestItem()

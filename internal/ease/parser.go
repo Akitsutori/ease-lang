@@ -8,6 +8,13 @@ import (
 
 const maxParseDepth = 256
 
+type openBlock struct {
+	kind          string
+	name          string
+	line          int
+	lastCheckLine int
+}
+
 // Parser converts Ease tokens into an AST Program using recursive descent.
 type Parser struct {
 	tokens             []Token
@@ -21,11 +28,67 @@ type Parser struct {
 	disallowWhere      bool
 	inCallArg          bool
 	inTestBlock        bool
+	blockStack         []openBlock
 	funcArities        map[string]int
 	moduleArities      map[string]map[string]int
 	stdModuleOrigNames map[string]string
 	fileImports        map[string]*Program
 	fileImportSrcs     map[string]string
+}
+
+func (p *Parser) pushBlock(kind, name string, line int) {
+	p.blockStack = append(p.blockStack, openBlock{kind: kind, name: name, line: line})
+}
+
+func (p *Parser) popBlock() {
+	if len(p.blockStack) > 0 {
+		p.blockStack = p.blockStack[:len(p.blockStack)-1]
+	}
+}
+
+func (p *Parser) recordEnclosingCheck(line int) {
+	for i := len(p.blockStack) - 1; i >= 0; i-- {
+		if p.blockStack[i].kind == "to" || p.blockStack[i].kind == "test" {
+			p.blockStack[i].lastCheckLine = line
+			return
+		}
+	}
+}
+
+func (p *Parser) unclosedBlockHint(startingTok, fallback string) string {
+	if len(p.blockStack) == 0 {
+		return fallback
+	}
+	top := p.blockStack[len(p.blockStack)-1]
+	if top.kind == "check" {
+		return fmt.Sprintf("Unclosed 'check' block started at line %d — add '-> <value | end>' on line %d for a single-line guard, or close the 'check' block with its own 'end'.", top.line, top.line)
+	}
+	if top.kind == "to" && top.lastCheckLine > 0 {
+		return fmt.Sprintf("Function 'to %s' (started at line %d) is still open — check whether 'check' at line %d is missing '-> <value>' or an extra 'end'.", top.name, top.line, top.lastCheckLine)
+	}
+	label := top.kind
+	if top.kind == "to" && top.name != "" {
+		label = "to " + top.name
+	}
+	return fmt.Sprintf("Unclosed '%s' block started at line %d; close it with 'end' before starting '%s'.", label, top.line, startingTok)
+}
+
+func (p *Parser) eofBlockHint(fallback string) string {
+	if len(p.blockStack) == 0 {
+		return fallback
+	}
+	top := p.blockStack[len(p.blockStack)-1]
+	if top.kind == "check" {
+		return fmt.Sprintf("Unclosed 'check' block started at line %d — add '-> <value | end>' on line %d for a single-line guard, or close the 'check' block with 'end'.", top.line, top.line)
+	}
+	if top.kind == "to" && top.lastCheckLine > 0 {
+		return fmt.Sprintf("Function 'to %s' (started at line %d) is still open — check whether 'check' at line %d is missing '-> <value>' or an extra 'end'.", top.name, top.line, top.lastCheckLine)
+	}
+	label := top.kind
+	if top.kind == "to" && top.name != "" {
+		label = "to " + top.name
+	}
+	return fmt.Sprintf("Unclosed '%s' block started at line %d. %s", label, top.line, fallback)
 }
 
 func (p *Parser) enterDepth() error {
@@ -242,7 +305,7 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			tok.Col,
 			p.source,
 			"Unexpected 'else' outside a multi-line 'check' or 'match' block",
-			"Single-line 'check <cond> -> <val>' cannot be followed by 'else'. Put 'check' on its own line for a verdict table, or omit '->' for a 'check <cond> ... else ... end' block.",
+			"Single-line 'check <cond> -> <val>' cannot be followed by 'else'. Omit '->' for a 'check <cond> ... else ... end' block.",
 		)
 	case TOK_TO:
 		return nil, newError(
@@ -251,7 +314,7 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			tok.Col,
 			p.source,
 			"Nested 'to' function definitions are not allowed inside blocks",
-			"Define functions with 'to ... end' at the top level of the file.",
+			p.unclosedBlockHint("to", "Define functions with 'to ... end' at the top level of the file."),
 		)
 	case TOK_DEF:
 		return nil, newError(
@@ -260,7 +323,7 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			tok.Col,
 			p.source,
 			"Nested 'def' record definitions are not allowed inside blocks",
-			"Define records with 'def ... end' at the top level of the file.",
+			p.unclosedBlockHint("def", "Define records with 'def ... end' at the top level of the file."),
 		)
 	case TOK_TEST:
 		return nil, newError(
@@ -269,7 +332,7 @@ func (p *Parser) parseStmt() (Stmt, error) {
 			tok.Col,
 			p.source,
 			"Nested 'test' blocks are not allowed inside functions or statements",
-			"Close the enclosing block with 'end' before starting a 'test ... end' block.",
+			p.unclosedBlockHint("test", "Close the enclosing block with 'end' before starting a 'test ... end' block."),
 		)
 	default:
 		if tok.Type == TOK_IDENT && p.peekNext().Type != TOK_ASSIGN {
@@ -401,6 +464,8 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 	}
 
 	p.skipNewlines()
+	p.pushBlock("loop", "", loopTok.Line)
+	defer p.popBlock()
 
 	var body []Stmt
 	for !p.check(TOK_END) {
@@ -411,7 +476,7 @@ func (p *Parser) parseLoopStmt() (Stmt, error) {
 				loopTok.Col,
 				p.source,
 				"'loop' is missing 'end'",
-				"Close every 'loop' block with 'end'.",
+				p.eofBlockHint("Close every 'loop' block with 'end'."),
 			)
 		}
 		var s Stmt
@@ -550,6 +615,9 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 		p.inTestBlock = prevInTestBlock
 	}()
 
+	p.pushBlock("swarm loop", "", swarmTok.Line)
+	defer p.popBlock()
+
 	var body []Stmt
 	for !p.check(TOK_END) {
 		if p.check(TOK_EOF) {
@@ -559,7 +627,7 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 				swarmTok.Col,
 				p.source,
 				"'swarm loop' is missing 'end'",
-				"Close every 'swarm loop' block with 'end'.",
+				p.eofBlockHint("Close every 'swarm loop' block with 'end'."),
 			)
 		}
 		s, err := p.parseStmt()
@@ -653,6 +721,8 @@ func (p *Parser) parseTakeStmt() (Stmt, error) {
 	prevInTestBlock := p.inTestBlock
 	p.inTestBlock = false
 	defer func() { p.inTestBlock = prevInTestBlock }()
+	p.pushBlock("take", "", takeTok.Line)
+	defer p.popBlock()
 
 	var body []Stmt
 	for !p.check(TOK_END) {
@@ -663,7 +733,7 @@ func (p *Parser) parseTakeStmt() (Stmt, error) {
 				takeTok.Col,
 				p.source,
 				"'take' block is missing 'end'",
-				"Close every 'take' block with 'end'.",
+				p.eofBlockHint("Close every 'take' block with 'end'."),
 			)
 		}
 		s, err := p.parseStmt()
@@ -733,6 +803,9 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 		return nil, err
 	}
 	p.skipNewlines()
+	p.recordEnclosingCheck(chkTok.Line)
+	p.pushBlock("check", "", chkTok.Line)
+	defer p.popBlock()
 	var body []Stmt
 	for !p.check(TOK_END) && !p.check(TOK_ELSE) {
 		if p.check(TOK_EOF) {
@@ -742,7 +815,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 				chkTok.Col,
 				p.source,
 				"'check' block is missing 'end'",
-				"Close every 'check' block with 'end'.",
+				p.eofBlockHint("Close every 'check' block with 'end'."),
 			)
 		}
 		var s Stmt
