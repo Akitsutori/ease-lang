@@ -312,7 +312,9 @@ func validateProgramTypesWithOptions(prog *Program, source string, allowInternal
 			st.isParam = true
 			fnScope.vars[p] = st
 		}
+		v.isFuncBodyTop = true
 		err := v.checkStmts(fn.Body, true)
+		v.isFuncBodyTop = false
 		if err != nil {
 			v.popScope()
 			return err
@@ -858,6 +860,20 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 					unionName:           v.fieldNamedUnion(targetSt.exactRecord, ex.Field),
 					inlineUnionLabel:    label,
 					inlineUnionVariants: variants,
+				}
+			}
+			if d := v.defs[targetSt.exactRecord]; d != nil {
+				for _, f := range d.Fields {
+					if f.Name == ex.Field && len(f.Allowed) == 0 && f.Default != nil {
+						st := v.inferExprTypeState(f.Default)
+						if dot := strings.IndexByte(targetSt.exactRecord, '.'); dot >= 0 {
+							alias := targetSt.exactRecord[:dot]
+							if mod, ok := v.modules[alias]; ok {
+								st = prefixVarTypeState(st, alias, mod.defs, mod.unions)
+							}
+						}
+						return st
+					}
 				}
 			}
 		}
@@ -1485,84 +1501,14 @@ func (v *typeValidator) checkExpr(e Expr) error {
 				return nil
 			}
 			if st, tracked := v.lookupVar(id.Name); tracked {
-				if st.exactRecord != "" {
-					if defDecl, ok := v.defs[st.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
-						fieldNames := make([]string, len(defDecl.Fields))
-						for i, f := range defDecl.Fields {
-							fieldNames[i] = f.Name
-						}
-						fieldHint := fmt.Sprintf("Available fields on %s: %s.", st.exactRecord, defFieldNames(defDecl))
-						if suggestion := closestTypeName(ex.Field, fieldNames); suggestion != "" {
-							fieldHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fieldHint)
-						}
-						return newError(
-							"TypeError",
-							ex.Line,
-							ex.Col,
-							v.source,
-							fmt.Sprintf("%s has no field %q", st.exactRecord, ex.Field),
-							fieldHint,
-						)
-					}
-					return nil
-				}
-				if st.exactNonRecord {
-					return newError(
-						"TypeError",
-						ex.Line,
-						ex.Col,
-						v.source,
-						fmt.Sprintf("Cannot read field '.%s' on non-record variable %q", ex.Field, id.Name),
-						fmt.Sprintf("Narrow %q with '%s is <Record>' before accessing '.%s'.", id.Name, id.Name, ex.Field),
-					)
-				}
-				if st.unionName != "" {
-					recOpts := v.unionRecordNames(st.unionName)
-					hint := fmt.Sprintf("Union %q has no record variants.", st.unionName)
-					if len(recOpts) > 0 {
-						hint = fmt.Sprintf("Narrow %q first (e.g. 'check %s is %s -> ...').", id.Name, id.Name, recOpts[0])
-					}
-					return newError(
-						"TypeError",
-						ex.Line,
-						ex.Col,
-						v.source,
-						fmt.Sprintf("Cannot read field '.%s' on union variable %q (%s) before narrowing", ex.Field, id.Name, st.unionName),
-						hint,
-					)
-				}
-				if len(st.excludedRecords) > 0 {
-					return newError(
-						"TypeError",
-						ex.Line,
-						ex.Col,
-						v.source,
-						fmt.Sprintf("Cannot read field '.%s' on un-narrowed variable %q", ex.Field, id.Name),
-						fmt.Sprintf("Narrow %q with '%s is <Record>' before accessing '.%s'.", id.Name, id.Name, ex.Field),
-					)
+				if err := v.checkFieldAccessOnState(st, id.Name, ex); err != nil {
+					return err
 				}
 			}
 		} else {
 			targetSt := v.inferExprTypeState(ex.Target)
-			if targetSt.exactRecord != "" {
-				if defDecl, ok := v.defs[targetSt.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
-					fieldNames := make([]string, len(defDecl.Fields))
-					for i, f := range defDecl.Fields {
-						fieldNames[i] = f.Name
-					}
-					fieldHint := fmt.Sprintf("Available fields on %s: %s.", targetSt.exactRecord, defFieldNames(defDecl))
-					if suggestion := closestTypeName(ex.Field, fieldNames); suggestion != "" {
-						fieldHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fieldHint)
-					}
-					return newError(
-						"TypeError",
-						ex.Line,
-						ex.Col,
-						v.source,
-						fmt.Sprintf("%s has no field %q", targetSt.exactRecord, ex.Field),
-						fieldHint,
-					)
-				}
+			if err := v.checkFieldAccessOnState(targetSt, "", ex); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2567,6 +2513,101 @@ func (v *typeValidator) checkNotStandaloneCondition(e Expr) error {
 
 func (v *typeValidator) staticConcreteType(st varTypeState) string {
 	return v.staticTypeKind(st, false)
+}
+
+func (v *typeValidator) checkFieldAccessOnState(st varTypeState, varName string, ex *FieldExpr) error {
+	if st.listElemType != "" {
+		if ex.Field == "index" && v.loopDepth > 0 {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"Cannot access field '.index' on a list",
+				"Lists have no '.index' field; use 'it.index' for the 1-based loop position or 'count <list>' for length.",
+			)
+		}
+		if idxSt, ok := v.lookupVar(ex.Field); ok && (idxSt.exactBaseType == "number" || (idxSt.isParam && idxSt.exactBaseType == "" && idxSt.exactRecord == "" && idxSt.listElemType == "" && idxSt.unionName == "")) {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("Cannot access field '.%s' on a list", ex.Field),
+				fmt.Sprintf("To index a list by variable %q, use 1-based dynamic indexing: '.(%s)' (e.g. 'xs.(%s)').", ex.Field, ex.Field, ex.Field),
+			)
+		}
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("Cannot access field '.%s' on a list", ex.Field),
+			"Lists only support 1-based positional indexing ('.1' or '.(expr)').",
+		)
+	}
+	if st.exactRecord != "" {
+		if defDecl, ok := v.defs[st.exactRecord]; ok && !hasDefField(defDecl, ex.Field) {
+			fieldNames := make([]string, len(defDecl.Fields))
+			for i, f := range defDecl.Fields {
+				fieldNames[i] = f.Name
+			}
+			fieldHint := fmt.Sprintf("Available fields on %s: %s.", st.exactRecord, defFieldNames(defDecl))
+			if suggestion := closestTypeName(ex.Field, fieldNames); suggestion != "" {
+				fieldHint = fmt.Sprintf("Did you mean %q? %s", suggestion, fieldHint)
+			}
+			if ex.Field == "index" && v.loopDepth > 0 {
+				fieldHint = "Note: '.index' is only available directly on the loop variable 'it' ('it.index'), not on copied variables. " + fieldHint
+			}
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("%s has no field %q", st.exactRecord, ex.Field),
+				fieldHint,
+			)
+		}
+		return nil
+	}
+	if st.exactNonRecord {
+		msg := fmt.Sprintf("Cannot read field '.%s' on non-record value", ex.Field)
+		hint := fmt.Sprintf("Narrow the value with '<var> is <Record>' before accessing '.%s'.", ex.Field)
+		if varName != "" {
+			msg = fmt.Sprintf("Cannot read field '.%s' on non-record variable %q", ex.Field, varName)
+			hint = fmt.Sprintf("Narrow %q with '%s is <Record>' before accessing '.%s'.", varName, varName, ex.Field)
+		}
+		if ex.Field == "index" && v.loopDepth > 0 {
+			hint = "Note: '.index' is only available directly on the loop variable 'it' ('it.index'), not on copied variables. " + hint
+		}
+		return newError("TypeError", ex.Line, ex.Col, v.source, msg, hint)
+	}
+	if st.unionName != "" && varName != "" {
+		recOpts := v.unionRecordNames(st.unionName)
+		hint := fmt.Sprintf("Union %q has no record variants.", st.unionName)
+		if len(recOpts) > 0 {
+			hint = fmt.Sprintf("Narrow %q first (e.g. 'check %s is %s -> ...').", varName, varName, recOpts[0])
+		}
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("Cannot read field '.%s' on union variable %q (%s) before narrowing", ex.Field, varName, st.unionName),
+			hint,
+		)
+	}
+	if len(st.excludedRecords) > 0 && varName != "" {
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("Cannot read field '.%s' on un-narrowed variable %q", ex.Field, varName),
+			fmt.Sprintf("Narrow %q with '%s is <Record>' before accessing '.%s'.", varName, varName, ex.Field),
+		)
+	}
+	return nil
 }
 
 func (v *typeValidator) checkRecordWithUpdates(recName string, updates []WithFieldUpdate, fallbackLine, fallbackCol int) error {

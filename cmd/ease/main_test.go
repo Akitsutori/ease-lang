@@ -210,3 +210,44 @@ func TestReplParityAndTestBlocks(t *testing.T) {
 		t.Fatalf("expected cross-line static TypeError for contains xs 32, got errOut:\n%s", errStr)
 	}
 }
+
+func TestCLIRejectsEmptyAndCommentOnlyFiles(t *testing.T) {
+	bin := buildTestEaseBinary(t)
+	tmpDir := t.TempDir()
+
+	emptyPath := filepath.Join(tmpDir, "empty.ease")
+	if err := os.WriteFile(emptyPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write empty.ease: %v", err)
+	}
+	commentPath := filepath.Join(tmpDir, "comment_only.ease")
+	if err := os.WriteFile(commentPath, []byte("# comment only\n"), 0o644); err != nil {
+		t.Fatalf("write comment_only.ease: %v", err)
+	}
+
+	files := []struct {
+		name string
+		path string
+	}{
+		{"empty", emptyPath},
+		{"comment_only", commentPath},
+	}
+
+	for _, f := range files {
+		for _, sub := range [][]string{
+			{"check", f.path},
+			{"run", f.path},
+			{"run", f.path, "--json"},
+			{"test", f.path},
+		} {
+			cmd := exec.Command(bin, sub...)
+			out, err := cmd.CombinedOutput()
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok || exitErr.ExitCode() != 1 {
+				t.Fatalf("%s %v: expected exit code 1, got err=%v\n%s", f.name, sub, err, out)
+			}
+			if !strings.Contains(string(out), "File contains no Ease code") {
+				t.Fatalf("%s %v: expected 'File contains no Ease code', got:\n%s", f.name, sub, out)
+			}
+		}
+	}
+}

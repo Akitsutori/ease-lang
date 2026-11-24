@@ -10,6 +10,11 @@ type Program struct {
 	Body      []Stmt
 }
 
+// IsEmpty reports whether the program contains no imports, declarations, tests, or statements.
+func (p *Program) IsEmpty() bool {
+	return p == nil || (len(p.Imports) == 0 && len(p.Defs) == 0 && len(p.Unions) == 0 && len(p.Functions) == 0 && len(p.Checks) == 0 && len(p.Body) == 0)
+}
+
 type ImportDecl struct {
 	posInfo
 	Name         string

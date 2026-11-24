@@ -209,6 +209,9 @@ func (p *Parser) parsePostfix() (Expr, error) {
 	}
 
 	for {
+		if p.inSingleLineWith && p.check(TOK_DOT) && p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Type == TOK_ASSIGN {
+			break
+		}
 		if p.match(TOK_DOT) {
 			if fieldTok, ok := p.matchFieldIdent(); ok {
 				line, col := expr.Pos()
@@ -343,13 +346,20 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				}
 				p.advance() // consume `end`
 			} else {
+				prevSingleWith := p.inSingleLineWith
+				p.inSingleLineWith = true
 				for {
 					if err := appendWithEntry(); err != nil {
+						p.inSingleLineWith = prevSingleWith
 						return nil, err
 					}
 					if !p.match(TOK_COMMA) {
 						break
 					}
+				}
+				p.inSingleLineWith = prevSingleWith
+				if err := p.checkMissingWithComma(); err != nil {
+					return nil, err
 				}
 			}
 			expr = &WithExpr{posInfo: posInfo{Line: line, Col: col}, Base: expr, Updates: updates, IndexUpdates: indexUpdates}
@@ -623,6 +633,32 @@ func (p *Parser) parseWithEntry() (bool, WithFieldUpdate, WithIndexUpdate, error
 	return true, WithFieldUpdate{}, WithIndexUpdate{Line: dotTok.Line, Col: dotTok.Col, Index: idxExpr, Value: valExpr}, nil
 }
 
+func (p *Parser) checkMissingWithComma() error {
+	cur := p.current()
+	if isFieldIdentToken(cur.Type) && p.peekNext().Type == TOK_ASSIGN {
+		return newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			fmt.Sprintf("Missing ',' before '%s =' in single-line 'with'", cur.Lexeme),
+			"Separate multiple fields on one line with commas (e.g. 'with a = 1, b = 2'), or use a multi-line 'with\\n  ...\\nend' block.",
+		)
+	}
+	if cur.Type == TOK_DOT && p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Type == TOK_ASSIGN {
+		idxTok := p.tokens[p.pos+1]
+		return newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			fmt.Sprintf("Missing ',' before '.%s =' in single-line 'with'", idxTok.Lexeme),
+			"Separate multiple index updates on one line with commas (e.g. 'with .1 = 10, .2 = 20'), or use a multi-line 'with\\n  ...\\nend' block.",
+		)
+	}
+	return nil
+}
+
 func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {
 	fieldTok, ok := p.matchFieldIdent()
 	if !ok {
@@ -638,6 +674,16 @@ func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {
 	}
 	if !p.match(TOK_ASSIGN) {
 		tok := p.current()
+		if fieldTok.Lexeme == "append" {
+			return WithFieldUpdate{}, newError(
+				"SyntaxError",
+				fieldTok.Line,
+				fieldTok.Col,
+				p.source,
+				"'append' cannot be used after 'with'",
+				"Use 'xs = append xs <item>' to append to a list ('with' only updates record fields or 1-based indices like '.1 = val').",
+			)
+		}
 		return WithFieldUpdate{}, newError(
 			"SyntaxError",
 			tok.Line,
@@ -856,6 +902,16 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 				TypeCol:  typeCol,
 			}, nil
 		}
+		if typeName == "number" || typeName == "text" {
+			return nil, newError(
+				"TypeError",
+				typeLine,
+				typeCol,
+				p.source,
+				fmt.Sprintf("Built-in type %q cannot be used with 'list as ... with'", typeName),
+				"Only a 'def <name> ... end' record blueprint can be used with 'list as <name> with'. To create a populated list of numbers/text, use 'list 1, 2, 3' or 'list as number'.",
+			)
+		}
 		if !p.match(TOK_NEWLINE) {
 			tok := p.current()
 			return nil, newError(
@@ -890,6 +946,9 @@ func (p *Parser) parseTypedOrInlineList() (Expr, error) {
 				if !p.match(TOK_COMMA) {
 					break
 				}
+			}
+			if err := p.checkMissingWithComma(); err != nil {
+				return nil, err
 			}
 			if err := p.expectStmtEnd("list record row"); err != nil {
 				return nil, err

@@ -74,6 +74,18 @@ func newError(stage string, line, col int, source, msg, hint string) *EaseError 
 	}
 }
 
+// NewEmptyFileError returns a SyntaxError diagnostic for empty or comment-only Ease files.
+func NewEmptyFileError(source string) *EaseError {
+	return &EaseError{
+		Stage:   "SyntaxError",
+		Line:    1,
+		Col:     1,
+		Source:  source,
+		Message: "File contains no Ease code or declarations",
+		Hint:    "Add statements, functions, or definitions (or check whether you saved the file in your editor).",
+	}
+}
+
 // IsIncompleteBlockError reports whether a parse error indicates an unclosed multi-line block waiting for `end`.
 func IsIncompleteBlockError(err error) bool {
 	if err == nil {

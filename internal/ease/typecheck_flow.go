@@ -199,6 +199,8 @@ type typeValidator struct {
 	allowTrailingValueExpr bool
 	isTopLevelBody         bool
 	inTrailingReplExpr     bool
+	isFuncBodyTop          bool
+	inFinalFuncStmt        bool
 	spawnFuncCache         map[string]bool
 	activeCallSpecs        map[string]bool
 	verifiedCallSpecs      map[string]bool
@@ -216,10 +218,14 @@ type typeValidator struct {
 
 func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 	wasTop := v.isTopLevelBody
+	wasFuncTop := v.isFuncBodyTop
 	v.isTopLevelBody = false
+	v.isFuncBodyTop = false
 	for i, s := range stmts {
 		prevTrailing := v.inTrailingReplExpr
+		prevFinalFunc := v.inFinalFuncStmt
 		v.inTrailingReplExpr = wasTop && v.allowTrailingValueExpr && i == len(stmts)-1
+		v.inFinalFuncStmt = wasFuncTop && i == len(stmts)-1
 		var err error
 		switch st := s.(type) {
 		case *CheckGuardStmt:
@@ -228,6 +234,7 @@ func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 			err = v.checkStmt(s, inFunction)
 		}
 		v.inTrailingReplExpr = prevTrailing
+		v.inFinalFuncStmt = prevFinalFunc
 		if err != nil {
 			return err
 		}
@@ -932,14 +939,22 @@ func (v *typeValidator) unusedExprStmtError(e Expr) error {
 		if ce.Module != "" {
 			callee = ce.Module + ":" + ce.Callee
 		}
+		hint := fmt.Sprintf("Assign the result to a variable (e.g. 'res = %s ...') or return it with '->'.", callee)
+		if v.inFinalFuncStmt {
+			hint = fmt.Sprintf("To return this value from the function, prefix the final line with '-> %s ...', or assign it to a variable (e.g. 'res = %s ...').", callee, callee)
+		}
 		return newError(
 			"TypeError",
 			line,
 			col,
 			v.source,
 			fmt.Sprintf("Return value of '%s' is unused", callee),
-			fmt.Sprintf("Assign the result to a variable (e.g. 'res = %s ...') or return it with '->'.", callee),
+			hint,
 		)
+	}
+	hint := "Use '-> <expr>' to return this value, or assign it to a variable with 'name = <expr>'."
+	if v.inFinalFuncStmt {
+		hint = "Ease functions have no implicit return; prefix the final expression with '-> <expr>' to return it, or assign it to a variable with 'name = <expr>'."
 	}
 	return newError(
 		"TypeError",
@@ -947,7 +962,7 @@ func (v *typeValidator) unusedExprStmtError(e Expr) error {
 		col,
 		v.source,
 		"Unused value expression has no effect",
-		"Use '-> <expr>' to return this value, or assign it to a variable with 'name = <expr>'.",
+		hint,
 	)
 }
 

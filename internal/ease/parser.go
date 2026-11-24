@@ -28,6 +28,7 @@ type Parser struct {
 	disallowWhere      bool
 	inCallArg          bool
 	inTestBlock        bool
+	inSingleLineWith   bool
 	blockStack         []openBlock
 	funcArities        map[string]int
 	moduleArities      map[string]map[string]int
@@ -186,13 +187,20 @@ func parseProgramWithContext(source, sourcePath string, seen map[string]bool, ac
 	return prog, nil
 }
 
-func (p *Parser) matchFieldIdent() (Token, bool) {
-	switch p.current().Type {
+func isFieldIdentToken(t TokenType) bool {
+	switch t {
 	case TOK_IDENT, TOK_NUMBER_KW, TOK_TEXT, TOK_LIST_KW:
-		return p.advance(), true
+		return true
 	default:
-		return Token{}, false
+		return false
 	}
+}
+
+func (p *Parser) matchFieldIdent() (Token, bool) {
+	if isFieldIdentToken(p.current().Type) {
+		return p.advance(), true
+	}
+	return Token{}, false
 }
 
 func (p *Parser) current() Token {
@@ -404,11 +412,52 @@ func (p *Parser) parseStmt() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := p.checkNoFieldOrIndexAssign(expr); err != nil {
+			return nil, err
+		}
 		if err := p.expectStmtEnd("expression"); err != nil {
 			return nil, err
 		}
 		return &ExprStmt{posInfo: posInfo{Line: tok.Line, Col: tok.Col}, Expression: expr}, nil
 	}
+}
+
+func (p *Parser) checkNoFieldOrIndexAssign(expr Expr) error {
+	if !p.check(TOK_ASSIGN) {
+		return nil
+	}
+	eqTok := p.current()
+	switch target := expr.(type) {
+	case *FieldExpr:
+		if id, ok := target.Target.(*IdentExpr); ok && (p.moduleArities[id.Name] != nil || p.stdModuleOrigNames[id.Name] != "") {
+			return newError(
+				"SyntaxError",
+				eqTok.Line,
+				eqTok.Col,
+				p.source,
+				fmt.Sprintf("Cannot reassign module member '%s.%s'", id.Name, target.Field),
+				"Module constants and definitions are read-only.",
+			)
+		}
+		return newError(
+			"SyntaxError",
+			eqTok.Line,
+			eqTok.Col,
+			p.source,
+			fmt.Sprintf("Cannot mutate field '.%s' in place; values in Ease are immutable", target.Field),
+			fmt.Sprintf("Create an updated copy with 'with': '<var> = <record> with %s = <value>'.", target.Field),
+		)
+	case *IndexExpr:
+		return newError(
+			"SyntaxError",
+			eqTok.Line,
+			eqTok.Col,
+			p.source,
+			"Cannot mutate list element in place; lists in Ease are immutable",
+			"Create an updated copy with 'with': 'xs = xs with .<index> = <value>'.",
+		)
+	}
+	return nil
 }
 
 func (p *Parser) parseBareAssignStmt() (Stmt, error) {
@@ -783,7 +832,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 				tok.Col,
 				p.source,
 				"Single-line 'check <cond> -> <value | end>' cannot span multiple lines",
-				"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
+				"Start the value expression on the same line right after '->', or omit '->' on the 'check <cond>' line for a multi-line block ('check <cond>\\n  ...\\nend').",
 			)
 		}
 		action, err := p.parseArrowAction(arrowTok)
@@ -933,7 +982,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 			tok.Col,
 			p.source,
 			"Assignments are not allowed after '->'",
-			"Put only a value expression after '->' (or use a multi-line block without '->' for assignments).",
+			"Return a value expression directly (e.g. '-> x + 1'), or omit '->' on the 'check <cond>' header to run assignments inside a multi-line 'check <cond> ... end' block.",
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "fail" {

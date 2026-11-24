@@ -259,6 +259,19 @@ func cmdCheck(args []string) int {
 	return cmdCheckWithWriters(args, os.Stdout, os.Stderr)
 }
 
+func checkNonEmptySource(src string) error {
+	tokens, err := ease.NewLexer(src).Tokenize()
+	if err != nil {
+		return err
+	}
+	for _, tok := range tokens {
+		if tok.Type != ease.TOK_NEWLINE && tok.Type != ease.TOK_EOF {
+			return nil
+		}
+	}
+	return ease.NewEmptyFileError(src)
+}
+
 func cmdCheckWithWriters(args []string, out, errOut io.Writer) int {
 	file := ""
 	jsonMode := false
@@ -283,6 +296,14 @@ func cmdCheckWithWriters(args []string, out, errOut io.Writer) int {
 			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
 		} else {
 			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
+		return 1
+	}
+	if err := checkNonEmptySource(string(src)); err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
 		}
 		return 1
 	}
@@ -358,6 +379,14 @@ func cmdRunWithWriters(args []string, out, errOut io.Writer) int {
 			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
 		} else {
 			fmt.Fprintf(errOut, "Cannot read %q: %v\n", file, err)
+		}
+		return 1
+	}
+	if err := checkNonEmptySource(string(src)); err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
 		}
 		return 1
 	}
@@ -597,6 +626,14 @@ func cmdTestWithWriters(args []string, out, errOut io.Writer) int {
 		}
 		return 1
 	}
+	if err := checkNonEmptySource(string(src)); err != nil {
+		if jsonMode {
+			writeJSON(out, jsonErrorResponse{OK: false, File: file, Error: toJSONError(err)})
+		} else {
+			fmt.Fprintln(errOut, err)
+		}
+		return 1
+	}
 	return executeChecksWithWriters(string(src), file, traceMode, verbose, jsonMode, out, errOut)
 }
 
@@ -714,6 +751,10 @@ func cmdBuild(args []string) int {
 	src, err := os.ReadFile(inputFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot read %q: %v\n", inputFile, err)
+		return 1
+	}
+	if err := checkNonEmptySource(string(src)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if target == "wasm" {

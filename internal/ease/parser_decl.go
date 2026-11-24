@@ -96,6 +96,17 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 					if modErr != nil {
 						return nil, modErr
 					}
+					if modProg.IsEmpty() {
+						tok := p.tokens[i]
+						return nil, newError(
+							"ImportError",
+							tok.Line,
+							tok.Col,
+							p.source,
+							fmt.Sprintf("Imported file %q contains no Ease declarations", pathStr),
+							"Save the module file and export at least one 'def' or 'to' declaration.",
+						)
+					}
 					modFns := make(map[string]int, len(modProg.Functions))
 					for _, fn := range modProg.Functions {
 						modFns[fn.Name] = len(fn.Params)
@@ -663,6 +674,9 @@ func (p *Parser) parseTestItem() (Stmt, error) {
 	expr, err := p.parseExpr()
 	p.disallowTopIs = false
 	if err != nil {
+		return nil, err
+	}
+	if err := p.checkNoFieldOrIndexAssign(expr); err != nil {
 		return nil, err
 	}
 	line, col := expr.Pos()

@@ -2575,4 +2575,175 @@ func TestUnclosedCheckInsideFunctionDiagnosticHint(t *testing.T) {
 			}
 		})
 	}
+
+	// Empty / comment-only imported module must fail with ImportError.
+	dir := t.TempDir()
+	emptyMod := filepath.Join(dir, "empty_mod.ease")
+	if err := os.WriteFile(emptyMod, []byte("# just a comment\n"), 0o644); err != nil {
+		t.Fatalf("write empty_mod.ease: %v", err)
+	}
+	mainPath := filepath.Join(dir, "main.ease")
+	if _, err := ParseProgramFromFile("import \"./empty_mod.ease\" as em\nsay 1\n", mainPath); err == nil ||
+		!strings.Contains(err.Error(), "ImportError") ||
+		!strings.Contains(err.Error(), "contains no Ease declarations") {
+		t.Fatalf("expected ImportError for empty imported module, got: %v", err)
+	}
+}
+
+func TestErgonomicDiagnosticsImprovements1To7(t *testing.T) {
+	// 1. Positive edge cases that MUST continue to work cleanly:
+	//    - `rec with items = append rec.items 4`
+	//    - `(xs with .1 = 99).1` postfix chaining
+	happySrc := `
+def bag
+    items = list 1, 2
+end
+
+b = bag with items = append bag.items 4
+xs = list 10, 20
+
+test "append in with value and postfix chaining on with"
+    b.items is list 1, 2, 4
+    (xs with .1 = 99).1 is 99
+    (b with items = list 7, 8).items.2 is 8
+end
+`
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed on happy edge cases: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 3 {
+		t.Fatalf("expected 3 passed / 0 failed, got %+v", report)
+	}
+
+	// 2. Diagnostic cases across items 1..7
+	cases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "item1 direct record field mutation",
+			src:      "def p\n  x = 0\nend\na = p\na.x = 1\n",
+			wantSubs: []string{"SyntaxError", "Cannot mutate field '.x' in place; values in Ease are immutable", "with x = <value>"},
+		},
+		{
+			name:     "item1 direct list index mutation",
+			src:      "xs = list 1, 2\nxs.1 = 9\n",
+			wantSubs: []string{"SyntaxError", "Cannot mutate list element in place; lists in Ease are immutable", "xs with .<index> = <value>"},
+		},
+		{
+			name:     "item1 direct field mutation inside test block",
+			src:      "def p\n  x = 0\nend\ntest \"t\"\n  a = p\n  a.x = 1\nend\n",
+			wantSubs: []string{"SyntaxError", "Cannot mutate field '.x' in place; values in Ease are immutable"},
+		},
+		{
+			name:     "item1 module member reassignment",
+			src:      "import system\nsystem.arguments = list \"x\"\n",
+			wantSubs: []string{"SyntaxError", "Cannot reassign module member 'system.arguments'", "read-only"},
+		},
+		{
+			name:     "item2 trailing arrow on check header",
+			src:      "x = 1\ncheck x > 0 ->\n  say x\nend\n",
+			wantSubs: []string{"SyntaxError", "Single-line 'check <cond> -> <value | end>' cannot span multiple lines", "omit '->' on the 'check <cond>' line"},
+		},
+		{
+			name:     "item2 assignment after arrow",
+			src:      "to f x\n  check x > 0 -> a = 1\n  -> x\nend\n",
+			wantSubs: []string{"SyntaxError", "Assignments are not allowed after '->'", "omit '->' on the 'check <cond>' header"},
+		},
+		{
+			name:     "item3 with append confusion",
+			src:      "xs = list 1, 2\nys = xs with append 3\n",
+			wantSubs: []string{"SyntaxError", "'append' cannot be used after 'with'", "xs = append xs <item>"},
+		},
+		{
+			name:     "item4 list as number with .1 = 0",
+			src:      "xs = list as number with\n  .1 = 0\nend\n",
+			wantSubs: []string{"TypeError", `Built-in type "number" cannot be used with 'list as ... with'`},
+		},
+		{
+			name:     "item4 list as text with",
+			src:      "xs = list as text with\n  .1 = \"a\"\nend\n",
+			wantSubs: []string{"TypeError", `Built-in type "text" cannot be used with 'list as ... with'`},
+		},
+		{
+			name:     "item5 list field access with numeric var in scope",
+			src:      "slots = list 10, 20\nslot_idx = 1\nsay slots.slot_idx\n",
+			wantSubs: []string{"TypeError", "Cannot access field '.slot_idx' on a list", ".(slot_idx)"},
+		},
+		{
+			name:     "item5 list field access on chained field target",
+			src:      "def box\n  slots = list 10, 20\nend\nslot_idx = 1\nsay box.slots.slot_idx\n",
+			wantSubs: []string{"TypeError", "Cannot access field '.slot_idx' on a list", ".(slot_idx)"},
+		},
+		{
+			name:     "item5 list field access with untyped function param",
+			src:      "to bump slots slot_idx -> slots.slot_idx\nxs = list 10, 20\nsay bump xs 1\n",
+			wantSubs: []string{"TypeError", "Cannot access field '.slot_idx' on a list", ".(slot_idx)"},
+		},
+		{
+			name:     "item5 list .index inside loop",
+			src:      "xs = list 10, 20\nloop xs\n  say xs.index\nend\n",
+			wantSubs: []string{"TypeError", "Cannot access field '.index' on a list", "it.index"},
+		},
+		{
+			name:     "item5 copied loop variable .index",
+			src:      "def cust\n  name = \"a\"\nend\ncs = list as cust\nloop cs\n  c = it\n  say c.index\nend\n",
+			wantSubs: []string{"TypeError", `cust has no field "index"`, "it.index"},
+		},
+		{
+			name:     "item6 missing comma in single-line record with",
+			src:      "import screen\nwin = screen.screen with title = \"A\" width = 800\n",
+			wantSubs: []string{"SyntaxError", "Missing ',' before 'width =' in single-line 'with'"},
+		},
+		{
+			name:     "item6 missing comma in single-line list index with",
+			src:      "xs = list 1, 2\nys = xs with .1 = 10 .2 = 20\n",
+			wantSubs: []string{"SyntaxError", "Missing ',' before '.2 =' in single-line 'with'"},
+		},
+		{
+			name:     "item6 missing comma in list as record with row",
+			src:      "def p\n  x = 0\n  y = 0\nend\nxs = list as p with\n  x = 1 y = 2\nend\n",
+			wantSubs: []string{"SyntaxError", "Missing ',' before 'y =' in single-line 'with'"},
+		},
+		{
+			name:     "item7 final pure expression in function missing arrow",
+			src:      "to f x\n  x + 1\nend\n",
+			wantSubs: []string{"TypeError", "Unused value expression has no effect", "Ease functions have no implicit return; prefix the final expression with '-> <expr>'"},
+		},
+		{
+			name:     "item7 final call in function missing arrow",
+			src:      "to add a b -> a + b\nto f x\n  add x 1\nend\n",
+			wantSubs: []string{"TypeError", "Return value of 'add' is unused", "prefix the final line with '-> add ...'"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+
+	// Empty / comment-only imported module must fail with ImportError.
+	dir := t.TempDir()
+	emptyMod := filepath.Join(dir, "empty_mod.ease")
+	if err := os.WriteFile(emptyMod, []byte("# just a comment\n"), 0o644); err != nil {
+		t.Fatalf("write empty_mod.ease: %v", err)
+	}
+	mainPath := filepath.Join(dir, "main.ease")
+	if _, err := ParseProgramFromFile("import \"./empty_mod.ease\" as em\nsay 1\n", mainPath); err == nil ||
+		!strings.Contains(err.Error(), "ImportError") ||
+		!strings.Contains(err.Error(), "contains no Ease declarations") {
+		t.Fatalf("expected ImportError for empty imported module, got: %v", err)
+	}
 }
