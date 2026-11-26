@@ -3461,3 +3461,111 @@ end
 		})
 	}
 }
+
+func TestUnionLiteralVarTrackingAndUntypedScalarMatchReturn(t *testing.T) {
+	posCases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "union return via local variable assigned valid literals across check blocks",
+			src: `def severity = "critical" | "high" | "low"
+def action_kind = "page_oncall" | "open_ticket" | "log_only"
+
+to route sev retries as action_kind
+    res = "log_only"
+    check sev is "critical"
+        res = "page_oncall"
+    end
+    check sev is "high"
+        check retries >= 3
+            res = "page_oncall"
+        else
+            res = "open_ticket"
+        end
+    end
+    -> res
+end
+
+say route "high" 1
+`,
+		},
+		{
+			name: "scalar match with else on untyped parameter returning record",
+			src: `def log_level = "INFO" | "WARN" | "ERROR"
+def log_entry
+    level = log_level
+    code = 0
+    msg = ""
+end
+
+to parse_log_line line as log_entry
+    -> match line
+        "{lvl as log_level} [{code as number}] {msg}" -> log_entry with level = lvl, code = code, msg = msg
+        else -> log_entry with level = "ERROR", code = 0, msg = "invalid"
+    end
+end
+
+say parse_log_line "WARN [42] ok"
+`,
+		},
+	}
+
+	for _, tc := range posCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseProgram(tc.src); err != nil {
+				t.Fatalf("expected valid program, got error:\n%v", err)
+			}
+		})
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name: "union return via local variable with invalid literal branch rejected",
+			src: `def action_kind = "page_oncall" | "open_ticket" | "log_only"
+
+to route sev as action_kind
+    res = "log_only"
+    check sev is "critical"
+        res = "typo_action"
+    end
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union 'action_kind'"},
+		},
+		{
+			name: "union return via local variable widened by interpolated string rejected",
+			src: `def action_kind = "page_oncall" | "open_ticket" | "log_only"
+
+to route sev as action_kind
+    res = "log_only"
+    check sev is "critical"
+        res = "{sev}"
+    end
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union 'action_kind'"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}

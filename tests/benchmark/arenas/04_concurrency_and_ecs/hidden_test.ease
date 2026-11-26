@@ -1,0 +1,27 @@
+test "arena 04 hidden verification"
+    doubled = double_all (list 2, 5, 8)
+    count doubled is 3
+    doubled.1 is 4
+    doubled.2 is 10
+    doubled.3 is 16
+
+    items_stop = list as job with
+        id = 1, value = 2
+        id = 2, value = 0
+        id = 3, value = 5
+    end
+    r1 = run_pipeline items_stop
+    count r1 is 1
+    r1.1.id is 1
+    r1.1.value is 20
+
+    items_ret = list as job with
+        id = 1, value = 3
+        id = 2, value = -1
+        id = 3, value = 7
+    end
+    r2 = run_pipeline items_ret
+    count r2 is 1
+    r2.1.id is 1
+    r2.1.value is 30
+end

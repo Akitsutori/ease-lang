@@ -1,0 +1,29 @@
+test "arena 02 hidden verification"
+    raw_orders = list as order with
+        id = 3, customer = "Eve", total = 50, vip = "bronze"
+        id = 2, customer = "Bob", total = 100, vip = "gold"
+        id = 1, customer = "Ada", total = 200, vip = "gold"
+        id = 4, customer = "Zoe", total = 20, vip = "silver"
+    end
+
+    discounted = apply_vip_discount raw_orders
+    discounted.2.total is 90
+    discounted.3.total is 180
+    discounted.1.total is 50
+
+    recs = build_receipts discounted 50
+    count recs is 3
+    recs.1.id is 1
+    recs.1.summary is "Ada:180"
+    recs.2.id is 2
+    recs.2.summary is "Bob:90"
+    recs.3.id is 3
+    recs.3.summary is "Eve:50"
+
+    std_orders = list as order with
+        id = 1, customer = "X", total = 50, vip = "bronze"
+    end
+    queue_status (list as order) is "empty"
+    queue_status raw_orders is "priority"
+    queue_status std_orders is "standard"
+end

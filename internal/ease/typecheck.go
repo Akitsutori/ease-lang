@@ -49,6 +49,7 @@ type varTypeState struct {
 	inlineUnionVariants  []resolvedUnionVariant
 	hasRemainingTracking bool
 	remainingVariants    []resolvedUnionVariant
+	knownVariants        []resolvedUnionVariant
 }
 
 func (s varTypeState) clone() varTypeState {
@@ -61,6 +62,9 @@ func (s varTypeState) clone() varTypeState {
 	}
 	if len(s.remainingVariants) > 0 {
 		out.remainingVariants = append([]resolvedUnionVariant(nil), s.remainingVariants...)
+	}
+	if len(s.knownVariants) > 0 {
+		out.knownVariants = append([]resolvedUnionVariant(nil), s.knownVariants...)
 	}
 	return out
 }
@@ -636,9 +640,70 @@ func (v *typeValidator) lookupVar(name string) (varTypeState, bool) {
 	return varTypeState{}, false
 }
 
+func (v *typeValidator) finiteVariantsOf(st varTypeState) []resolvedUnionVariant {
+	if len(st.knownVariants) > 0 {
+		return st.knownVariants
+	}
+	if st.unionName != "" {
+		if vars, ok := v.resolveUnionVariantsByName(st.unionName); ok && len(vars) > 0 {
+			return vars
+		}
+	}
+	if len(st.inlineUnionVariants) > 0 {
+		return st.inlineUnionVariants
+	}
+	if st.exactRecord != "" {
+		return []resolvedUnionVariant{{kind: variantRecord, recordName: st.exactRecord}}
+	}
+	return nil
+}
+
+func mergeVariantSlices(a, b []resolvedUnionVariant) []resolvedUnionVariant {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]resolvedUnionVariant, 0, len(a)+len(b))
+	for _, vr := range a {
+		k := vr.key()
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, vr)
+		}
+	}
+	for _, vr := range b {
+		k := vr.key()
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, vr)
+		}
+	}
+	return out
+}
+
 func (v *typeValidator) setVarInCurrentOrExisting(name string, st varTypeState) {
 	for cur := v.scope; cur != nil; cur = cur.parent {
-		if _, ok := cur.vars[name]; ok {
+		if prev, ok := cur.vars[name]; ok {
+			if cur != v.scope {
+				prevVars := v.finiteVariantsOf(prev)
+				stVars := v.finiteVariantsOf(st)
+				merged := st.clone()
+				if len(prevVars) > 0 && len(stVars) > 0 {
+					merged.knownVariants = mergeVariantSlices(prevVars, stVars)
+					if prev.unionName != "" && prev.unionName == st.unionName {
+						merged.unionName = prev.unionName
+					} else {
+						merged.unionName = ""
+					}
+				} else {
+					merged.knownVariants = nil
+					if prev.unionName != st.unionName {
+						merged.unionName = ""
+					}
+				}
+				cur.vars[name] = merged
+				return
+			}
 			cur.vars[name] = st
 			return
 		}
@@ -1006,9 +1071,21 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		if targetSt.listElemType != "" {
 			return v.typeStateFromName(targetSt.listElemType)
 		}
-	case *StringExpr, *InterpStringExpr:
+	case *StringExpr:
+		return varTypeState{
+			exactNonRecord: true,
+			exactBaseType:  "text",
+			knownVariants:  []resolvedUnionVariant{{kind: variantStringLit, strVal: ex.Value}},
+		}
+	case *InterpStringExpr:
 		return varTypeState{exactNonRecord: true, exactBaseType: "text"}
-	case *NumberExpr, *UnaryExpr:
+	case *NumberExpr:
+		return varTypeState{
+			exactNonRecord: true,
+			exactBaseType:  "number",
+			knownVariants:  []resolvedUnionVariant{{kind: variantNumberLit, numVal: ex.Value, rawNum: ex.Raw}},
+		}
+	case *UnaryExpr:
 		return varTypeState{exactNonRecord: true, exactBaseType: "number"}
 	case *BinaryExpr:
 		switch ex.Op {
@@ -3546,6 +3623,23 @@ func (v *typeValidator) checkNonLiteralMatchesUnion(valExpr Expr, valSt varTypeS
 	}
 	if valSt.exactRecord != "" {
 		return nil
+	}
+	if len(valSt.knownVariants) > 0 {
+		if unionVariantsSubset(valSt.knownVariants, variants) {
+			return nil
+		}
+		allowed := make([]string, len(variants))
+		for i, vr := range variants {
+			allowed[i] = vr.display()
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Value is not statically guaranteed to belong to union '%s'", unionName),
+			fmt.Sprintf("Valid values for %s: %s.", unionName, strings.Join(allowed, " | ")),
+		)
 	}
 	if valSt.exactBaseType != "" {
 		for _, vr := range variants {

@@ -1,0 +1,18 @@
+test "arena 03 hidden verification"
+    e1 = parse_log_line "WARN [429] rate limit"
+    e1.level is "WARN"
+    e1.code is 429
+    e1.msg is "rate limit"
+
+    e2 = parse_log_line "garbage line"
+    e2.level is "ERROR"
+    e2.code is 0
+    e2.msg is "invalid"
+
+    parse_port "9000" is 9000
+    parse_port "bad" is 8080
+
+    u = parse_user '{"name":"Ada","age":31}'
+    u.name is "Ada"
+    u.age is 31
+end

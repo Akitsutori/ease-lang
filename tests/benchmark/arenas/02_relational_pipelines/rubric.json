@@ -1,0 +1,7 @@
+{
+  "name": "02_relational_pipelines",
+  "require_return_contracts": true,
+  "max_nesting": 2,
+  "forbid_loop_append": true,
+  "required_constructs": ["where", "project", "update", "sort_by", "quantifier"]
+}

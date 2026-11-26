@@ -1,0 +1,38 @@
+def severity = "critical" | "high" | "low"
+
+def action_kind = "page_oncall" | "open_ticket" | "log_only"
+
+def alert
+    id = 0
+    sev = severity
+    retries = 0
+end
+
+def max_retries = 3
+
+to route_alert a as action_kind
+    res = "log_only"
+    check a.sev is "critical"
+        res = "page_oncall"
+    end
+    check a.sev is "high"
+        check a.retries >= max_retries
+            res = "page_oncall"
+        end
+        check a.retries < max_retries
+            res = "open_ticket"
+        end
+    end
+    check a.sev is "low"
+        res = "log_only"
+    end
+    -> res
+end
+
+to bump_retry a as alert
+    -> a with retries = a.retries + 1
+end
+
+to label_alert a as text
+    -> "{a.id}:{a.sev}"
+end

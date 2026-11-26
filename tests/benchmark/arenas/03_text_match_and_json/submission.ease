@@ -1,0 +1,28 @@
+def log_level = "INFO" | "WARN" | "ERROR"
+
+def log_entry
+    level = log_level
+    code = 0
+    msg = ""
+end
+
+def api_user
+    name = ""
+    age = 0
+end
+
+to parse_log_line line as log_entry
+    -> match line
+        "{lvl as log_level} [{code as number}] {msg}" -> log_entry with level = lvl, code = code, msg = msg
+        else -> log_entry with level = "ERROR", code = 0, msg = "invalid"
+    end
+end
+
+to parse_port raw as number
+    -> raw as number or 8080
+end
+
+to parse_user raw_json as api_user
+    m = raw_json as json
+    -> m as api_user
+end

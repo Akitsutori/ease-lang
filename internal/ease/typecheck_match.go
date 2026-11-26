@@ -353,7 +353,21 @@ func (v *typeValidator) unifyScalarTypeStates(states []varTypeState) varTypeStat
 		return varTypeState{unionName: first.unionName}
 	}
 	if sameBase {
-		return varTypeState{exactNonRecord: true, exactBaseType: first.exactBaseType}
+		var mergedKnown []resolvedUnionVariant
+		allHaveFinite := true
+		for _, st := range states {
+			fv := v.finiteVariantsOf(st)
+			if len(fv) == 0 {
+				allHaveFinite = false
+				break
+			}
+			mergedKnown = mergeVariantSlices(mergedKnown, fv)
+		}
+		out := varTypeState{exactNonRecord: true, exactBaseType: first.exactBaseType}
+		if allHaveFinite && len(mergedKnown) > 0 {
+			out.knownVariants = mergedKnown
+		}
+		return out
 	}
 	if sameList {
 		return varTypeState{listElemType: first.listElemType}
@@ -368,12 +382,16 @@ func (v *typeValidator) unifyScalarTypeStates(states []varTypeState) varTypeStat
 }
 
 func (v *typeValidator) inferMatchExprTypeState(ex *MatchExpr) varTypeState {
-	isList, isText, _ := v.classifyMatchTarget(ex.Target)
-	if !isList && !isText && !ex.HasElse {
-		isList = true
+	isList, isText, badType := v.classifyMatchTarget(ex.Target)
+	if badType != "" {
+		return varTypeState{}
 	}
 	if !isList && !isText {
-		return varTypeState{}
+		if ex.HasElse {
+			isText = true
+		} else {
+			isList = true
+		}
 	}
 
 	if isList {

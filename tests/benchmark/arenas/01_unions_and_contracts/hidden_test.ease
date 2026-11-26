@@ -1,0 +1,15 @@
+test "arena 01 hidden verification"
+    a1 = alert with id = 1, sev = "critical", retries = 0
+    a2 = alert with id = 2, sev = "high", retries = 2
+    a3 = bump_retry a2
+    a4 = alert with id = 4, sev = "low", retries = 5
+
+    route_alert a1 is "page_oncall"
+    route_alert a2 is "open_ticket"
+    route_alert a3 is "page_oncall"
+    route_alert a4 is "log_only"
+    a3.retries is 3
+    a2.retries is 2
+    label_alert a1 is "#1:critical"
+    max_retries is 3
+end

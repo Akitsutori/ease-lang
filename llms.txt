@@ -191,7 +191,7 @@ end
       screen:open win events
       last_frame = screen:present win scene
       take events
-          check it.kind is "close" -> end
+          check it.kind is "close" -> stop
           last_frame = screen:present win scene
       end
       say last_frame

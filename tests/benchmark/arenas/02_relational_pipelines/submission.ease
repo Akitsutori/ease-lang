@@ -1,0 +1,31 @@
+def tier = "gold" | "silver" | "bronze"
+
+def order
+    id = 0
+    customer = ""
+    total = 0
+    vip = tier
+end
+
+def receipt
+    id = 0
+    summary = ""
+end
+
+to apply_vip_discount orders as list of order -> update orders where it.vip is "gold" with total = it.total * 0.9
+
+to build_receipts orders min_total as list of receipt
+    filtered = orders where it.total >= min_total
+    sorted = sort filtered by it.vip, it.id
+    -> sorted -> receipt with id = it.id, summary = "{it.customer}:{it.total}"
+
+to queue_status orders as text
+    status = "standard"
+    check none orders where it.total > 0
+        status = "empty"
+    else
+        check any orders where it.vip is "gold" and it.total >= 100
+            status = "priority"
+        end
+    end
+    -> status

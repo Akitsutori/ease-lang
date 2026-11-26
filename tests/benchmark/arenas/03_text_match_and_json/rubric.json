@@ -1,0 +1,7 @@
+{
+  "name": "03_text_match_and_json",
+  "require_return_contracts": true,
+  "max_nesting": 2,
+  "forbid_loop_append": true,
+  "required_constructs": ["match", "cast_fallback", "return_type"]
+}
