@@ -75,9 +75,13 @@ test "Listen, Schleifen & Verzweigungen"
     classify 5 is "positiv"
     classify 0 is "nicht-positiv"
 
-    moved = cloud with x = it.x + it.vx
+    moved = update cloud with x = it.x + it.vx
     moved.1.x is 5
     moved.2.x is 12
+
+    active_moved = update cloud where it.vx >= 5 with life = it.life - 5
+    active_moved.1.life is 15
+    active_moved.2.life is 5
 
     fast = cloud where it.vx >= 5
     count fast is 1

@@ -440,9 +440,12 @@ end
 		t.Fatalf("expected cyclic import error, got: %v", err)
 	}
 
-	// c) Dot call on module function
+	// c) Dot call on module function (both without and with arguments)
 	if _, err := ParseProgramFromFile("import \"./billing.ease\" as billing\nx = billing.total\n", mainPath); err == nil || !strings.Contains(err.Error(), "Use ':' to call module functions") {
 		t.Fatalf("expected ':' hint for billing.total, got: %v", err)
+	}
+	if _, err := ParseProgram("import system\ncmd = system.command\nsystem.run cmd\n"); err == nil || !strings.Contains(err.Error(), "Use ':' to call module functions, e.g. 'system:run ...'") {
+		t.Fatalf("expected ':' hint for system.run cmd, got: %v", err)
 	}
 
 	// d) Unknown module function

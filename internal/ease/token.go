@@ -18,6 +18,7 @@ const (
 	TOK_DEF    TokenType = "def"
 	TOK_WITH   TokenType = "with"
 	TOK_WHERE  TokenType = "where"
+	TOK_UPDATE TokenType = "update"
 	TOK_END    TokenType = "end"
 	TOK_TEST   TokenType = "test"
 	TOK_CHECK  TokenType = "check"
@@ -67,6 +68,7 @@ var keywords = map[string]TokenType{
 	"def":    TOK_DEF,
 	"with":   TOK_WITH,
 	"where":  TOK_WHERE,
+	"update": TOK_UPDATE,
 	"end":    TOK_END,
 	"test":   TOK_TEST,
 	"check":  TOK_CHECK,

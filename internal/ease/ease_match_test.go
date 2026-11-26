@@ -143,7 +143,7 @@ end
 raw_lines = list "INFO: booted", "noise line", "ERR: disk full", "WARN: low mem"
 entries = extract_errors raw_lines
 errs = entries where it.level is "ERR"
-bumped = errs with idx = it.idx + 100
+bumped = update errs with idx = it.idx + 100
 
 labeled = match raw_lines
   "ERR: {body}" -> "{it.index}:{it}=>{body}"

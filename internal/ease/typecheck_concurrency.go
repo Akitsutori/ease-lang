@@ -141,6 +141,15 @@ func (v *typeValidator) exprContainsSpawn(e Expr, visited map[string]bool) bool 
 				return true
 			}
 		}
+	case *UpdateExpr:
+		if v.exprContainsSpawn(ex.Target, visited) || v.exprContainsSpawn(ex.Where, visited) {
+			return true
+		}
+		for _, u := range ex.Updates {
+			if v.exprContainsSpawn(u.Value, visited) {
+				return true
+			}
+		}
 	case *MatchExpr:
 		if v.exprContainsSpawn(ex.Target, visited) || v.stmtsContainSpawn(ex.ElseBody, visited) {
 			return true

@@ -26,6 +26,7 @@ type Parser struct {
 	stopChainedIs      bool
 	disallowAs         bool
 	disallowWhere      bool
+	disallowWith       bool
 	inCallArg          bool
 	inTestBlock        bool
 	inSingleLineWith   bool
@@ -645,12 +646,14 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 
 	prevDisallowAs := p.disallowAs
 	prevDisallowWhere := p.disallowWhere
+	prevDisallowWith := p.disallowWith
 	prevDisallowTopIs := p.disallowTopIs
 	prevStopChainedIs := p.stopChainedIs
 	prevInCallArg := p.inCallArg
 	prevInTestBlock := p.inTestBlock
 	p.disallowAs = false
 	p.disallowWhere = false
+	p.disallowWith = false
 	p.disallowTopIs = false
 	p.stopChainedIs = false
 	p.inCallArg = false
@@ -658,6 +661,7 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 	defer func() {
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
+		p.disallowWith = prevDisallowWith
 		p.disallowTopIs = prevDisallowTopIs
 		p.stopChainedIs = prevStopChainedIs
 		p.inCallArg = prevInCallArg

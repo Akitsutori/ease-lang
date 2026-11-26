@@ -516,3 +516,34 @@ func TestWasmGolden12Pacman(t *testing.T) {
 		t.Fatalf("expected labels to be serialized after shapes, last op was %q", scene.Shapes[len(scene.Shapes)-1].Op)
 	}
 }
+
+func TestWasmUpdateRecordList(t *testing.T) {
+	src := `
+def particle
+    x = 0
+    vx = 5
+    state = "active" | "dead"
+end
+
+cloud = list as particle with
+    x = 10, vx = 5, state = "active"
+    x = 20, vx = 3, state = "dead"
+end
+
+all_shifted = update cloud with x = it.x + it.index
+active_only = update cloud where it.state is "active" with
+    x = it.x + it.vx
+    state = "dead"
+end
+
+say "{cloud.1.x}:{all_shifted.1.x}:{all_shifted.2.x}:{active_only.1.x}:{active_only.1.state}:{active_only.2.x}:{active_only.2.state}"
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, "[]", 1)
+	if len(res.Prints) != 1 || res.Prints[0] != "10:11:22:15:dead:20:dead" {
+		t.Fatalf("unexpected WASM update output: %+v", res.Prints)
+	}
+}

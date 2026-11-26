@@ -442,6 +442,8 @@ func lspInferExprType(e Expr, sc *lspScopeInfo) string {
 		}
 	case *WithExpr:
 		return lspInferExprType(ex.Base, sc)
+	case *UpdateExpr:
+		return lspInferExprType(ex.Target, sc)
 	case *CastExpr:
 		if ex.TypeName == "json" {
 			return "json"
@@ -973,6 +975,12 @@ func collectLocalSymbolRefs(uri string, prog *Program, lines []string, name stri
 					add(u.Line, u.Col, nameLen)
 				}
 			}
+		case *UpdateExpr:
+			for _, u := range ex.Updates {
+				if u.Name == name {
+					add(u.Line, u.Col, nameLen)
+				}
+			}
 		case *CastExpr:
 			if ex.TypeName == name && ex.TypeLine > 0 {
 				add(ex.TypeLine, ex.TypeCol, nameLen)
@@ -1169,6 +1177,12 @@ func walkExprTree(e Expr, onExpr func(Expr)) {
 		walkExprTree(ex.Target, onExpr)
 		for _, c := range ex.Conditions {
 			walkExprTree(c, onExpr)
+		}
+	case *UpdateExpr:
+		walkExprTree(ex.Target, onExpr)
+		walkExprTree(ex.Where, onExpr)
+		for _, u := range ex.Updates {
+			walkExprTree(u.Value, onExpr)
 		}
 	case *CastExpr:
 		walkExprTree(ex.Target, onExpr)

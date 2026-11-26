@@ -214,6 +214,20 @@ func (p *Parser) parsePostfix() (Expr, error) {
 		}
 		if p.match(TOK_DOT) {
 			if fieldTok, ok := p.matchFieldIdent(); ok {
+				if id, ok := expr.(*IdentExpr); ok {
+					if modFns, isMod := p.moduleArities[id.Name]; isMod {
+						if _, isFn := modFns[fieldTok.Lexeme]; isFn {
+							return nil, newError(
+								"TypeError",
+								fieldTok.Line,
+								fieldTok.Col,
+								p.source,
+								fmt.Sprintf("Cannot access module function %q on '%s' with '.'", fieldTok.Lexeme, id.Name),
+								fmt.Sprintf("Use ':' to call module functions, e.g. '%s:%s ...'.", id.Name, fieldTok.Lexeme),
+							)
+						}
+					}
+				}
 				line, col := expr.Pos()
 				expr = &FieldExpr{posInfo: posInfo{Line: line, Col: col}, Target: expr, Field: fieldTok.Lexeme}
 				continue
@@ -287,7 +301,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 			)
 		}
 
-		if p.match(TOK_WITH) {
+		if !p.disallowWith && p.match(TOK_WITH) {
 			var updates []WithFieldUpdate
 			var indexUpdates []WithIndexUpdate
 			line, col := expr.Pos()
@@ -700,6 +714,158 @@ func (p *Parser) parseWithFieldUpdate() (WithFieldUpdate, error) {
 	return WithFieldUpdate{Line: fieldTok.Line, Col: fieldTok.Col, Name: fieldTok.Lexeme, Value: valExpr}, nil
 }
 
+func (p *Parser) parseUpdateExpr() (Expr, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
+	updTok := p.advance() // consume `update`
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			updTok.Line,
+			updTok.Col,
+			p.source,
+			"Expected list expression after 'update'",
+			"Write: update <list> [where <cond>] with <field> = <val>",
+		)
+	}
+
+	prevWhere := p.disallowWhere
+	prevWith := p.disallowWith
+	p.disallowWhere = true
+	p.disallowWith = true
+	target, err := p.parsePostfix()
+	p.disallowWhere = prevWhere
+	p.disallowWith = prevWith
+	if err != nil {
+		return nil, err
+	}
+
+	var whereCond Expr
+	if p.match(TOK_WHERE) {
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+			cur := p.current()
+			return nil, newError(
+				"SyntaxError",
+				cur.Line,
+				cur.Col,
+				p.source,
+				"Expected condition expression after 'where' in 'update'",
+				"Write: update <list> where <cond> with <field> = <val>",
+			)
+		}
+		prevW := p.disallowWith
+		prevTopIs := p.disallowTopIs
+		prevStopIs := p.stopChainedIs
+		p.disallowWith = true
+		p.disallowTopIs = false
+		p.stopChainedIs = false
+		whereCond, err = p.parseExpr()
+		p.disallowWith = prevW
+		p.disallowTopIs = prevTopIs
+		p.stopChainedIs = prevStopIs
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if !p.match(TOK_WITH) {
+		cur := p.current()
+		return nil, newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			"Expected 'with' after 'update' target/condition",
+			"Write: update <list> [where <cond>] with <field> = <val>",
+		)
+	}
+
+	var updates []WithFieldUpdate
+	parseFieldInto := func() error {
+		if p.check(TOK_DOT) {
+			dotTok := p.current()
+			return newError(
+				"SyntaxError",
+				dotTok.Line,
+				dotTok.Col,
+				p.source,
+				"'update' only updates named record fields; use '<list> with .1 = <val>' for positional list updates",
+				"Write: update <list> with <field> = <val>",
+			)
+		}
+		prevW := p.disallowWith
+		p.disallowWith = false
+		upd, err := p.parseWithFieldUpdate()
+		p.disallowWith = prevW
+		if err != nil {
+			return err
+		}
+		updates = append(updates, upd)
+		return nil
+	}
+
+	if p.match(TOK_NEWLINE) {
+		p.skipNewlines()
+		for !p.check(TOK_END) {
+			if p.check(TOK_EOF) {
+				return nil, newError(
+					"SyntaxError",
+					updTok.Line,
+					updTok.Col,
+					p.source,
+					"Multiline 'update ... with' block is missing 'end'",
+					"Close every multiline 'update ... with' block with 'end'.",
+				)
+			}
+			if err := parseFieldInto(); err != nil {
+				return nil, err
+			}
+			if err := p.expectStmtEnd("'update' field"); err != nil {
+				return nil, err
+			}
+			p.skipNewlines()
+		}
+		p.advance() // consume `end`
+	} else {
+		prevSingleWith := p.inSingleLineWith
+		p.inSingleLineWith = true
+		for {
+			if err := parseFieldInto(); err != nil {
+				p.inSingleLineWith = prevSingleWith
+				return nil, err
+			}
+			if !p.match(TOK_COMMA) {
+				break
+			}
+		}
+		p.inSingleLineWith = prevSingleWith
+		if err := p.checkMissingWithComma(); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(updates) == 0 {
+		return nil, newError(
+			"SyntaxError",
+			updTok.Line,
+			updTok.Col,
+			p.source,
+			"'update ... with' requires at least one field update",
+			"Write: update <list> [where <cond>] with <field> = <val>",
+		)
+	}
+
+	return &UpdateExpr{
+		posInfo: posInfo{Line: updTok.Line, Col: updTok.Col},
+		Target:  target,
+		Where:   whereCond,
+		Updates: updates,
+	}, nil
+}
+
 func (p *Parser) parsePrimary() (Expr, error) {
 	tok := p.current()
 	switch tok.Type {
@@ -752,15 +918,18 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		p.advance()
 		prevDisallowAs := p.disallowAs
 		prevDisallowWhere := p.disallowWhere
+		prevDisallowWith := p.disallowWith
 		prevDisallowTopIs := p.disallowTopIs
 		prevInCallArg := p.inCallArg
 		p.disallowAs = false
 		p.disallowWhere = false
+		p.disallowWith = false
 		p.disallowTopIs = false
 		p.inCallArg = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
+		p.disallowWith = prevDisallowWith
 		p.disallowTopIs = prevDisallowTopIs
 		p.inCallArg = prevInCallArg
 		if err != nil {
@@ -773,6 +942,8 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		return inner, nil
 	case TOK_LIST_KW:
 		return p.parseTypedOrInlineList()
+	case TOK_UPDATE:
+		return p.parseUpdateExpr()
 	case TOK_INBOX:
 		return p.parseInboxExpr()
 	case TOK_SPAWN:

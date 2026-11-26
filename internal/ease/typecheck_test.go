@@ -2455,7 +2455,7 @@ lbl2 = lbl with content = "SCORE: 10"
 labels = list as screen.label with
     x = 0, y = 0, content = "HUD"
 end
-labels2 = labels with content = "HUD2"
+labels2 = update labels with content = "HUD2"
 cfg = sol.Config with port = 443, mode = "prod"
 say "{lbl2.content}:{labels2.1.content}:{cfg.port}"
 `
@@ -2485,9 +2485,14 @@ say "{lbl2.content}:{labels2.1.content}:{cfg.port}"
 			wantSub: `screen.label has no field "text"`,
 		},
 		{
-			name:    "batch with on list of screen.label unknown field",
-			src:     "import screen\nxs = list as screen.label\nys = xs with text = \"SCORE\"\n",
+			name:    "update on list of screen.label unknown field text",
+			src:     "import screen\nxs = list as screen.label\nys = update xs with text = \"SCORE\"\n",
 			wantSub: `screen.label has no field "text"`,
+		},
+		{
+			name:    "bare with on list of screen.label rejected",
+			src:     "import screen\nxs = list as screen.label\nys = xs with content = \"SCORE\"\n",
+			wantSub: `Cannot use bare 'with' on a list of records`,
 		},
 		{
 			name:    "screen.label wrong field value type",
@@ -2745,5 +2750,121 @@ end
 		!strings.Contains(err.Error(), "ImportError") ||
 		!strings.Contains(err.Error(), "contains no Ease declarations") {
 		t.Fatalf("expected ImportError for empty imported module, got: %v", err)
+	}
+}
+
+func TestUpdateRecordListExprAndMigration(t *testing.T) {
+	// 1. Happy paths: single-line, multi-line, optional where, it / it.index, untyped param,
+	//    parenthesized call target, nested `with` in update value, and empty typed record list.
+	happySrc := `
+def tag
+    label = "new"
+end
+
+def item
+    name  = ""
+    score = 0
+    role  = "guest" | "member" | "admin"
+    badge = tag
+end
+
+to make_items
+    -> list as item with
+        name = "Ada", score = 10, role = "guest"
+        name = "Bob", score = 20, role = "admin"
+    end
+end
+
+to bump_guests xs delta
+    -> update xs where it.role is "guest" with
+        score = it.score + delta + it.index
+        role  = "member"
+        badge = tag with label = "promoted"
+    end
+end
+
+test "update record list happy paths"
+    base = make_items
+    all_bumped = update base with score = it.score + 5
+    all_bumped.1.score is 15
+    all_bumped.2.score is 25
+    base.1.score is 10
+
+    res = bump_guests (make_items) 100
+    res.1.score is 111
+    res.1.role is "member"
+    res.1.badge.label is "promoted"
+    res.2.score is 20
+    res.2.role is "admin"
+
+    empty = list as item
+    empty2 = update empty with score = 1
+    count empty2 is 0
+end
+`
+	report, err := RunChecks(happySrc)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 9 {
+		t.Fatalf("expected 9 passed / 0 failed, got %+v", report)
+	}
+
+	// 2. Negative cases: bare list with, .1 inside update, non-list, scalar list, field typo, union typo, missing with.
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "bare record list with rejected",
+			src:      "def p\n  x = 0\nend\nxs = list as p\nys = xs with x = 1\n",
+			wantSubs: []string{"TypeError", "Cannot use bare 'with' on a list of records", "update <list> with"},
+		},
+		{
+			name:     "positional .1 rejected inside update",
+			src:      "def p\n  x = 0\nend\nxs = list as p\nys = update xs with .1 = p\n",
+			wantSubs: []string{"SyntaxError", "'update' only updates named record fields"},
+		},
+		{
+			name:     "update on non-list rejected",
+			src:      "def p\n  x = 0\nend\na = p\nb = update a with x = 1\n",
+			wantSubs: []string{"TypeError", "Cannot use 'update' on non-list value"},
+		},
+		{
+			name:     "update on scalar list rejected",
+			src:      "xs = list 1, 2\nys = update xs with x = 1\n",
+			wantSubs: []string{"TypeError", "'update' requires a list of 'def' records, got list of number"},
+		},
+		{
+			name:     "update unknown field rejected statically",
+			src:      "def p\n  x = 0\nend\nxs = list as p\nys = update xs with typo = 1\n",
+			wantSubs: []string{"TypeError", `p has no field "typo"`},
+		},
+		{
+			name:     "update invalid union literal rejected statically",
+			src:      "def p\n  role = \"a\" | \"b\"\nend\nxs = list as p\nys = update xs with role = \"c\"\n",
+			wantSubs: []string{"TypeError", `Invalid value "c" for p.role`},
+		},
+		{
+			name:     "update missing with keyword",
+			src:      "def p\n  x = 0\nend\nxs = list as p\nys = update xs where it.x is 0\n",
+			wantSubs: []string{"SyntaxError", "Expected 'with' after 'update' target/condition"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
 	}
 }

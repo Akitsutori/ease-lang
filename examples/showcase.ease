@@ -149,12 +149,15 @@ test "Pattern Matching, Lists, where, contains & Loops"
         name = "Ada", role = "admin", points = 10
         name = "Bob", role = "member", points = 25
     end
-    boosted = roster with points = it.points + 5
+    boosted = update roster with points = it.points + 5
     boosted.1.points is 15
     boosted.2.points is 30
     high = boosted where it.points >= 20
     count high is 1
     high.1.name is "Bob"
+    admins = update roster where it.role is "admin" with points = it.points + 100
+    admins.1.points is 110
+    admins.2.points is 25
 end
 
 test "JSON Boundaries, Fallbacks & Concurrency"

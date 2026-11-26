@@ -1194,6 +1194,129 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		c.localGet(outList)
 		return nil
 
+	case *UpdateExpr:
+		lt := wc.inferExprTypeWithEnv(ex.Target, wc.curEnvTypes(), "")
+		lay := wc.records[lt.name]
+		if lay == nil {
+			return fmt.Errorf("wasm: unknown record %q in 'update'", lt.name)
+		}
+		srcList := wc.allocLocal(wasmI32)
+		outList := wc.allocLocal(wasmI32)
+		if err := wc.emitExpr(c, ex.Target, lt); err != nil {
+			return err
+		}
+		c.localTee(srcList)
+		c.memOp(opI32Load, 2, 4)
+		nLocal := wc.allocLocal(wasmI32)
+		c.localSet(nLocal)
+		c.i32Const(4)
+		c.call(wc.rt.fnListNew)
+		c.localSet(outList)
+
+		dataLocal := wc.allocLocal(wasmI32)
+		c.localGet(srcList)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(dataLocal)
+
+		elemType := wasmTypeInfo{kind: wkRec, name: lt.name}
+		itSlot := wc.ensureVar("it", elemType)
+		idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+
+		iLocal := wc.allocLocal(wasmI32)
+		elI64 := wc.allocLocal(wasmI64)
+		elI32 := wc.allocLocal(wasmI32)
+		dstTmp := wc.allocLocal(wasmI32)
+
+		c.i32Const(0)
+		c.localSet(iLocal)
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(iLocal)
+		c.localGet(nLocal)
+		c.op(opI32GeS)
+		c.brIf(1)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.op(opF64ConvertI32S)
+		wc.emitSetVar(c, idxSlot)
+
+		c.localGet(dataLocal)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		c.localTee(elI64)
+		c.op(opI32WrapI64)
+		c.localTee(elI32)
+		wc.emitSetVar(c, itSlot)
+
+		emitCloneAndUpdate := func() error {
+			c.i32Const(int32(lay.size))
+			c.call(wc.rt.fnAlloc)
+			c.localTee(dstTmp)
+			c.localGet(elI32)
+			c.i32Const(int32(lay.size))
+			c.call(wc.rt.fnMemcpy)
+			for _, u := range ex.Updates {
+				rf, ok := lay.byName[u.Name]
+				if !ok {
+					continue
+				}
+				c.localGet(dstTmp)
+				vt := wc.inferExprTypeWithEnv(u.Value, wc.curEnvTypes(), "")
+				if err := wc.emitExpr(c, u.Value, rf.typ); err != nil {
+					return err
+				}
+				if rf.typ.wasmStorageType() == wasmI64 && vt.kind == wkNum {
+					c.call(wc.rt.fnF64ToText)
+				}
+				switch rf.typ.wasmStorageType() {
+				case wasmF64:
+					c.memOp(opF64Store, 3, rf.offset)
+				case wasmI64:
+					c.memOp(opI64Store, 3, rf.offset)
+				default:
+					c.memOp(opI32Store, 2, rf.offset)
+				}
+			}
+			c.localGet(dstTmp)
+			c.op(opI64ExtendI32U)
+			return nil
+		}
+
+		c.localGet(outList)
+		if ex.Where != nil {
+			if err := wc.emitExpr(c, ex.Where, wasmTypeInfo{kind: wkCond}); err != nil {
+				return err
+			}
+			c.ifOp(wasmI64)
+			if err := emitCloneAndUpdate(); err != nil {
+				return err
+			}
+			c.op(opElse)
+			c.localGet(elI64)
+			c.op(opEnd)
+		} else {
+			if err := emitCloneAndUpdate(); err != nil {
+				return err
+			}
+		}
+		c.call(wc.rt.fnListPush)
+		c.localSet(outList)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(iLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+		c.localGet(outList)
+		return nil
+
 	case *UnaryExpr:
 		if ex.Op == "not" {
 			if err := wc.emitExpr(c, ex.Right, wasmTypeInfo{kind: wkCond}); err != nil {

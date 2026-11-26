@@ -443,6 +443,16 @@ type WhereExpr struct {
 
 func (*WhereExpr) exprNode() {}
 
+// UpdateExpr returns a new list of records with specified fields updated on all or matching items.
+type UpdateExpr struct {
+	posInfo
+	Target  Expr
+	Where   Expr
+	Updates []WithFieldUpdate
+}
+
+func (*UpdateExpr) exprNode() {}
+
 type CallExpr struct {
 	posInfo
 	Module string

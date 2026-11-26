@@ -827,6 +827,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *WhereExpr:
 		return v.inferExprTypeState(ex.Target)
+	case *UpdateExpr:
+		return v.inferExprTypeState(ex.Target)
 	case *MatchExpr:
 		return v.inferMatchExprTypeState(ex)
 	case *SwarmLoopExpr:
@@ -1605,14 +1607,24 @@ func (v *typeValidator) checkExpr(e Expr) error {
 			return nil
 		}
 		if baseSt.listElemType != "" {
-			if !v.inErrorTestExpr && (baseSt.listElemType == "number" || baseSt.listElemType == "text") {
+			if !v.inErrorTestExpr {
+				if baseSt.listElemType == "number" || baseSt.listElemType == "text" {
+					return newError(
+						"TypeError",
+						ex.Line,
+						ex.Col,
+						v.source,
+						fmt.Sprintf("Cannot use 'with' on list of %s", baseSt.listElemType),
+						"'with' on a list only supports '.<index> = <val>'; use 'update <list> with ...' for record lists.",
+					)
+				}
 				return newError(
 					"TypeError",
 					ex.Line,
 					ex.Col,
 					v.source,
-					fmt.Sprintf("Cannot use 'with' on list of %s", baseSt.listElemType),
-					"'with' on a list only supports lists of 'def' records.",
+					"Cannot use bare 'with' on a list of records",
+					"Write 'update <list> with <field> = <val>' to update all items, or 'update <list> where <cond> with <field> = <val>' to update matching items.",
 				)
 			}
 			withScope := v.pushScope()
@@ -1633,9 +1645,6 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					break
 				}
 			}
-			if updErr == nil && !v.inErrorTestExpr && v.defs[baseSt.listElemType] != nil {
-				updErr = v.checkRecordWithUpdates(baseSt.listElemType, ex.Updates, ex.Line, ex.Col)
-			}
 			v.loopDepth--
 			v.popScope()
 			return updErr
@@ -1654,6 +1663,79 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		if !v.inErrorTestExpr && baseSt.exactRecord != "" && v.defs[baseSt.exactRecord] != nil {
 			return v.checkRecordWithUpdates(baseSt.exactRecord, ex.Updates, ex.Line, ex.Col)
 		}
+
+	case *UpdateExpr:
+		if err := v.checkExpr(ex.Target); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(ex.Target); err != nil {
+			return err
+		}
+		if err := v.checkNotVoidValue(ex.Target); err != nil {
+			return err
+		}
+		targetSt := v.inferExprTypeState(ex.Target)
+		if !v.inErrorTestExpr {
+			if targetSt.exactRecord != "" || targetSt.exactNonRecord || targetSt.unionName != "" || targetSt.inboxElemType != "" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"Cannot use 'update' on non-list value",
+					"'update' requires a list of 'def' records, e.g.: update users where it.role is \"guest\" with role = \"member\".",
+				)
+			}
+			if targetSt.listElemType != "" && v.defs[targetSt.listElemType] == nil {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					fmt.Sprintf("'update' requires a list of 'def' records, got list of %s", targetSt.listElemType),
+					"Construct a record list with 'list as <def> with ... end' or 'list rec1, rec2'.",
+				)
+			}
+		}
+		updateScope := v.pushScope()
+		if targetSt.listElemType != "" {
+			updateScope.vars["it"] = v.typeStateFromName(targetSt.listElemType)
+		} else {
+			updateScope.vars["it"] = varTypeState{}
+		}
+		v.loopDepth++
+		var updErr error
+		if ex.Where != nil {
+			if err := v.checkExpr(ex.Where); err != nil {
+				updErr = err
+			} else if err := v.checkMustBeCondition(ex.Where, "update ... where"); err != nil {
+				updErr = err
+			} else {
+				v.applyCondNarrowing(updateScope, ex.Where, true)
+			}
+		}
+		if updErr == nil {
+			for _, upd := range ex.Updates {
+				if err := v.checkExpr(upd.Value); err != nil {
+					updErr = err
+					break
+				}
+				if err := v.checkNotCondition(upd.Value); err != nil {
+					updErr = err
+					break
+				}
+				if err := v.checkNotVoidValue(upd.Value); err != nil {
+					updErr = err
+					break
+				}
+			}
+		}
+		if updErr == nil && !v.inErrorTestExpr && targetSt.listElemType != "" && v.defs[targetSt.listElemType] != nil {
+			updErr = v.checkRecordWithUpdates(targetSt.listElemType, ex.Updates, ex.Line, ex.Col)
+		}
+		v.loopDepth--
+		v.popScope()
+		return updErr
 
 	case *WhereExpr:
 		if err := v.checkExpr(ex.Target); err != nil {

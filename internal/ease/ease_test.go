@@ -1950,17 +1950,17 @@ test "where filters and batch-with using it"
     count server_errs is 1
     server_errs.1 is e2
 
-    # Batch-with using it and it.index
+    # Batch update using it and it.index
     cloud = list as particle with
         x = 10, vx = 5
         x = 20, vx = -3
     end
-    moved = cloud with x = it.x + it.vx
+    moved = update cloud with x = it.x + it.vx
     moved.1.x is 15
     moved.2.x is 17
     cloud.1.x is 10
 
-    indexed = cloud with x = it.index * 100
+    indexed = update cloud with x = it.index * 100
     indexed.1.x is 100
     indexed.2.x is 200
 end
@@ -1989,8 +1989,8 @@ end
 			want: "Cannot use 'where' on",
 		},
 		{
-			name: "batch-with without it prefix fails",
-			src:  "def particle\n  x = 0\n  vx = 0\nend\ncloud = list as particle with\n  x = 1, vx = 2\nend\nmoved = cloud with x = x + vx\n",
+			name: "update without it prefix fails",
+			src:  "def particle\n  x = 0\n  vx = 0\nend\ncloud = list as particle with\n  x = 1, vx = 2\nend\nmoved = update cloud with x = x + vx\n",
 			want: "Unknown variable \"x\"",
 		},
 	}

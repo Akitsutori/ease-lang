@@ -609,6 +609,8 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 		return wasmTypeInfo{kind: wkCond}
 	case *WhereExpr:
 		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
+	case *UpdateExpr:
+		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
 	case *CallExpr:
 		if ex.Module != "" {
 			if fi := wc.funcs[ex.Module+":"+ex.Callee]; fi != nil {

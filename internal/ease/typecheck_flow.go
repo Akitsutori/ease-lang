@@ -1031,6 +1031,12 @@ func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
 			for _, c := range ex.Conditions {
 				collectReadsExpr(c)
 			}
+		case *UpdateExpr:
+			collectReadsExpr(ex.Target)
+			collectReadsExpr(ex.Where)
+			for _, u := range ex.Updates {
+				collectReadsExpr(u.Value)
+			}
 		case *MatchExpr:
 			collectReadsExpr(ex.Target)
 			for _, arm := range ex.Arms {

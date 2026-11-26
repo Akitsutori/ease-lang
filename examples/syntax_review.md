@@ -107,7 +107,7 @@ This overview tracks each syntax rule in [`README.md`](../README.md) with **1 ha
   10. Wrong JSON shape / field type (`arr = '[1, 2]' as json; arr as api_user`, `bad = '{"id": "abc", ...}' as json; bad as api_user` -> `is error` in `.ease`)
 
 ## 8. Lists, Dot Indexing, `where` Filters, Batch `with` & Loops (`README.md`)
-- **Happy Path**: `list 10, 25, 40`, `scores.1`, `scores.(it.index)`, `scores with .1 = 99`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|json|csv|bytes]`, `save path data [as text|json|csv|bytes]`, `row.1`, `row.("Header")`, `cloud with x = it.x + it.vx`, `loop ... end` (`it.index` 1-based, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
+- **Happy Path**: `list 10, 25, 40`, `scores.1`, `scores.(it.index)`, `scores with .1 = 99`, `list as number`, `list as player with ... end`, `orders where it.status is "paid" and it.amount > 50`, `orders where ... end`, `users where contains it.email "@example.com"`, `split`/`join`/`trim`/`replace`, `load path [as text|json|csv|bytes]`, `save path data [as text|json|csv|bytes]`, `row.1`, `row.("Header")`, `update cloud with x = it.x + it.vx`, `update cloud where it.state is "active" with x = it.x + it.vx`, `loop ... end` (`it.index` 1-based, `check ... -> end`), `loop range 1 10`, `loop xs ... end` (`it`, `it.index`, `check ... -> end`)
 - **10 Negative Cases**:
   1. Legacy list literal `[1, 2, 3]`
   2. Legacy indexing `scores[0]` or 0-based `.0` (`scores.0`, `scores with .0 = 1` -> `SyntaxError`)

@@ -273,6 +273,12 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 			for _, iu := range ex.IndexUpdates {
 				collectDeps(iu.Value, ownerIdx)
 			}
+		case *UpdateExpr:
+			collectDeps(ex.Target, ownerIdx)
+			collectDeps(ex.Where, ownerIdx)
+			for _, u := range ex.Updates {
+				collectDeps(u.Value, ownerIdx)
+			}
 		case *ListExpr:
 			for _, el := range ex.Elements {
 				collectDeps(el, ownerIdx)
@@ -1382,6 +1388,24 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			)
 		}
 		return ev.cloneRecordWithUpdates(rec, e.Updates, env)
+
+	case *UpdateExpr:
+		targetVal, err := ev.EvalExpr(e.Target, env)
+		if err != nil {
+			return nil, err
+		}
+		lv, ok := targetVal.(*ListValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("Cannot use 'update' on %s", TypeName(targetVal)),
+				"'update' requires a list of 'def' records, e.g.: update users where it.role is \"guest\" with role = \"member\".",
+			)
+		}
+		return ev.evalUpdateRecordList(lv, e.Where, e.Updates, env, e.Line, e.Col)
 
 	case *WhereExpr:
 		targetVal, err := ev.EvalExpr(e.Target, env)

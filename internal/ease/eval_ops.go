@@ -120,6 +120,27 @@ func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse b
 }
 
 func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFieldUpdate, env *Env, line, col int) (*ListValue, error) {
+	if lv.ElemType == "number" || lv.ElemType == "text" {
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Cannot use 'with' on list of %s", lv.ElemType),
+			"'with' on a list only supports '.<index> = <val>'; use 'update <list> with ...' for record lists.",
+		)
+	}
+	return nil, newError(
+		"TypeError",
+		line,
+		col,
+		ev.source,
+		"Cannot use bare 'with' on a list of records",
+		"Write 'update <list> with <field> = <val>' to update all items, or 'update <list> where <cond> with <field> = <val>' to update matching items.",
+	)
+}
+
+func (ev *Evaluator) evalUpdateRecordList(lv *ListValue, whereExpr Expr, updates []WithFieldUpdate, env *Env, line, col int) (*ListValue, error) {
 	if len(lv.Elements) == 0 {
 		if lv.ElemType == "" {
 			return nil, newError(
@@ -127,8 +148,8 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 				line,
 				col,
 				ev.source,
-				"Cannot use 'with' on empty untyped list",
-				"'with' on a list only supports lists of 'def' records.",
+				"Cannot use 'update' on empty untyped list",
+				"'update' requires a list of 'def' records (e.g. 'list as <def>').",
 			)
 		}
 		if lv.ElemType == "number" || lv.ElemType == "text" {
@@ -137,8 +158,8 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("Cannot use 'with' on list of %s", lv.ElemType),
-				"'with' on a list only supports lists of 'def' records.",
+				fmt.Sprintf("'update' requires a list of 'def' records, got list of %s", lv.ElemType),
+				"Construct a record list with 'list as <def> with ... end' or 'list rec1, rec2'.",
 			)
 		}
 		protoVal, ok := lookupTypeInEnv(env, lv.ElemType)
@@ -152,8 +173,8 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("Cannot use 'with' on list of %s", lv.ElemType),
-				"'with' on a list only supports lists of 'def' records.",
+				fmt.Sprintf("'update' requires a list of 'def' records, got list of %s", lv.ElemType),
+				"Construct a record list with 'list as <def> with ... end' or 'list rec1, rec2'.",
 			)
 		}
 		for _, upd := range updates {
@@ -181,8 +202,8 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 				line,
 				col,
 				ev.source,
-				fmt.Sprintf("Cannot use 'with' on list of %s", structuredTypeName(item)),
-				"'with' on a list only supports lists of 'def' records.",
+				fmt.Sprintf("'update' requires a list of 'def' records, got list of %s", structuredTypeName(item)),
+				"Construct a record list with 'list as <def> with ... end' or 'list rec1, rec2'.",
 			)
 		}
 		if elemType == "" {
@@ -191,6 +212,31 @@ func (ev *Evaluator) cloneRecordListWithUpdates(lv *ListValue, updates []WithFie
 		itemEnv := NewEnv(env)
 		itemEnv.Define("it", rec, false)
 		itemEnv.SetLoopIndex(float64(idx + 1))
+
+		shouldUpdate := true
+		if whereExpr != nil {
+			condVal, err := ev.EvalExpr(whereExpr, itemEnv)
+			if err != nil {
+				return nil, err
+			}
+			b, isBool := condVal.(bool)
+			if !isBool {
+				cLine, cCol := whereExpr.Pos()
+				return nil, newError(
+					"TypeError",
+					cLine,
+					cCol,
+					ev.source,
+					fmt.Sprintf("'update ... where' requires a condition (e.g. 'x > 0' or 'x is ...'), got %s", TypeName(condVal)),
+					"Write a comparison or membership test after 'where'.",
+				)
+			}
+			shouldUpdate = b
+		}
+		if !shouldUpdate {
+			out = append(out, rec)
+			continue
+		}
 		inst, err := ev.cloneRecordWithUpdates(rec, updates, itemEnv)
 		if err != nil {
 			return nil, err

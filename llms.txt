@@ -88,7 +88,7 @@ users = list as user with
     id = 1, name = "Aria"
     id = 2, name = "Bram", role = "admin"
 end
-promoted = users with role = "admin"
+promoted = update users where it.role is "guest" with role = "admin"
 raw_map = '{"id": 7, "name": "Guest", "role": "admin"}' as json
 parsed = raw_map as user
 err_map = '{"code": 503, "message": "Unavailable"}' as json
@@ -137,7 +137,7 @@ end
   - **Text & Lists**: `count list_or_text` (runes for `text`), `range start end` (inclusive, empty if `start > end`), `append xs item_or_list` (returns new list), `slice list_or_text start end` (1-based, both bounds inclusive, runes for `text`, clamps bounds to `1..len`, empty if out of order), `split txt sep`, `join text_list sep`, `trim txt`, `upper txt`, `lower txt`, `replace txt old new` (`old` != `""`), `contains txt_or_list item` (condition on `text` or atomic `list`), `sum num_list`, `avg num_list` (errors if empty), `sort num_or_text_list`
   - **Formats & Files**: `<val_or_txt> as json` / `as csv`, `load path [as text|json|csv|bytes]` (50 MB max; `csv` -> `list<map>` with `it.1` / `it.("Col")` / `it as <def>`; `bytes` -> `0..255` list), `save path data [as text|json|csv|bytes]` (`void` statement; `as <format>` required for non-`text`; `as bytes` valid only with `load`/`save`)
   - **Inbox (void statements!)**: `put box val`, `close box` (like `synth:play`, pure statements with no return value — never assign or pass as values!)
-- **Lists, vectors, `where`, record/batch/index `with`**: Numeric lists support element-wise `+`, `-`, `*`, `/`, `%` and scalar broadcasting (`prices * 1.19 + shipping`). `<list> where <cond>` (single-line or `where ... end` block with union narrowing on `it`) filters; `<rec> with field = val` (no dot) updates a record, `<list> with field = expr` updates records uniformly (`it`, `it.index` `1..N`), and `<list> with .1 = val` (dot, or `.(expr)`) updates 1-based list elements.
+- **Lists, vectors, `where`, `with` & `update`**: Numeric lists support element-wise `+`, `-`, `*`, `/`, `%` and scalar broadcasting (`prices * 1.19 + shipping`). `<list> where <cond>` (single-line or `where ... end` block with union narrowing on `it`) filters; `<rec> with field = val` updates a record, `<list> with .1 = val` (or `.(expr)`) updates a 1-based list element, and `update <list> [where <cond>] with field = expr` immutably updates matching `def` records (`it`, `it.index` `1..N`; bare `<rec_list> with field = val` is rejected).
 - **Tests (`test "label" ... end`)**: Write assertions directly without `check` (`add 2 3 is 5`); every non-`void` expression line must be an assertion (assign `res = fn ...` to discard a return value, else `got <type> instead of condition`). Supports assignments, `loop`, `check <cond> ... end` for conditional setup/narrowing, `is` / `is not` (`res is MyRec` narrows `res`), `expr is error` / `expr is not error`, and `expr -> error.type is "..." / error.message is "..." end`.
 - **Limits**: `maxListSize = 1_000_000` (`range`, `append`, `split`), `maxHTTPBodyBytes = 10 MB`, `maxCallDepth = 256`, `defaultInboxCapacity = 64`, `load` max `50 MB`.
 - **File modules & Standard library (`import network`, `screen`, `random`, `synth`, `system`)**: `import "./file.ease" as mod` (relative paths only; `mod:verb`, `mod.def` / `mod.const`; module `test` blocks skipped). Internal `std/` primitives (`http_call`, `net_*`, `screen_open`, `screen_present`, `rand_*`, `synth_play`, `sys_*`) are private and rejected in user code:
