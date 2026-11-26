@@ -2868,3 +2868,121 @@ end
 		})
 	}
 }
+
+func TestSortByMultiKeyAndUnionOrder(t *testing.T) {
+	src := `
+def Priority = "urgent" | "routine" | "low"
+
+def patient
+    name     = ""
+    priority = Priority
+    hat      = "orange" | "blue"
+    age      = 0
+end
+
+to order_queue items -> sort items by it.priority, -it.age, it.name
+
+test "sort by multi-key, stability, union declaration order, and CSV map"
+    q = list as patient with
+        name = "Zoe", priority = "low", hat = "blue", age = 30
+        name = "Bob", priority = "urgent", hat = "orange", age = 40
+        name = "Ada", priority = "urgent", hat = "blue", age = 40
+        name = "Max", priority = "routine", hat = "orange", age = 25
+    end
+
+    # 1. Union declaration order (urgent < routine < low), then -age, then name
+    ordered = order_queue q
+    ordered.1.name is "Ada"
+    ordered.2.name is "Bob"
+    ordered.3.name is "Max"
+    ordered.4.name is "Zoe"
+    # Input list remains unmodified
+    q.1.name is "Zoe"
+
+    # 2. Inline union declaration order ("orange" before "blue") vs explicit 'as text' (lexicographical "blue" before "orange")
+    by_hat = sort q by it.hat
+    by_hat.1.hat is "orange"
+    by_hat.3.hat is "blue"
+    by_hat_az = sort q by (it.hat as text)
+    by_hat_az.1.hat is "blue"
+
+    # 3. Stability on full tie (preserves original relative order)
+    ties = list as patient with
+        name = "First", priority = "urgent", age = 50
+        name = "Second", priority = "urgent", age = 50
+    end
+    stable = sort ties by it.priority
+    stable.1.name is "First"
+    stable.2.name is "Second"
+
+    # 4. Works on list<map> (CSV) and with it.index / plain variable named 'by'
+    rows = "item,price\npen,3\nbook,12\npad,1\n" as csv
+    cheap = sort rows by (it.("price") as number)
+    cheap.1.item is "pad"
+    cheap.3.item is "book"
+
+    by = 10
+    by is 10
+    (sort (q where it.priority is "urgent") by it.name).1.name is "Ada"
+end
+`
+	report, err := RunChecks(src)
+	if err != nil {
+		t.Fatalf("RunChecks failed: %v", err)
+	}
+	if report.Failed != 0 || report.Passed != 14 {
+		t.Fatalf("expected 14 passed / 0 failed, got %+v", report)
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "sort by non-list rejected",
+			src:      "x = sort 42 by it\n",
+			wantSubs: []string{"TypeError", "'sort ... by' requires a list"},
+		},
+		{
+			name:     "sort by condition key rejected",
+			src:      "def p\n  x = 0\nend\nxs = list as p\ny = sort xs by it.x > 0\n",
+			wantSubs: []string{"TypeError", "Conditions cannot be stored or printed"},
+		},
+		{
+			name:     "sort by record key rejected",
+			src:      "def p\n  x = 0\nend\nxs = list as p\ny = sort xs by it\n",
+			wantSubs: []string{"TypeError", "'sort ... by' key must be number, text, or a scalar union"},
+		},
+		{
+			name:     "sort by mixed number|text union rejected",
+			src:      "def M = number | text\ndef p\n  v = M\nend\nxs = list as p\ny = sort xs by it.v\n",
+			wantSubs: []string{"TypeError", "Cannot sort by mixed or record-containing union key"},
+		},
+		{
+			name:     "sort by missing key expression",
+			src:      "xs = list 1, 2\ny = sort xs by\n",
+			wantSubs: []string{"SyntaxError", "Expected sort key expression after 'by'"},
+		},
+		{
+			name:     "sort = 1 still rejected as built-in collision",
+			src:      "sort = 1\n",
+			wantSubs: []string{"TypeError", "built-in function"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}

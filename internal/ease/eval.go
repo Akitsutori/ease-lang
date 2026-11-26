@@ -279,6 +279,11 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 			for _, u := range ex.Updates {
 				collectDeps(u.Value, ownerIdx)
 			}
+		case *SortByExpr:
+			collectDeps(ex.Target, ownerIdx)
+			for _, k := range ex.Keys {
+				collectDeps(k, ownerIdx)
+			}
 		case *ListExpr:
 			for _, el := range ex.Elements {
 				collectDeps(el, ownerIdx)
@@ -1406,6 +1411,24 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 			)
 		}
 		return ev.evalUpdateRecordList(lv, e.Where, e.Updates, env, e.Line, e.Col)
+
+	case *SortByExpr:
+		targetVal, err := ev.EvalExpr(e.Target, env)
+		if err != nil {
+			return nil, err
+		}
+		lv, ok := targetVal.(*ListValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("'sort ... by' requires a list, got %s", TypeName(targetVal)),
+				"Write: sort <list> by <key1> [, <key2> ...]",
+			)
+		}
+		return ev.evalSortByList(lv, e.Keys, env, e.Line, e.Col)
 
 	case *WhereExpr:
 		targetVal, err := ev.EvalExpr(e.Target, env)

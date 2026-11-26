@@ -88,6 +88,7 @@ type wasmCompiler struct {
 	rt         *wasmRuntime
 	records    map[string]*wasmRecordLayout
 	unions     map[string]*wasmUnionLayout
+	unionDecls map[string]*UnionDecl
 	consts     map[string]*ConstDeclStmt
 	funcs      map[string]*wasmFuncInfo
 	globals    map[string]wasmVarSlot
@@ -147,15 +148,16 @@ func CompileProgramToWasm(source, filePath string) ([]byte, error) {
 	mod := newWasmModule(wasmStaticBase, 4) // 256 KB initial memory
 	rt := newWasmRuntime(mod)
 	wc := &wasmCompiler{
-		prog:    prog,
-		mod:     mod,
-		rt:      rt,
-		records: make(map[string]*wasmRecordLayout),
-		unions:  make(map[string]*wasmUnionLayout),
-		consts:  make(map[string]*ConstDeclStmt),
-		funcs:   make(map[string]*wasmFuncInfo),
-		globals: make(map[string]wasmVarSlot),
-		modules: make(map[string]*Program),
+		prog:       prog,
+		mod:        mod,
+		rt:         rt,
+		records:    make(map[string]*wasmRecordLayout),
+		unions:     make(map[string]*wasmUnionLayout),
+		unionDecls: make(map[string]*UnionDecl),
+		consts:     make(map[string]*ConstDeclStmt),
+		funcs:      make(map[string]*wasmFuncInfo),
+		globals:    make(map[string]wasmVarSlot),
+		modules:    make(map[string]*Program),
 	}
 
 	if err := wc.compile(); err != nil {
@@ -340,6 +342,7 @@ func (wc *wasmCompiler) registerUnion(name string, u *UnionDecl, prefix string) 
 	if _, exists := wc.unions[name]; exists {
 		return
 	}
+	wc.unionDecls[name] = u
 	ul := &wasmUnionLayout{name: name}
 	for i, ve := range u.Variants {
 		tag := int32(i + 1)
@@ -499,6 +502,99 @@ func (wc *wasmCompiler) inferStaticExprType(e Expr, modPrefix string) wasmTypeIn
 	return wc.inferExprTypeWithEnv(e, nil, modPrefix)
 }
 
+func (wc *wasmCompiler) closedLiteralUnionVariants(recName, fieldName string) ([]wasmUnionVariant, bool) {
+	lay := wc.records[recName]
+	if lay == nil {
+		return nil, false
+	}
+	rf, ok := lay.byName[fieldName]
+	if !ok || rf.def == nil {
+		return nil, false
+	}
+
+	modPrefix := ""
+	if dot := strings.LastIndex(recName, "."); dot > 0 {
+		modPrefix = recName[:dot+1]
+	}
+
+	visiting := make(map[string]bool)
+	var expandExprs func(exprs []Expr, pfx string) ([]wasmUnionVariant, bool)
+	expandExprs = func(exprs []Expr, pfx string) ([]wasmUnionVariant, bool) {
+		var out []wasmUnionVariant
+		for _, ve := range exprs {
+			switch ex := ve.(type) {
+			case *StringExpr:
+				out = append(out, wasmUnionVariant{kind: wkText, lit: ex.Value})
+			case *NumberExpr:
+				out = append(out, wasmUnionVariant{kind: wkNum, num: ex.Value})
+			case *UnaryExpr:
+				if ex.Op == "-" {
+					if n, isNum := ex.Right.(*NumberExpr); isNum {
+						out = append(out, wasmUnionVariant{kind: wkNum, num: -n.Value})
+						continue
+					}
+				}
+				return nil, false
+			case *IdentExpr:
+				if ex.Name == "text" || ex.Name == "number" {
+					return nil, false
+				}
+				uName := pfx + ex.Name
+				ud := wc.unionDecls[uName]
+				if ud == nil {
+					uName = ex.Name
+					ud = wc.unionDecls[uName]
+				}
+				if ud == nil || visiting[uName] {
+					return nil, false
+				}
+				visiting[uName] = true
+				subPfx := ""
+				if dot := strings.LastIndex(uName, "."); dot > 0 {
+					subPfx = uName[:dot+1]
+				}
+				sub, ok := expandExprs(ud.Variants, subPfx)
+				delete(visiting, uName)
+				if !ok {
+					return nil, false
+				}
+				out = append(out, sub...)
+			case *FieldExpr:
+				id, ok := ex.Target.(*IdentExpr)
+				if !ok {
+					return nil, false
+				}
+				uName := id.Name + "." + ex.Field
+				ud := wc.unionDecls[uName]
+				if ud == nil || visiting[uName] {
+					return nil, false
+				}
+				visiting[uName] = true
+				sub, ok := expandExprs(ud.Variants, id.Name+".")
+				delete(visiting, uName)
+				if !ok {
+					return nil, false
+				}
+				out = append(out, sub...)
+			default:
+				return nil, false
+			}
+		}
+		return out, len(out) > 0
+	}
+
+	if len(rf.def.Allowed) > 0 {
+		return expandExprs(rf.def.Allowed, modPrefix)
+	}
+	if rf.def.Default != nil {
+		switch rf.def.Default.(type) {
+		case *IdentExpr, *FieldExpr:
+			return expandExprs([]Expr{rf.def.Default}, modPrefix)
+		}
+	}
+	return nil, false
+}
+
 func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo, modPrefix string) wasmTypeInfo {
 	if e == nil {
 		return wasmTypeInfo{kind: wkVoid}
@@ -610,6 +706,8 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 	case *WhereExpr:
 		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
 	case *UpdateExpr:
+		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
+	case *SortByExpr:
 		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
 	case *CallExpr:
 		if ex.Module != "" {

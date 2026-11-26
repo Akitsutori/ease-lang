@@ -547,3 +547,37 @@ say "{cloud.1.x}:{all_shifted.1.x}:{all_shifted.2.x}:{active_only.1.x}:{active_o
 		t.Fatalf("unexpected WASM update output: %+v", res.Prints)
 	}
 }
+
+func TestWasmSortLexicographicalAndSortBy(t *testing.T) {
+	src := `
+def Priority = "urgent" | "routine" | "low"
+
+def task
+    name     = ""
+    priority = Priority
+    score    = 0
+end
+
+# 1. Lexicographical text sort (not length sort)
+words = sort (list "b", "aa", "a")
+
+# 2. Multi-key sort with named union declaration order, negative numeric tie-breaker, and stability
+tasks = list as task with
+    name = "Zoe", priority = "low", score = 10
+    name = "Bob", priority = "urgent", score = 50
+    name = "Ada", priority = "urgent", score = 50
+    name = "Max", priority = "routine", score = 30
+end
+
+ordered = sort tasks by it.priority, -it.score
+say "{words.1},{words.2},{words.3}|{ordered.1.name},{ordered.2.name},{ordered.3.name},{ordered.4.name}"
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, "[]", 1)
+	if len(res.Prints) != 1 || res.Prints[0] != "a,aa,b|Bob,Ada,Max,Zoe" {
+		t.Fatalf("unexpected WASM sort output: %+v", res.Prints)
+	}
+}

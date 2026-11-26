@@ -453,6 +453,15 @@ type UpdateExpr struct {
 
 func (*UpdateExpr) exprNode() {}
 
+// SortByExpr returns a stably sorted copy of a list ordered by one or more key projections.
+type SortByExpr struct {
+	posInfo
+	Target Expr
+	Keys   []Expr
+}
+
+func (*SortByExpr) exprNode() {}
+
 type CallExpr struct {
 	posInfo
 	Module string

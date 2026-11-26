@@ -534,6 +534,48 @@ func (p *Parser) parsePostfix() (Expr, error) {
 					return nil, err
 				}
 				line, col := id.Pos()
+				if id.Name == "sort" && p.check(TOK_IDENT) && p.current().Lexeme == "by" {
+					p.advance() // consume `by`
+					var keys []Expr
+					prevAs := p.disallowAs
+					prevWhere := p.disallowWhere
+					prevInCallArg := p.inCallArg
+					p.disallowAs = false
+					p.disallowWhere = true
+					p.inCallArg = false
+					for {
+						if p.isCallArgBoundary() {
+							p.disallowAs = prevAs
+							p.disallowWhere = prevWhere
+							p.inCallArg = prevInCallArg
+							cur := p.current()
+							return nil, newError(
+								"SyntaxError",
+								cur.Line,
+								cur.Col,
+								p.source,
+								"Expected sort key expression after 'by'",
+								"Write: sort <list> by <key1> [, <key2> ...]",
+							)
+						}
+						keyExpr, err := p.parseExpr()
+						if err != nil {
+							p.disallowAs = prevAs
+							p.disallowWhere = prevWhere
+							p.inCallArg = prevInCallArg
+							return nil, err
+						}
+						keys = append(keys, keyExpr)
+						if !p.match(TOK_COMMA) {
+							break
+						}
+					}
+					p.disallowAs = prevAs
+					p.disallowWhere = prevWhere
+					p.inCallArg = prevInCallArg
+					expr = &SortByExpr{posInfo: posInfo{Line: line, Col: col}, Target: args[0], Keys: keys}
+					continue
+				}
 				expr = &CallExpr{posInfo: posInfo{Line: line, Col: col}, Callee: id.Name, Args: args}
 				continue
 			}

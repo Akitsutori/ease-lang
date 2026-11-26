@@ -1317,6 +1317,339 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		c.localGet(outList)
 		return nil
 
+	case *SortByExpr:
+		lt := wc.inferExprTypeWithEnv(ex.Target, wc.curEnvTypes(), "")
+		srcList := wc.allocLocal(wasmI32)
+		outList := wc.allocLocal(wasmI32)
+		nLocal := wc.allocLocal(wasmI32)
+		srcData := wc.allocLocal(wasmI32)
+		outData := wc.allocLocal(wasmI32)
+
+		if err := wc.emitExpr(c, ex.Target, lt); err != nil {
+			return err
+		}
+		c.localTee(srcList)
+		c.memOp(opI32Load, 2, 4)
+		c.localTee(nLocal)
+		c.call(wc.rt.fnListNew)
+		c.localTee(outList)
+		c.memOp(opI32Load, 2, 0)
+		c.localTee(outData)
+		c.localGet(srcList)
+		c.memOp(opI32Load, 2, 0)
+		c.localTee(srcData)
+		c.localGet(nLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.call(wc.rt.fnMemcpy)
+		c.localGet(outList)
+		c.localGet(nLocal)
+		c.memOp(opI32Store, 2, 4)
+
+		elemType := wasmTypeInfo{kind: lt.elemKind, name: lt.name}
+		if elemType.kind == wkVoid {
+			elemType.kind = wkNum
+		}
+		itSlot := wc.ensureVar("it", elemType)
+		idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+
+		kCount := len(ex.Keys)
+		keyBufs := make([]uint32, kCount)
+		keyIsText := make([]bool, kCount)
+		savedKeys := make([]uint32, kCount)
+		for m := 0; m < kCount; m++ {
+			keyBufs[m] = wc.allocLocal(wasmI32)
+			savedKeys[m] = wc.allocLocal(wasmI64)
+			c.localGet(nLocal)
+			c.i32Const(1)
+			c.op(opI32Add) // avoid 0-byte alloc
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.call(wc.rt.fnAlloc)
+			c.localSet(keyBufs[m])
+		}
+
+		// Pre-evaluate all K keys once per element.
+		iLocal := wc.allocLocal(wasmI32)
+		c.i32Const(0)
+		c.localSet(iLocal)
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(iLocal)
+		c.localGet(nLocal)
+		c.op(opI32GeS)
+		c.brIf(1)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.op(opF64ConvertI32S)
+		wc.emitSetVar(c, idxSlot)
+
+		c.localGet(outData)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		switch elemType.wasmStorageType() {
+		case wasmF64:
+			c.op(opF64ReinterpretI64)
+		case wasmI32:
+			c.op(opI32WrapI64)
+		}
+		wc.emitSetVar(c, itSlot)
+
+		for m, keyExpr := range ex.Keys {
+			c.localGet(keyBufs[m])
+			c.localGet(iLocal)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+
+			var closedVars []wasmUnionVariant
+			isClosedUnion := false
+			if fe, isField := keyExpr.(*FieldExpr); isField {
+				ft := wc.inferExprTypeWithEnv(fe.Target, wc.curEnvTypes(), "")
+				if ft.kind == wkRec && ft.name != "" {
+					closedVars, isClosedUnion = wc.closedLiteralUnionVariants(ft.name, fe.Field)
+				}
+			}
+
+			if isClosedUnion {
+				keyIsText[m] = false
+				kt := wc.inferExprTypeWithEnv(keyExpr, wc.curEnvTypes(), "")
+				if kt.kind == wkText || (len(closedVars) > 0 && closedVars[0].kind == wkText) {
+					valI64 := wc.allocLocal(wasmI64)
+					if err := wc.emitExpr(c, keyExpr, wasmTypeInfo{kind: wkText}); err != nil {
+						return err
+					}
+					c.localSet(valI64)
+					idxF64 := wc.allocLocal(wasmF64)
+					c.f64Const(0)
+					c.localSet(idxF64)
+					for uIdx, uv := range closedVars {
+						c.localGet(valI64)
+						c.i64Const(int64(wc.mod.internString(uv.lit)))
+						c.call(wc.rt.fnStrEq)
+						c.ifOp(wasmBlockVoid)
+						c.f64Const(float64(uIdx))
+						c.localSet(idxF64)
+						c.op(opEnd)
+					}
+					c.localGet(idxF64)
+					c.op(opI64ReinterpretF64)
+				} else {
+					valF64 := wc.allocLocal(wasmF64)
+					if err := wc.emitExpr(c, keyExpr, wasmTypeInfo{kind: wkNum}); err != nil {
+						return err
+					}
+					c.localSet(valF64)
+					idxF64 := wc.allocLocal(wasmF64)
+					c.f64Const(0)
+					c.localSet(idxF64)
+					for uIdx, uv := range closedVars {
+						c.localGet(valF64)
+						c.f64Const(uv.num)
+						c.op(opF64Eq)
+						c.ifOp(wasmBlockVoid)
+						c.f64Const(float64(uIdx))
+						c.localSet(idxF64)
+						c.op(opEnd)
+					}
+					c.localGet(idxF64)
+					c.op(opI64ReinterpretF64)
+				}
+			} else {
+				kt := wc.inferExprTypeWithEnv(keyExpr, wc.curEnvTypes(), "")
+				keyIsText[m] = (kt.kind == wkText)
+				if kt.kind == wkText {
+					if err := wc.emitExpr(c, keyExpr, wasmTypeInfo{kind: wkText}); err != nil {
+						return err
+					}
+				} else {
+					if err := wc.emitExpr(c, keyExpr, wasmTypeInfo{kind: wkNum}); err != nil {
+						return err
+					}
+					c.op(opI64ReinterpretF64)
+				}
+			}
+			c.memOp(opI64Store, 3, 0)
+		}
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(iLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+
+		// Stable insertion sort on outData + keyBufs in lockstep.
+		jLocal := wc.allocLocal(wasmI32)
+		savedEl := wc.allocLocal(wasmI64)
+		curKey := wc.allocLocal(wasmI64)
+		cmpRes := wc.allocLocal(wasmI32)
+
+		c.i32Const(1)
+		c.localSet(iLocal)
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(iLocal)
+		c.localGet(nLocal)
+		c.op(opI32GeS)
+		c.brIf(1)
+
+		c.localGet(outData)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		c.localSet(savedEl)
+		for m := 0; m < kCount; m++ {
+			c.localGet(keyBufs[m])
+			c.localGet(iLocal)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+			c.memOp(opI64Load, 3, 0)
+			c.localSet(savedKeys[m])
+		}
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Sub)
+		c.localSet(jLocal)
+
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(jLocal)
+		c.i32Const(0)
+		c.op(opI32LtS)
+		c.brIf(1)
+
+		// Multi-key comparison: set cmpRes = -1 / 0 / 1 across keys 0..K-1.
+		c.i32Const(0)
+		c.localSet(cmpRes)
+		for m := 0; m < kCount; m++ {
+			c.localGet(cmpRes)
+			c.op(opI32Eqz)
+			c.ifOp(wasmBlockVoid)
+			c.localGet(keyBufs[m])
+			c.localGet(jLocal)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+			c.memOp(opI64Load, 3, 0)
+			c.localSet(curKey)
+			if keyIsText[m] {
+				c.localGet(curKey)
+				c.localGet(savedKeys[m])
+				c.call(wc.rt.fnStrCmp)
+				c.localSet(cmpRes)
+			} else {
+				c.localGet(curKey)
+				c.op(opF64ReinterpretI64)
+				c.localGet(savedKeys[m])
+				c.op(opF64ReinterpretI64)
+				c.op(opF64Lt)
+				c.ifOp(wasmBlockVoid)
+				c.i32Const(-1)
+				c.localSet(cmpRes)
+				c.op(opElse)
+				c.localGet(curKey)
+				c.op(opF64ReinterpretI64)
+				c.localGet(savedKeys[m])
+				c.op(opF64ReinterpretI64)
+				c.op(opF64Gt)
+				c.ifOp(wasmBlockVoid)
+				c.i32Const(1)
+				c.localSet(cmpRes)
+				c.op(opEnd)
+				c.op(opEnd)
+			}
+			c.op(opEnd)
+		}
+		// If cmpRes <= 0, cur <= saved -> break inner loop (preserves stability on ties).
+		c.localGet(cmpRes)
+		c.i32Const(0)
+		c.op(opI32LeS)
+		c.brIf(1)
+
+		// Shift element and keys from j to j+1.
+		c.localGet(outData)
+		c.localGet(jLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.localGet(outData)
+		c.localGet(jLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		c.memOp(opI64Store, 3, 0)
+		for m := 0; m < kCount; m++ {
+			c.localGet(keyBufs[m])
+			c.localGet(jLocal)
+			c.i32Const(1)
+			c.op(opI32Add)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+			c.localGet(keyBufs[m])
+			c.localGet(jLocal)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+			c.memOp(opI64Load, 3, 0)
+			c.memOp(opI64Store, 3, 0)
+		}
+
+		c.localGet(jLocal)
+		c.i32Const(1)
+		c.op(opI32Sub)
+		c.localSet(jLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+
+		// Store savedEl and savedKeys at j+1.
+		c.localGet(outData)
+		c.localGet(jLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.localGet(savedEl)
+		c.memOp(opI64Store, 3, 0)
+		for m := 0; m < kCount; m++ {
+			c.localGet(keyBufs[m])
+			c.localGet(jLocal)
+			c.i32Const(1)
+			c.op(opI32Add)
+			c.i32Const(8)
+			c.op(opI32Mul)
+			c.op(opI32Add)
+			c.localGet(savedKeys[m])
+			c.memOp(opI64Store, 3, 0)
+		}
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(iLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+
+		c.localGet(outList)
+		return nil
+
 	case *UnaryExpr:
 		if ex.Op == "not" {
 			if err := wc.emitExpr(c, ex.Right, wasmTypeInfo{kind: wkCond}); err != nil {

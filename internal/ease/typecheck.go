@@ -829,6 +829,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		return v.inferExprTypeState(ex.Target)
 	case *UpdateExpr:
 		return v.inferExprTypeState(ex.Target)
+	case *SortByExpr:
+		return v.inferExprTypeState(ex.Target)
 	case *MatchExpr:
 		return v.inferMatchExprTypeState(ex)
 	case *SwarmLoopExpr:
@@ -1736,6 +1738,116 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		v.loopDepth--
 		v.popScope()
 		return updErr
+
+	case *SortByExpr:
+		if err := v.checkExpr(ex.Target); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(ex.Target); err != nil {
+			return err
+		}
+		if err := v.checkNotVoidValue(ex.Target); err != nil {
+			return err
+		}
+		targetSt := v.inferExprTypeState(ex.Target)
+		if !v.inErrorTestExpr {
+			if targetSt.exactRecord != "" || targetSt.exactNonRecord || targetSt.unionName != "" || targetSt.inboxElemType != "" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"'sort ... by' requires a list",
+					"Write: sort <list> by <key1> [, <key2> ...]",
+				)
+			}
+			if targetSt.listElemType == "list" {
+				return newError(
+					"TypeError",
+					ex.Line,
+					ex.Col,
+					v.source,
+					"Cannot sort a list of lists",
+					"Sort a list of records, maps, numbers, or text.",
+				)
+			}
+		}
+		sortScope := v.pushScope()
+		if targetSt.listElemType != "" {
+			sortScope.vars["it"] = v.typeStateFromName(targetSt.listElemType)
+		} else {
+			sortScope.vars["it"] = varTypeState{}
+		}
+		v.loopDepth++
+		var sortErr error
+		for _, k := range ex.Keys {
+			if err := v.checkExpr(k); err != nil {
+				sortErr = err
+				break
+			}
+			if err := v.checkNotCondition(k); err != nil {
+				sortErr = err
+				break
+			}
+			if err := v.checkNotVoidValue(k); err != nil {
+				sortErr = err
+				break
+			}
+			if !v.inErrorTestExpr {
+				kSt := v.inferExprTypeState(k)
+				kLine, kCol := k.Pos()
+				if kSt.exactRecord != "" || kSt.listElemType != "" || kSt.inboxElemType != "" {
+					sortErr = newError(
+						"TypeError",
+						kLine,
+						kCol,
+						v.source,
+						fmt.Sprintf("'sort ... by' key must be number, text, or a scalar union, got %s", v.staticConcreteType(kSt)),
+						"Project a scalar field or expression (e.g. 'it.score', 'it.name', or 'it.priority').",
+					)
+					break
+				}
+				var uVars []resolvedUnionVariant
+				if len(kSt.inlineUnionVariants) > 0 {
+					uVars = kSt.inlineUnionVariants
+				} else if kSt.unionName != "" {
+					uVars = v.resolvedUnions[kSt.unionName]
+				}
+				if len(uVars) > 0 {
+					hasNum, hasText, hasRec := false, false, false
+					for _, uv := range uVars {
+						switch uv.kind {
+						case variantRecord:
+							hasRec = true
+						case variantNumberLit:
+							hasNum = true
+						case variantStringLit:
+							hasText = true
+						case variantBaseType:
+							if uv.baseType == "number" {
+								hasNum = true
+							} else if uv.baseType == "text" {
+								hasText = true
+							}
+						}
+					}
+					if hasRec || (hasNum && hasText) {
+						sortErr = newError(
+							"TypeError",
+							kLine,
+							kCol,
+							v.source,
+							"Cannot sort by mixed or record-containing union key",
+							"Project a pure number, text, or single-kind scalar union key.",
+						)
+						break
+					}
+				}
+			}
+		}
+		v.loopDepth--
+		v.popScope()
+		return sortErr
 
 	case *WhereExpr:
 		if err := v.checkExpr(ex.Target); err != nil {

@@ -29,7 +29,7 @@ var builtinDocs = map[string]lspBuiltinDoc{
 	"contains": {sig: "contains <text_or_atomic_list> <item>", desc: "Condition checking whether `text` contains substring `item` or an atomic list (`number`, `text`, or scalar union) contains `item`."},
 	"sum":      {sig: "sum <num_list>", desc: "Sum all numbers in a `list<number>`."},
 	"avg":      {sig: "avg <num_list>", desc: "Compute the arithmetic mean of a non-empty `list<number>`."},
-	"sort":     {sig: "sort <list>", desc: "Return a sorted copy of a homogeneous `list<number>` or `list<text>`."},
+	"sort":     {sig: "sort <list> [by <key1> [, <key2> ...]]", desc: "Return a stably sorted copy of a list (optionally projected by one or more keys, with closed literal unions sorted in declaration order)."},
 	"abs":      {sig: "abs <number>", desc: "Return the absolute value of a `number`."},
 	"floor":    {sig: "floor <number>", desc: "Round a `number` down to the nearest integer."},
 	"round":    {sig: "round <number>", desc: "Round a `number` to the nearest integer."},
@@ -443,6 +443,8 @@ func lspInferExprType(e Expr, sc *lspScopeInfo) string {
 	case *WithExpr:
 		return lspInferExprType(ex.Base, sc)
 	case *UpdateExpr:
+		return lspInferExprType(ex.Target, sc)
+	case *SortByExpr:
 		return lspInferExprType(ex.Target, sc)
 	case *CastExpr:
 		if ex.TypeName == "json" {
@@ -1183,6 +1185,11 @@ func walkExprTree(e Expr, onExpr func(Expr)) {
 		walkExprTree(ex.Where, onExpr)
 		for _, u := range ex.Updates {
 			walkExprTree(u.Value, onExpr)
+		}
+	case *SortByExpr:
+		walkExprTree(ex.Target, onExpr)
+		for _, k := range ex.Keys {
+			walkExprTree(k, onExpr)
 		}
 	case *CastExpr:
 		walkExprTree(ex.Target, onExpr)

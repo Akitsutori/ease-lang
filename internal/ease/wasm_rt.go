@@ -23,6 +23,7 @@ type wasmRuntime struct {
 	fnAlloc            uint32
 	fnMemcpy           uint32
 	fnStrEq            uint32
+	fnStrCmp           uint32
 	fnStrConcat        uint32
 	fnF64ToText        uint32
 	fnTextToF64        uint32
@@ -70,6 +71,7 @@ func newWasmRuntime(mod *wasmModule) *wasmRuntime {
 	rt.fnAlloc = mod.reserveFunc([]byte{wasmI32}, []byte{wasmI32})
 	rt.fnMemcpy = mod.reserveFunc([]byte{wasmI32, wasmI32, wasmI32}, nil)
 	rt.fnStrEq = mod.reserveFunc([]byte{wasmI64, wasmI64}, []byte{wasmI32})
+	rt.fnStrCmp = mod.reserveFunc([]byte{wasmI64, wasmI64}, []byte{wasmI32})
 	rt.fnStrConcat = mod.reserveFunc([]byte{wasmI64, wasmI64}, []byte{wasmI64})
 	rt.fnF64ToText = mod.reserveFunc([]byte{wasmF64}, []byte{wasmI64})
 	rt.fnTextToF64 = mod.reserveFunc([]byte{wasmI64, wasmI32}, []byte{wasmF64})
@@ -135,6 +137,7 @@ func (rt *wasmRuntime) emitAllBodies() {
 	rt.emitAlloc()
 	rt.emitMemcpy()
 	rt.emitStrEq()
+	rt.emitStrCmp()
 	rt.emitStrConcat()
 	rt.emitF64ToText()
 	rt.emitTextToF64()
@@ -296,6 +299,105 @@ func (rt *wasmRuntime) emitStrEq() {
 
 	c.i32Const(1)
 	rt.mod.setFuncBody(rt.fnStrEq, []byte{wasmI32, wasmI32, wasmI32, wasmI32}, c.b)
+}
+
+func (rt *wasmRuntime) emitStrCmp() {
+	// params: 0=a(i64), 1=b(i64) -> i32 (-1, 0, 1)
+	// locals: 2=lenA, 3=lenB, 4=minLen, 5=ptrA, 6=ptrB, 7=i, 8=cA, 9=cB
+	var c wasmCodeBuf
+	c.localGet(0)
+	c.localGet(1)
+	c.op(opI64Eq)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(0)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(0)
+	emitUnpackLen(&c)
+	c.localSet(2)
+	c.localGet(1)
+	emitUnpackLen(&c)
+	c.localSet(3)
+
+	c.localGet(2)
+	c.localGet(3)
+	c.op(opI32LtU)
+	c.ifOp(wasmI32)
+	c.localGet(2)
+	c.op(opElse)
+	c.localGet(3)
+	c.op(opEnd)
+	c.localSet(4)
+
+	c.localGet(0)
+	emitUnpackPtr(&c)
+	c.localSet(5)
+	c.localGet(1)
+	emitUnpackPtr(&c)
+	c.localSet(6)
+	c.i32Const(0)
+	c.localSet(7)
+
+	c.block(wasmBlockVoid)
+	c.loop(wasmBlockVoid)
+	c.localGet(7)
+	c.localGet(4)
+	c.op(opI32GeU)
+	c.brIf(1)
+	c.localGet(5)
+	c.localGet(7)
+	c.op(opI32Add)
+	c.memOp(opI32Load8U, 0, 0)
+	c.localSet(8)
+	c.localGet(6)
+	c.localGet(7)
+	c.op(opI32Add)
+	c.memOp(opI32Load8U, 0, 0)
+	c.localSet(9)
+
+	c.localGet(8)
+	c.localGet(9)
+	c.op(opI32LtU)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(-1)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(8)
+	c.localGet(9)
+	c.op(opI32GtU)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(1)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(7)
+	c.i32Const(1)
+	c.op(opI32Add)
+	c.localSet(7)
+	c.br(0)
+	c.op(opEnd)
+	c.op(opEnd)
+
+	c.localGet(2)
+	c.localGet(3)
+	c.op(opI32LtU)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(-1)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.localGet(2)
+	c.localGet(3)
+	c.op(opI32GtU)
+	c.ifOp(wasmBlockVoid)
+	c.i32Const(1)
+	c.op(opReturn)
+	c.op(opEnd)
+
+	c.i32Const(0)
+	rt.mod.setFuncBody(rt.fnStrCmp, []byte{wasmI32, wasmI32, wasmI32, wasmI32, wasmI32, wasmI32, wasmI32, wasmI32}, c.b)
 }
 
 func (rt *wasmRuntime) emitStrConcat() {
@@ -1548,12 +1650,10 @@ func (rt *wasmRuntime) emitListSort(isNum bool, fnIdx uint32) {
 		c.brIf(1)
 	} else {
 		// Compare text `cur` (local 7) <= `key` (local 6) lexicographically
-		c.op(opDrop)
-		c.localGet(7)
-		emitUnpackLen(&c)
 		c.localGet(6)
-		emitUnpackLen(&c)
-		c.op(opI32LeU)
+		c.call(rt.fnStrCmp)
+		c.i32Const(0)
+		c.op(opI32LeS)
 		c.brIf(1)
 	}
 	c.localGet(3)

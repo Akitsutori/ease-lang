@@ -1,6 +1,7 @@
 package ease
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -244,6 +245,144 @@ func (ev *Evaluator) evalUpdateRecordList(lv *ListValue, whereExpr Expr, updates
 		out = append(out, inst)
 	}
 	return &ListValue{ElemType: elemType, Elements: out}, nil
+}
+
+type sortKeyKind int
+
+const (
+	sortKeyNum sortKeyKind = iota + 1
+	sortKeyText
+	sortKeyUnionIdx
+)
+
+type sortKeyVal struct {
+	kind sortKeyKind
+	num  float64
+	text string
+}
+
+func closedLiteralUnionIndex(allowed []Value, val Value) (int, bool) {
+	if len(allowed) == 0 {
+		return 0, false
+	}
+	for _, a := range allowed {
+		switch a.(type) {
+		case string, float64:
+		default:
+			return 0, false
+		}
+	}
+	for i, a := range allowed {
+		if ValuesEqual(a, val) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func (ev *Evaluator) evalSortByList(lv *ListValue, keys []Expr, env *Env, line, col int) (*ListValue, error) {
+	n := len(lv.Elements)
+	if n == 0 {
+		return &ListValue{ElemType: lv.ElemType, Elements: []Value{}}, nil
+	}
+
+	kCount := len(keys)
+	rows := make([][]sortKeyVal, n)
+	colKinds := make([]sortKeyKind, kCount)
+
+	for i, el := range lv.Elements {
+		iterEnv := NewEnv(env)
+		iterEnv.Define("it", el, false)
+		iterEnv.SetLoopIndex(float64(i + 1))
+
+		row := make([]sortKeyVal, kCount)
+		for j, keyExpr := range keys {
+			val, err := ev.EvalExpr(keyExpr, iterEnv)
+			if err != nil {
+				return nil, err
+			}
+			var kv sortKeyVal
+			// Check if keyExpr is a field access on a record with a closed literal union constraint.
+			if fe, isField := keyExpr.(*FieldExpr); isField {
+				if targetVal, tErr := ev.EvalExpr(fe.Target, iterEnv); tErr == nil {
+					if rec, isRec := targetVal.(*RecordValue); isRec {
+						if allowed, hasAllowed := rec.Allowed[fe.Field]; hasAllowed {
+							if idx, ok := closedLiteralUnionIndex(allowed, val); ok {
+								kv = sortKeyVal{kind: sortKeyUnionIdx, num: float64(idx)}
+							}
+						}
+					}
+				}
+			}
+			if kv.kind == 0 {
+				switch v := val.(type) {
+				case float64:
+					if math.IsNaN(v) {
+						kLine, kCol := keyExpr.Pos()
+						return nil, newError("RuntimeError", kLine, kCol, ev.source, "Cannot sort by NaN", "Ensure sort key values are valid numbers.")
+					}
+					kv = sortKeyVal{kind: sortKeyNum, num: v}
+				case string:
+					kv = sortKeyVal{kind: sortKeyText, text: v}
+				default:
+					kLine, kCol := keyExpr.Pos()
+					return nil, newError(
+						"TypeError",
+						kLine,
+						kCol,
+						ev.source,
+						fmt.Sprintf("'sort ... by' key must be number, text, or a closed literal union field, got %s", TypeName(val)),
+						"Project a scalar field or expression (e.g. 'it.score', 'it.name', or 'it.priority').",
+					)
+				}
+			}
+			if i == 0 {
+				colKinds[j] = kv.kind
+			} else if colKinds[j] != kv.kind {
+				kLine, kCol := keyExpr.Pos()
+				return nil, newError(
+					"TypeError",
+					kLine,
+					kCol,
+					ev.source,
+					"All elements in 'sort ... by' must produce the same key type",
+					"Ensure every element's key evaluates consistently to number or text.",
+				)
+			}
+			row[j] = kv
+		}
+		rows[i] = row
+	}
+
+	if n == 1 {
+		return &ListValue{ElemType: lv.ElemType, Elements: slices.Clone(lv.Elements)}, nil
+	}
+
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		ra, rb := rows[a], rows[b]
+		for j := 0; j < kCount; j++ {
+			var c int
+			if colKinds[j] == sortKeyText {
+				c = cmp.Compare(ra[j].text, rb[j].text)
+			} else {
+				c = cmp.Compare(ra[j].num, rb[j].num)
+			}
+			if c != 0 {
+				return c
+			}
+		}
+		return 0
+	})
+
+	out := make([]Value, n)
+	for i, origIdx := range order {
+		out[i] = lv.Elements[origIdx]
+	}
+	return &ListValue{ElemType: lv.ElemType, Elements: out}, nil
 }
 
 func indexOutOfRangeError(kind, emptyLabel string, idx, length, line, col int, source string) error {

@@ -150,6 +150,15 @@ func (v *typeValidator) exprContainsSpawn(e Expr, visited map[string]bool) bool 
 				return true
 			}
 		}
+	case *SortByExpr:
+		if v.exprContainsSpawn(ex.Target, visited) {
+			return true
+		}
+		for _, k := range ex.Keys {
+			if v.exprContainsSpawn(k, visited) {
+				return true
+			}
+		}
 	case *MatchExpr:
 		if v.exprContainsSpawn(ex.Target, visited) || v.stmtsContainSpawn(ex.ElseBody, visited) {
 			return true
