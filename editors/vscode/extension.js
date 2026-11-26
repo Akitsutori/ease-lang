@@ -281,28 +281,9 @@ async function runEaseSubcommand(subcommand, targetArg) {
   }
 
   const cwd = path.dirname(filePath);
-  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
-  const exec = new vscode.ProcessExecution(exe, [subcommand, filePath], { cwd });
-  const task = new vscode.Task(
-    { type: "ease", subcommand },
-    folder || vscode.TaskScope.Global,
-    `${subcommand} ${path.basename(filePath)}`,
-    "ease",
-    exec
-  );
-  task.presentationOptions = {
-    reveal: vscode.TaskRevealKind.Always,
-    panel: vscode.TaskPanelKind.Shared,
-    clear: true,
-    focus: true,
-  };
-  try {
-    await vscode.tasks.executeTask(task);
-  } catch (_) {
-    const terminal = vscode.window.createTerminal({ name: "Ease", cwd });
-    terminal.show(false);
-    terminal.sendText(formatTerminalCommand(exe, subcommand, filePath));
-  }
+  const terminal = vscode.window.createTerminal({ name: "Ease", cwd });
+  terminal.show(false);
+  terminal.sendText(formatTerminalCommand(exe, subcommand, filePath));
 }
 
 async function activate(context) {
