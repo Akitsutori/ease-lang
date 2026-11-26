@@ -50,10 +50,11 @@ func main() {
 
 	covReport, missingWords, snippetErr := auditLlmsTxt(root)
 
-	arenasDir := filepath.Join(root, "tests", "benchmark", "arenas")
-	entries, err := os.ReadDir(arenasDir)
+	hiddenRoot := filepath.Join(root, "tests", "benchmark", "hidden")
+	subRoot := filepath.Join(root, "tests", "benchmark", "submissions")
+	entries, err := os.ReadDir(hiddenRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "readdir arenas: %v\n", err)
+		fmt.Fprintf(os.Stderr, "readdir hidden: %v\n", err)
 		os.Exit(1)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
@@ -66,12 +67,12 @@ func main() {
 		if !ent.IsDir() {
 			continue
 		}
-		dir := filepath.Join(arenasDir, ent.Name())
+		hiddenDir := filepath.Join(hiddenRoot, ent.Name())
 		if ent.Name() == "05_reasoning_trace" {
-			traceScore, traceTotal, traceNotes = gradeReasoningTrace(dir)
+			traceScore, traceTotal, traceNotes = gradeReasoningTrace(hiddenDir, filepath.Join(subRoot, ent.Name()+".json"))
 			continue
 		}
-		rep := gradeCodingArena(easeExe, dir, ent.Name())
+		rep := gradeCodingArena(easeExe, hiddenDir, filepath.Join(subRoot, ent.Name()+".ease"), ent.Name())
 		reports = append(reports, rep)
 	}
 
@@ -247,18 +248,17 @@ func extractMapStringKeys(goFile, varName string) []string {
 	return keys
 }
 
-func gradeCodingArena(easeExe, dir, name string) arenaReport {
+func gradeCodingArena(easeExe, hiddenDir, subPath, name string) arenaReport {
 	rep := arenaReport{Name: name}
-	subPath := filepath.Join(dir, "submission.ease")
 	subBytes, err := os.ReadFile(subPath)
 	if err != nil {
-		rep.Notes = append(rep.Notes, "missing submission.ease")
+		rep.Notes = append(rep.Notes, "missing "+filepath.Base(subPath))
 		return rep
 	}
 	subSrc := strings.TrimSpace(string(subBytes))
 
 	var rb rubric
-	if rbBytes, err := os.ReadFile(filepath.Join(dir, "rubric.json")); err == nil {
+	if rbBytes, err := os.ReadFile(filepath.Join(hiddenDir, "rubric.json")); err == nil {
 		_ = json.Unmarshal(rbBytes, &rb)
 	}
 
@@ -274,7 +274,7 @@ func gradeCodingArena(easeExe, dir, name string) arenaReport {
 	}
 
 	// 2. Pass@1 with hidden_test.ease
-	hiddenBytes, err := os.ReadFile(filepath.Join(dir, "hidden_test.ease"))
+	hiddenBytes, err := os.ReadFile(filepath.Join(hiddenDir, "hidden_test.ease"))
 	if err == nil && rep.CheckPass {
 		tmpPath := filepath.Join(os.TempDir(), fmt.Sprintf("ease_bench_%s_%d.ease", name, time.Now().UnixNano()))
 		combined := subSrc + "\n\n" + string(hiddenBytes) + "\n"
@@ -546,14 +546,14 @@ func fnHasValueReturn(stmts []ease.Stmt) bool {
 	return false
 }
 
-func gradeReasoningTrace(dir string) (int, int, []string) {
-	expBytes, err := os.ReadFile(filepath.Join(dir, "expected.json"))
+func gradeReasoningTrace(hiddenDir, subPath string) (int, int, []string) {
+	expBytes, err := os.ReadFile(filepath.Join(hiddenDir, "expected.json"))
 	if err != nil {
 		return 0, 5, []string{"missing expected.json"}
 	}
-	subBytes, err := os.ReadFile(filepath.Join(dir, "submission.json"))
+	subBytes, err := os.ReadFile(subPath)
 	if err != nil {
-		return 0, 5, []string{"missing submission.json"}
+		return 0, 5, []string{"missing " + filepath.Base(subPath)}
 	}
 	var exp, sub map[string]any
 	if err := json.Unmarshal(expBytes, &exp); err != nil {

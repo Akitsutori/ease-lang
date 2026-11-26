@@ -139,7 +139,9 @@ def world_event
     req  = network.http_request
 end
 
-to calc_label count_val -> "v1:{count_val}"
+to calc_label count_val
+    -> "v1:{count_val}"
+end
 
 to run_world world
     hits = 0
@@ -261,8 +263,8 @@ spawn serve_loop requests world
 		t.Fatalf("expected live hot-swapped response v2:30 (preserving hits=3), got %q", got)
 	}
 
-	// 5. Live single-line `to` redefinition + live evaluation over debug socket!
-	_, _ = fmt.Fprintln(conn2, `to calc_label count_val -> "live:{count_val + 100}"`)
+	// 5. Live multi-line `to` redefinition + live evaluation over debug socket!
+	_, _ = fmt.Fprintln(conn2, "to calc_label count_val\n    -> \"live:{count_val + 100}\"\nend")
 	liveSwapLine, err := r2.ReadString('\n')
 	if err != nil || !strings.Contains(liveSwapLine, "ok: updated to calc_label") {
 		t.Fatalf("expected live swap ack, got %q (%v)", liveSwapLine, err)
@@ -283,7 +285,9 @@ func TestServePortOverrideWatchAndGracefulShutdown(t *testing.T) {
 	path := filepath.Join(dir, "watch.ease")
 	v1 := `import network
 
-to version_tag -> "alpha"
+to version_tag
+    -> "alpha"
+end
 
 to serve_loop requests
     take requests

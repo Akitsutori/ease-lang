@@ -254,7 +254,12 @@ func (p *Parser) parseMatchElseBlock(matchTok Token, isExpr bool) ([]Stmt, Expr,
 			)
 		}
 		if isExpr {
+			prevArrowLine, err := p.enterArrowLine(arrowTok)
+			if err != nil {
+				return nil, nil, true, err
+			}
 			elseExpr, err := p.parseExpr()
+			p.arrowLine = prevArrowLine
 			if err != nil {
 				return nil, nil, true, err
 			}
@@ -381,10 +386,7 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 			)
 		}
 		armTok := p.current()
-		prevDisallowArrow := p.disallowArrow
-		p.disallowArrow = true
 		pat, err := p.parseMatchPattern()
-		p.disallowArrow = prevDisallowArrow
 		if err != nil {
 			return nil, err
 		}
@@ -561,10 +563,7 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 			)
 		}
 		armTok := p.current()
-		prevDisallowArrow := p.disallowArrow
-		p.disallowArrow = true
 		pat, err := p.parseMatchPattern()
-		p.disallowArrow = prevDisallowArrow
 		if err != nil {
 			return nil, err
 		}
@@ -579,6 +578,12 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 				"Write '\"pattern\" -> <expression>' on each branch.",
 			)
 		}
+		arrowTok := p.tokens[p.pos-1]
+		prevArrowLine, err := p.enterArrowLine(arrowTok)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { p.arrowLine = prevArrowLine }()
 		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
 			cur := p.current()
 			return nil, newError(

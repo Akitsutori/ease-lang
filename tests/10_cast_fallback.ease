@@ -4,7 +4,9 @@ def LogLevel = "INFO" | "WARN" | "ERROR"
 def HttpCode = 200 | 404 | 500
 def DefaultLevel = "INFO"
 
-to fallback_port -> 8080
+to fallback_port
+    -> 8080
+end
 
 to check_precedence raw flag
   check raw as number or 0 > 10 -> "high"

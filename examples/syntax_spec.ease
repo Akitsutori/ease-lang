@@ -11,10 +11,14 @@ counter = 10
 counter = counter + 5
 greeting = "Hallo \{Ease\}: {counter}"
 
-# 2. Funktionen (ohne Kommas!) & Einzeiler
-to add a b -> a + b
+# 2. Funktionen (ohne Kommas!)
+to add a b
+    -> a + b
+end
 
-to mock_fetch client path -> "{client.url}{path}"
+to mock_fetch client path
+    -> "{client.url}{path}"
+end
 
 # 3. Records (`def`), `with`-Kopien & Union-Types
 def ticket = "vip" | "standard" | "none"
@@ -47,7 +51,9 @@ to bad_lt a b
     -> "done"
 end
 
-to bad_interp val -> "Wert: {val}"
+to bad_interp val
+    -> "Wert: {val}"
+end
 
 # 6. Schleifen-Hilfsfunktionen für Negativtests
 to bad_loop x

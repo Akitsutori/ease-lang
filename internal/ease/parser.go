@@ -27,7 +27,7 @@ type Parser struct {
 	disallowAs         bool
 	disallowWhere      bool
 	disallowWith       bool
-	disallowArrow      bool
+	arrowLine          int
 	inCallArg          bool
 	inTestBlock        bool
 	inSingleLineWith   bool
@@ -37,6 +37,22 @@ type Parser struct {
 	stdModuleOrigNames map[string]string
 	fileImports        map[string]*Program
 	fileImportSrcs     map[string]string
+}
+
+func (p *Parser) enterArrowLine(arrowTok Token) (int, error) {
+	if p.arrowLine == arrowTok.Line {
+		return 0, newError(
+			"SyntaxError",
+			arrowTok.Line,
+			arrowTok.Col,
+			p.source,
+			"Only one '->' is allowed per line",
+			"Bind intermediate results to a variable on the previous line, or use a multi-line block.",
+		)
+	}
+	prev := p.arrowLine
+	p.arrowLine = arrowTok.Line
+	return prev, nil
 }
 
 func (p *Parser) pushBlock(kind, name string, line int) {
@@ -642,6 +658,37 @@ func (p *Parser) parseSwarmLoopExpr() (Expr, error) {
 		}
 	}
 
+	if arrowTok := p.current(); p.match(TOK_ARROW) {
+		prevArrowLine, err := p.enterArrowLine(arrowTok)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { p.arrowLine = prevArrowLine }()
+		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Expected expression after '->' in single-line 'swarm loop'",
+				"Write: swarm loop <list_or_range> -> <expr> (with no 'end'), or put statements on new lines ending with 'end'.",
+			)
+		}
+		if err := p.validateArrowExprStart(); err != nil {
+			return nil, err
+		}
+		val, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &SwarmLoopExpr{
+			posInfo:  posInfo{Line: swarmTok.Line, Col: swarmTok.Col},
+			Iterable: iterExpr,
+			Body:     []Stmt{&ReturnStmt{posInfo: posInfo{Line: arrowTok.Line, Col: arrowTok.Col}, Value: val}},
+		}, nil
+	}
+
 	if !p.match(TOK_NEWLINE) {
 		tok := p.current()
 		return nil, newError(
@@ -769,6 +816,7 @@ func (p *Parser) parseTakeStmt() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if !p.match(TOK_NEWLINE) {
 		tok := p.current()
 		return nil, newError(
@@ -834,10 +882,7 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	}
 
 	// Form 1 (single-line) or Form 2 (multi-line block): `check <cond> ...`
-	prevDisallowArrow := p.disallowArrow
-	p.disallowArrow = true
 	cond, err := p.parseExpr()
-	p.disallowArrow = prevDisallowArrow
 	if err != nil {
 		return nil, err
 	}
@@ -963,6 +1008,11 @@ func (p *Parser) parseArrowAction(arrowTok Token) (Stmt, error) {
 	if p.check(TOK_IDENT) && (p.current().Lexeme == "stop" || p.current().Lexeme == "return") {
 		next := p.peekNext().Type
 		if next == TOK_NEWLINE || next == TOK_EOF || next == TOK_END {
+			prevArrowLine, err := p.enterArrowLine(arrowTok)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { p.arrowLine = prevArrowLine }()
 			kwTok := p.advance()
 			if err := p.expectStmtEnd("'-> " + kwTok.Lexeme + "'"); err != nil {
 				return nil, err
@@ -987,21 +1037,31 @@ func (p *Parser) parseArrowAction(arrowTok Token) (Stmt, error) {
 	return p.parseArrowReturnValueOnly(arrowTok)
 }
 
-func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) {
+func (p *Parser) validateArrowExprStart() error {
 	tok := p.current()
 	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
-		return nil, newError(
+		return newError(
 			"SyntaxError",
 			tok.Line,
 			tok.Col,
 			p.source,
-			"Expected value expression or 'end' after '->'",
+			"Expected value expression after '->'",
 			"Start the value expression on the same line right after '->', or omit '->' ('check <cond>\\n  -> <value>\\nend') for multi-line guards.",
 		)
 	}
 	switch tok.Type {
 	case TOK_SAY, TOK_LOOP, TOK_CHECK, TOK_SPAWN, TOK_TAKE, TOK_TO, TOK_DEF, TOK_TEST, TOK_END:
-		return nil, newError(
+		if tok.Type == TOK_LOOP {
+			return newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Statements and nested '->' loops are not allowed after '->'",
+				"Bind 'loop <list> -> <expr>' to a variable on the previous line, or use a multi-line block.",
+			)
+		}
+		return newError(
 			"SyntaxError",
 			tok.Line,
 			tok.Col,
@@ -1011,7 +1071,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 		)
 	}
 	if tok.Type == TOK_IDENT && p.peekNext().Type == TOK_ASSIGN {
-		return nil, newError(
+		return newError(
 			"SyntaxError",
 			tok.Line,
 			tok.Col,
@@ -1021,7 +1081,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "fail" {
-		return nil, newError(
+		return newError(
 			"SyntaxError",
 			tok.Line,
 			tok.Col,
@@ -1031,7 +1091,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "decode_json" {
-		return nil, newError(
+		return newError(
 			"TypeError",
 			tok.Line,
 			tok.Col,
@@ -1041,7 +1101,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "encode_json" {
-		return nil, newError(
+		return newError(
 			"TypeError",
 			tok.Line,
 			tok.Col,
@@ -1051,7 +1111,7 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 		)
 	}
 	if tok.Type == TOK_IDENT && tok.Lexeme == "return" {
-		return nil, newError(
+		return newError(
 			"SyntaxError",
 			tok.Line,
 			tok.Col,
@@ -1059,6 +1119,18 @@ func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) 
 			"'return' is not a keyword in Ease",
 			"Put the return expression directly after '->'.",
 		)
+	}
+	return nil
+}
+
+func (p *Parser) parseArrowReturnValueOnly(arrowTok Token) (*ReturnStmt, error) {
+	prevArrowLine, err := p.enterArrowLine(arrowTok)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { p.arrowLine = prevArrowLine }()
+	if err := p.validateArrowExprStart(); err != nil {
+		return nil, err
 	}
 	val, err := p.parseExpr()
 	if err != nil {

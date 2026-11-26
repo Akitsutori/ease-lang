@@ -113,7 +113,9 @@ func TestCLIRunCIFlagAndSystemRunSubprocess(t *testing.T) {
 
 	// 1. `ease run <file> --ci` runs tests then headless program (ask EOF exits cleanly).
 	ciScript := filepath.Join(tmpDir, "ci_demo.ease")
-	ciSrc := `to dbl x -> x * 2
+	ciSrc := `to dbl x
+    -> x * 2
+end
 
 test "dbl"
     dbl 4 is 8

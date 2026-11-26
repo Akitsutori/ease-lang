@@ -39,9 +39,13 @@ func TestLexerAndIsNotTokens(t *testing.T) {
 
 func TestToWhereAndCheckBlockExecution(t *testing.T) {
 	src := `
-to double x -> x * 2
+to double x
+  -> x * 2
+end
 
-to divide a b -> a / b
+to divide a b
+  -> a / b
+end
 
 test "functions"
   double 4 is 8
@@ -81,7 +85,9 @@ say "result={res}"
 
 func TestCheckFailureAndImmutabilityHint(t *testing.T) {
 	badCheck := `
-to square n -> n * n
+to square n
+  -> n * n
+end
 
 test
   square 3 is 10
@@ -420,7 +426,9 @@ say "Hello, {name}"
 def x = 1
 def y = 0.5
 
-to add a b -> a + b
+to add a b
+  -> a + b
+end
 
 to start
     say "Hello World"
@@ -640,9 +648,13 @@ end
 
 func TestCommaFreeFunctionCalls(t *testing.T) {
 	src := `
-to greet name suffix -> "Hallo {name}{suffix}"
+to greet name suffix
+  -> "Hallo {name}{suffix}"
+end
 
-to add_three a b c -> a + b + c
+to add_three a b c
+  -> a + b + c
+end
 
 total = 0
 loop range 1 3 total = total + it end
@@ -686,10 +698,16 @@ to classify n
     -> "non-positive"
 end
 
-to get_count -> 10
+to get_count
+  -> 10
+end
 
-to negate x -> -x
-to add a b -> a + b
+to negate x
+  -> -x
+end
+to add a b
+  -> a + b
+end
 
 a = 10
 
@@ -1079,7 +1097,9 @@ to sum_to n
     -> total
 end
 
-to with_tax price -> price + (price * tax_rate)
+to with_tax price
+  -> price + (price * tax_rate)
+end
 
 say sum_to 3
 say total
@@ -1535,11 +1555,17 @@ end
 
 say greet "Ada"
 
-to greet name -> "Hi {name}"
+to greet name
+  -> "Hi {name}"
+end
 
-to ping -> "pong"
+to ping
+  -> "pong"
+end
 
-to add a b -> a + b
+to add a b
+  -> a + b
+end
 
 to sum_squares xs
     total = 0
@@ -1762,7 +1788,9 @@ def div_case
     b = 0
 end
 
-to safe_div a b -> a / b
+to safe_div a b
+  -> a / b
+end
 
 test "data-driven rules and error blocks"
     a = 10
@@ -2083,7 +2111,7 @@ end
 	}
 
 	// Runtime TypeError for dynamically typed parameters
-	if _, err := EvalProgram("to f a b -> a + b\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
+	if _, err := EvalProgram("to f a b\n  -> a + b\nend\nx = f \"41\" 1\n", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Cannot add text and number with '+'") {
 		t.Fatalf("expected runtime TypeError for dynamic mixed '+', got: %v", err)
 	}
 }
@@ -2165,8 +2193,8 @@ func TestErgonomicParserHintsForMultilineArrowCheckAndLoopExpr(t *testing.T) {
 
 	loopExpr := "xs = loop range 1 3\n  it * 2\nend\n"
 	if _, err := ParseProgram(loopExpr); err == nil ||
-		!strings.Contains(err.Error(), "'loop' is a statement, not an expression") ||
-		!strings.Contains(err.Error(), "xs = append xs val") {
+		!strings.Contains(err.Error(), "Expected '-> <expr>' after 'loop' iterable in expression") ||
+		!strings.Contains(err.Error(), "Inline map syntax: loop") {
 		t.Fatalf("expected loop-as-expression hint, got: %v", err)
 	}
 }
@@ -2495,7 +2523,9 @@ def item
     val = 0
 end
 
-to sum_catalog as number -> catalog.1.val + catalog.2.val + A
+to sum_catalog as number
+    -> catalog.1.val + catalog.2.val + A
+end
 
 def catalog = list as item with
     val = 5
@@ -2568,12 +2598,22 @@ users = list as user with
     name = "Eve", age = 25
 end
 
-names = users where it.age >= 18 -> "{it.index}:{it.name}"
-doubled = (range 1 4) -> it * 2
-empty_proj = (list as user) -> it.name
+names = loop users where it.age >= 18 -> "{it.index}:{it.name}"
+doubled = loop range 1 4 -> it * 2
+empty_proj = loop (list as user) -> it.name
 matrix = list (list 1, 2), (list 3, 4)
-nested = matrix -> (it -> it * 10 + it.index)
-outer_idx = matrix -> (count (it -> it * 2)) + it.index
+to scale_row row
+    out = loop row -> it * 10 + it.index
+    -> out
+end
+
+to count_doubled row
+    d = loop row -> it * 2
+    -> count d
+end
+
+nested = loop matrix -> scale_row it
+outer_idx = loop matrix -> (count_doubled it) + it.index
 
 say join names ","
 say sum doubled

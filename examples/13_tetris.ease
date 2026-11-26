@@ -62,7 +62,8 @@ def sfx_over = synth.melody with notes = (list "G4/8", "E4/8", "C4/4"), bpm = 16
 
 to spawn_blocks sp as list of block
     c = sp.coords
-    -> (list 1, 3, 5, 7) -> block with col = c.(it), row = c.(it + 1), color = sp.color
+    out = loop (list 1, 3, 5, 7) -> block with col = c.(it), row = c.(it + 1), color = sp.color
+    -> out
 end
 
 to key_hit keys prev k as hit_state
@@ -289,14 +290,14 @@ to draw_game win w
         x = 332, y = 200, width = 164, height = 176, color = "#334155", style = "outline", stroke = 2
         x = 22, y = 50, width = 284, height = 564, color = "#334155", style = "outline", stroke = 2
     end)
-    screen:draw win ((range 1 19) -> screen.line with x1 = 24, y1 = 52 + (it * 28), x2 = 304, y2 = 52 + (it * 28), width = 1, color = "#1e293b")
-    screen:draw win ((range 1 9) -> screen.line with x1 = 24 + (it * 28), y1 = 52, x2 = 24 + (it * 28), y2 = 612, width = 1, color = "#1e293b")
+    screen:draw win (loop range 1 19 -> screen.line with x1 = 24, y1 = 52 + (it * 28), x2 = 304, y2 = 52 + (it * 28), width = 1, color = "#1e293b")
+    screen:draw win (loop range 1 9 -> screen.line with x1 = 24 + (it * 28), y1 = 52, x2 = 24 + (it * 28), y2 = 612, width = 1, color = "#1e293b")
     check w.status is "playing"
-        screen:draw win ((ghost_blocks w) where it.row >= 1 -> (cell_box it 2) with style = "outline", stroke = 2)
+        screen:draw win (loop (ghost_blocks w) where it.row >= 1 -> (cell_box it 2) with style = "outline", stroke = 2)
     end
-    screen:draw win (w.board where it.row >= 1 -> cell_box it 1)
-    screen:draw win (w.active where it.row >= 1 -> cell_box it 1)
-    screen:draw win (spawn_blocks w.next_spec -> screen.box with
+    screen:draw win (loop w.board where it.row >= 1 -> cell_box it 1)
+    screen:draw win (loop w.active where it.row >= 1 -> cell_box it 1)
+    screen:draw win (loop spawn_blocks w.next_spec -> screen.box with
         x = 372 + ((it.col - 4) * 22)
         y = 98 + ((it.row - 1) * 22)
         width = 20
@@ -360,8 +361,8 @@ test "tetris pure intent/action: rotation wall-kick and multi-line clear"
     count w1.active is 4
     w1.cx >= 2
     w1.last_event is "rotated"
-    b19 = (range 1 10) -> block with col = it, row = 19, color = "#06b6d4"
-    b20 = (range 1 10) -> block with col = it, row = 20, color = "#eab308"
+    b19 = loop range 1 10 -> block with col = it, row = 19, color = "#06b6d4"
+    b20 = loop range 1 10 -> block with col = it, row = 20, color = "#eab308"
     board = append (append b19 b20) (block with col = 5, row = 18, color = "#a855f7")
     after = clear_full_lines board
     count after is 1

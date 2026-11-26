@@ -41,14 +41,11 @@ func (p *Parser) parseQuantifierExpr() (Expr, error) {
 	}
 	prevDisallowTopIs := p.disallowTopIs
 	prevStopChainedIs := p.stopChainedIs
-	prevDisallowArrow := p.disallowArrow
 	p.disallowTopIs = false
 	p.stopChainedIs = false
-	p.disallowArrow = true
 	cond, err := p.parseOr()
 	p.disallowTopIs = prevDisallowTopIs
 	p.stopChainedIs = prevStopChainedIs
-	p.disallowArrow = prevDisallowArrow
 	if err != nil {
 		return nil, err
 	}
@@ -94,27 +91,7 @@ func (p *Parser) parseExpr() (Expr, error) {
 	}
 	defer p.exitDepth()
 
-	return p.parseProject()
-}
-
-func (p *Parser) parseProject() (Expr, error) {
-	left, err := p.parseOr()
-	if err != nil {
-		return nil, err
-	}
-	for !p.disallowArrow && p.check(TOK_ARROW) && p.peekNext().Type != TOK_NEWLINE && p.peekNext().Type != TOK_EOF {
-		arrowTok := p.advance()
-		body, err := p.parseOr()
-		if err != nil {
-			return nil, err
-		}
-		left = &ProjectExpr{
-			posInfo: posInfo{Line: arrowTok.Line, Col: arrowTok.Col},
-			Source:  left,
-			Body:    body,
-		}
-	}
-	return left, nil
+	return p.parseOr()
 }
 
 func (p *Parser) parseOr() (Expr, error) {
@@ -495,10 +472,7 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				}
 			} else {
 				p.stopChainedIs = prevDisallowTopIs
-				prevDisallowArrow := p.disallowArrow
-				p.disallowArrow = true
 				cond, err := p.parseExpr()
-				p.disallowArrow = prevDisallowArrow
 				if err != nil {
 					p.disallowTopIs = prevDisallowTopIs
 					p.stopChainedIs = prevStopChainedIs
@@ -988,15 +962,6 @@ func (p *Parser) parsePrimary() (Expr, error) {
 	case TOK_INTERP_STRING:
 		p.advance()
 		return p.parseInterpString(tok)
-	case TOK_LOOP:
-		return nil, newError(
-			"SyntaxError",
-			tok.Line,
-			tok.Col,
-			p.source,
-			"'loop' is a statement, not an expression",
-			"Build lists imperatively with 'xs = list as <type>' and 'xs = append xs val' inside 'loop ... end'.",
-		)
 	case TOK_IDENT:
 		if tok.Lexeme == "decode_json" {
 			return nil, newError(
@@ -1026,20 +991,17 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		prevDisallowWhere := p.disallowWhere
 		prevDisallowWith := p.disallowWith
 		prevDisallowTopIs := p.disallowTopIs
-		prevDisallowArrow := p.disallowArrow
 		prevInCallArg := p.inCallArg
 		p.disallowAs = false
 		p.disallowWhere = false
 		p.disallowWith = false
 		p.disallowTopIs = false
-		p.disallowArrow = false
 		p.inCallArg = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
 		p.disallowWith = prevDisallowWith
 		p.disallowTopIs = prevDisallowTopIs
-		p.disallowArrow = prevDisallowArrow
 		p.inCallArg = prevInCallArg
 		if err != nil {
 			return nil, err
@@ -1077,6 +1039,18 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		)
 	case TOK_MATCH:
 		return p.parseMatchExpr()
+	case TOK_LOOP:
+		if p.inCallArg {
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"Wrap 'loop <list> -> <expr>' in parentheses or assign it to a variable first",
+				"Write e.g. 'sum (loop xs -> it * 2)' or 'ys = loop xs -> it * 2'.",
+			)
+		}
+		return p.parseLoopProjectExpr()
 	case TOK_SWARM:
 		if p.inCallArg {
 			return nil, newError(
@@ -1335,4 +1309,98 @@ func (p *Parser) parseCallArgs(callee string, arity int) ([]Expr, error) {
 		args = append(args, arg)
 	}
 	return args, nil
+}
+
+func (p *Parser) parseLoopProjectExpr() (Expr, error) {
+	if err := p.enterDepth(); err != nil {
+		return nil, err
+	}
+	defer p.exitDepth()
+
+	loopTok := p.advance() // consume `loop`
+	if p.check(TOK_IDENT) && p.peekNext().Type == TOK_IDENT && p.peekNext().Lexeme == "in" {
+		return nil, newError(
+			"SyntaxError",
+			p.current().Line,
+			p.current().Col,
+			p.source,
+			fmt.Sprintf("Named loop variables like 'loop %s in ...' are not supported", p.current().Lexeme),
+			"Write 'loop <list> -> <expr>' and access the current element via 'it' (or 'it.index').",
+		)
+	}
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) {
+		return nil, newError(
+			"SyntaxError",
+			loopTok.Line,
+			loopTok.Col,
+			p.source,
+			"Inline 'loop' expression requires a list or 'range start end'",
+			"Write: loop items -> <expr> or loop range 1 10 -> <expr>",
+		)
+	}
+
+	var iterExpr Expr
+	var err error
+	if p.check(TOK_IDENT) && p.current().Lexeme == "range" {
+		rangeTok := p.advance()
+		var startExpr, endExpr Expr
+		startExpr, err = p.parseUnary()
+		if err == nil {
+			endExpr, err = p.parseUnary()
+		}
+		if err != nil {
+			return nil, err
+		}
+		iterExpr = &CallExpr{
+			posInfo: posInfo{Line: rangeTok.Line, Col: rangeTok.Col},
+			Callee:  "range",
+			Args:    []Expr{startExpr, endExpr},
+		}
+	} else {
+		iterExpr, err = p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	arrowTok := p.current()
+	if !p.match(TOK_ARROW) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected '-> <expr>' after 'loop' iterable in expression",
+			"Inline map syntax: loop <list_or_range> -> <expr> (no 'end'). Use 'loop <list> ... end' on its own line for multi-line loops.",
+		)
+	}
+	prevArrowLine, err := p.enterArrowLine(arrowTok)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { p.arrowLine = prevArrowLine }()
+	if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) {
+		tok := p.current()
+		return nil, newError(
+			"SyntaxError",
+			tok.Line,
+			tok.Col,
+			p.source,
+			"Expected expression after '->' in 'loop' expression",
+			"Write: loop <list_or_range> -> <expr> (with no 'end').",
+		)
+	}
+	if err := p.validateArrowExprStart(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	return &ProjectExpr{
+		posInfo: posInfo{Line: arrowTok.Line, Col: arrowTok.Col},
+		Source:  iterExpr,
+		Body:    body,
+	}, nil
 }

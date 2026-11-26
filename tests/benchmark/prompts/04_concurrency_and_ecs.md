@@ -9,7 +9,7 @@ Output ONLY valid Ease code with no markdown fences and no explanation.
    - `id = 0`
    - `value = 0`
 2. Write `to double_all nums as list of number`:
-   - Use `swarm loop nums` with `-> it * 2` inside `swarm loop ... end` to double every number in parallel.
+   - Use `swarm loop nums -> it * 2` (or multi-line `swarm loop nums ... end`) to double every number in parallel.
 3. Write a void procedure `to worker jobs out`:
    - Use `take jobs ... end` to receive `job` values from `jobs`.
    - Inside `take jobs`:

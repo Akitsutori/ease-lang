@@ -92,7 +92,7 @@ func TestStaticInvariantsAcrossAllContexts(t *testing.T) {
 		},
 		{
 			name:    "call_site_param_mismatch",
-			setup:   "to sum_it xs -> sum xs\nps = list \"a\", \"b\"",
+			setup:   "to sum_it xs\n  -> sum xs\nend\nps = list \"a\", \"b\"",
 			stmt:    `res = sum_it ps`,
 			wantSub: "In call to 'sum_it'",
 		},

@@ -32,7 +32,7 @@ say ordered.1.name
 What numeric value is printed?
 ```ease
 nums = list 1, 2, 3, 4
-res = nums where it > 1 -> it * 10 + it.index
+res = loop (nums where it > 1) -> it * 10 + it.index
 say sum res
 ```
 

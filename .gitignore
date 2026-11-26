@@ -14,6 +14,10 @@ bin/
 coverage.out
 coverage.html
 
+# Benchmark runtime outputs
+tests/benchmark/submissions/
+tests/benchmark/results/
+
 # OS & editor files
 .DS_Store
 Thumbs.db

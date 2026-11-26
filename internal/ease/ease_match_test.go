@@ -347,7 +347,9 @@ run_match 123
 
 		// Mixed list outputs when branches return dynamic/untyped results
 		mixedOutDyn := `
-to id x -> x
+to id x
+  -> x
+end
 lines = list "N=1", "T=hi"
 res = match lines
   "N={n as number}" -> id n

@@ -19,4 +19,6 @@ to exit reason
     sys_exit reason
 end
 
-to run cmd -> sys_run cmd
+to run cmd
+    -> sys_run cmd
+end

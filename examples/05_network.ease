@@ -18,7 +18,9 @@ def event
 end
 
 # 1. Stufe: Striktes Typ-Casting an der Grenze (Form via 'as' ohne stillen Fallback)
-to parse_age raw -> raw as number
+to parse_age raw
+    -> raw as number
+end
 
 # 2. Stufe: Inhaltsvalidität in der Fachlogik (Bedeutung via 'to' + 'check')
 to validate_age age

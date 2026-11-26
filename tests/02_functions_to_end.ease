@@ -1,6 +1,8 @@
-# Feature 02: Funktionen (to ... end, Einzeiler & explizite Rückgabe mit ->)
+# Feature 02: Funktionen (to ... end & explizite Rückgabe mit ->)
 
-to add a b -> a + b
+to add a b
+    -> a + b
+end
 
 to safe_div a b
     -> a / b

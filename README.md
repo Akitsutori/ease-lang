@@ -44,8 +44,8 @@ say log_line handled
 ```
 
 Look closely at the counter beside you:
-- **`def` describes things; `to` describes verbs.** Records (`guest_note`) and closed unions (`RequestKind`, `SlipStatus`) have no methods inside them, `to` functions take space-separated inputs without outer parentheses or commas, and optional return contracts (`to add a b as number -> a + b`, `as list of guest_note`) are enforced both statically and at runtime.
-- **`with` always makes a fresh copy; `->` projects lists.** Both `slip` (still `"waiting"`) and `handled` (`"done"`) stay alive without locking or cloning boilerplate, and declarative list pipelines like `users where it.active -> it.name` transform data without imperative loops.
+- **`def` describes things; `to` describes verbs.** Records (`guest_note`) and closed unions (`RequestKind`, `SlipStatus`) have no methods inside them, `to` functions take space-separated inputs without outer parentheses or commas, and optional return contracts (`to add a b as number ... end`, `as list of guest_note`) are enforced both statically and at runtime.
+- **`with` always makes a fresh copy; `loop ... ->` projects lists.** Both `slip` (still `"waiting"`) and `handled` (`"done"`) stay alive without locking or cloning boilerplate, and declarative list pipelines like `loop users where it.active -> it.name` transform data without imperative `append` loops.
 - **No `bool`, no `if`, no `null`.** Choices are explicit words checked with `is`, existential list checks read like English (`any items where it.urgent`, `none tasks where it.status is not "done"`), and in `log_line` the compiler makes sure you never forget a status — or misspell `"done"` as `"doen"`.
 
 ---

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, extraArities map[string]int) (map[string]int, error) {
@@ -142,8 +141,22 @@ func (p *Parser) collectSignatures(seen map[string]bool, activeStack []string, e
 			if !hasArrowOnLine {
 				blockDepth++
 			}
-		case TOK_LOOP, TOK_MATCH, TOK_TEST, TOK_TAKE:
+		case TOK_MATCH, TOK_TEST, TOK_TAKE:
 			blockDepth++
+		case TOK_LOOP:
+			hasArrowOnLine := false
+			for k := i + 1; k < len(p.tokens); k++ {
+				if p.tokens[k].Type == TOK_NEWLINE || p.tokens[k].Type == TOK_EOF {
+					break
+				}
+				if p.tokens[k].Type == TOK_ARROW {
+					hasArrowOnLine = true
+					break
+				}
+			}
+			if !hasArrowOnLine {
+				blockDepth++
+			}
 		case TOK_DEF:
 			if i+2 < len(p.tokens) && p.tokens[i+1].Type == TOK_IDENT && p.tokens[i+2].Type == TOK_NEWLINE {
 				blockDepth++
@@ -418,31 +431,14 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	}
 
 	if arrowTok := p.current(); p.match(TOK_ARROW) {
-		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) {
-			tok := p.current()
-			return nil, newError(
-				"SyntaxError",
-				tok.Line,
-				tok.Col,
-				p.source,
-				fmt.Sprintf("Expected return expression after '->' in 'to %s'", nameTok.Lexeme),
-				fmt.Sprintf("Example: to %s %s -> <expr>", nameTok.Lexeme, strings.Join(params, " ")),
-			)
-		}
-		retStmt, err := p.parseArrowReturnValueOnly(arrowTok)
-		if err != nil {
-			return nil, err
-		}
-		return &FuncDecl{
-			posInfo:        posInfo{Line: toTok.Line, Col: toTok.Col},
-			Name:           nameTok.Lexeme,
-			Params:         params,
-			ReturnType:     returnType,
-			ReturnElemType: returnElemType,
-			ReturnTypeLine: returnTypeLine,
-			ReturnTypeCol:  returnTypeCol,
-			Body:           []Stmt{retStmt},
-		}, nil
+		return nil, newError(
+			"SyntaxError",
+			arrowTok.Line,
+			arrowTok.Col,
+			p.source,
+			fmt.Sprintf("Single-line 'to %s ... -> <expr>' declarations are not allowed", nameTok.Lexeme),
+			fmt.Sprintf("Separate declaration and implementation: put the body on indented lines and close with 'end':\n  to %s ...\n      -> <expr>\n  end", nameTok.Lexeme),
+		)
 	}
 
 	if !p.check(TOK_NEWLINE) && !p.check(TOK_EOF) && !p.check(TOK_END) {

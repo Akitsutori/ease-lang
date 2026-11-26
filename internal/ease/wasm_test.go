@@ -755,7 +755,9 @@ def item
     val = 0
 end
 
-to make_item n as item -> item with val = n
+to make_item n as item
+    -> item with val = n
+end
 to make_items a b as list of item
     -> list as item with
         val = a
@@ -788,7 +790,9 @@ def catalog = list as item with
     val = 31
 end
 
-to total as number -> catalog.1.val + catalog.2.val
+to total as number
+    -> catalog.1.val + catalog.2.val
+end
 
 say total
 `
@@ -845,7 +849,9 @@ def item
     val = 0
 end
 
-to bump x as item -> item with val = x.val + 10
+to bump x as item
+    -> item with val = x.val + 10
+end
 
 xs = list as item with
     val = 1
@@ -853,8 +859,8 @@ xs = list as item with
     val = 2
 end
 
-doubled = (range 1 3) -> it * 2
-bumped = xs where it.val >= 2 -> bump it
+doubled = loop range 1 3 -> it * 2
+bumped = loop xs where it.val >= 2 -> bump it
 say (sum doubled) + bumped.1.val + bumped.2.val
 `
 	wasmBytes, err := CompileProgramToWasm(src, "")

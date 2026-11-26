@@ -22,8 +22,10 @@ Every construct has one canonical form and zero silent fallbacks.
         y = 2
     end
 
-- Arrow '->' rule: '->' ONLY returns a value on the same line, exits a loop ('-> stop'), or exits a void 'to' procedure ('-> return').
-  Never put assignments or statements after '->'.
+- Arrow '->' rule:
+  Declarations ('def', 'to', 'test') ALWAYS open a block and close with 'end' (NEVER write 'to fn x -> expr' on one line).
+  '->' ONLY returns a value ('-> expr'), exits a loop ('-> stop'), exits a void 'to' ('-> return'), ends a single-line 'check <cond> -> ...', 'match' arm, 'loop <list> -> <expr>', or 'swarm loop <list> -> <expr>'.
+  Max ONE '->' per line (never nest 'loop ... ->' or 'swarm loop ... ->' after another '->'; bind intermediate variables first).
   Multi-line 'check' blocks NEVER have '->' on the header line and MUST close with 'end':
     check x > 0
         y = 1
@@ -65,8 +67,10 @@ Every construct has one canonical form and zero silent fallbacks.
 
 2. CORE SYNTAX AND SEMANTICS
 
-- Calls and naming: 'def' defines data records/unions/constants; 'def <name> = <pure_expr>' defines order-independent, immutable domain constants readable inside any 'to' function. 'to' defines functions without commas:
-  to add a b as number -> a + b
+- Calls and naming: 'def' defines data records/unions/constants; 'def <name> = <pure_expr>' defines order-independent, immutable domain constants readable inside any 'to' function. 'to' defines functions without commas and always closes with 'end':
+  to add a b as number
+      -> a + b
+  end
   Optional 'as <type>' (number, text, <Def>, <mod>.<Def>, list of <type>) enforces static and runtime return contracts; 'of' is a reserved keyword.
   res = add (1 + 2) 3
   Parameters and globals are read-only inside 'to' (assigning a name creates a local; reading a global before assigning the same name fails). 'def' fields cannot be named 'index'.
@@ -84,10 +88,10 @@ Every construct has one canonical form and zero silent fallbacks.
 
 - Pattern matching: 'match <txt_or_list> ... end' matches "..." templates with {...}, {name}, {name: N}, {name as number|<Union>}, or '...' raw literals. Expression 'match' on text requires 'else'.
 
-- Concurrency: 'swarm loop <list_or_range> ... end' runs parallel workers returning a 1..N list via '-> <expr>' (outer vars read-only).
+- Concurrency: 'swarm loop <list_or_range> ... end' runs parallel workers returning a 1..N list via '-> <expr>' (outer vars read-only), or single-line 'swarm loop <list_or_range> -> <expr>' (no 'end').
   Channels: ch = inbox as <type> (cap 64), spawn fn a b, put ch val (void), close ch (void), take ch ... end.
 
-- List projection & predicates: '<list> -> <expr>' maps each element ('it', 1-based 'it.index') to a new list without loops (e.g. names = users -> it.name). 'any <list> where <cond>' and 'none <list> where <cond>' are short-circuit conditions (usable in 'check', 'and'/'or'/'not', and 'test'; never stored).
+- List projection & predicates: 'loop <list_or_range> -> <expr>' (no 'end') maps each element ('it', 1-based 'it.index') to a new list (e.g. names = loop users -> it.name; 'where' creates a fresh 1-indexed list before 'loop ... ->' runs). 'any <list> where <cond>' and 'none <list> where <cond>' are short-circuit conditions (usable in 'check', 'and'/'or'/'not', and 'test'; never stored).
 
 - Precedence (high to low):
   1. ()  .  :  with
@@ -120,7 +124,9 @@ to classify_roll limit
     -> outcome
 end
 
-to add a b -> a + b
+to add a b
+    -> a + b
+end
 
 slots = (range 1 4) * 0
 bumped = slots with .2 = slots.2 + 1

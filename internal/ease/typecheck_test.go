@@ -1039,7 +1039,9 @@ end
 		{
 			name: "capture variable shadowing function rejected",
 			src: `
-to helper x -> x
+to helper x
+  -> x
+end
 s = "abc"
 match s
   "{helper}"
@@ -1581,7 +1583,9 @@ end
 func TestArrowLawVoidProceduresEffectBlocksAndNoFail(t *testing.T) {
 	// 1. Happy path: one-liner `to`, void procedure, check effect block + early `->`, verdict table, match effect arms, swarm loop `->`
 	happySrc := `
-to add a b -> a + b
+to add a b
+    -> a + b
+end
 
 to log_step msg
     say "LOG:{msg}"
@@ -1653,13 +1657,13 @@ end
 		wantSub string
 	}{
 		{
-			name:    "one-liner to with say rejected",
-			src:     "to f x -> say x\n",
+			name:    "one-liner check with say rejected",
+			src:     "to f x\n  check x > 0 -> say x\nend\n",
 			wantSub: "Statements and side effects are not allowed after '->'",
 		},
 		{
-			name:    "one-liner to with assignment rejected",
-			src:     "to f x -> a = 1\n",
+			name:    "arrow with assignment rejected",
+			src:     "to f x\n  -> a = 1\nend\n",
 			wantSub: "Assignments are not allowed after '->'",
 		},
 		{
@@ -1679,7 +1683,7 @@ end
 		},
 		{
 			name:    "-> with void user function rejected",
-			src:     "to proc x\n  say x\nend\nto f x -> proc x\n",
+			src:     "to proc x\n  say x\nend\nto f x\n  -> proc x\nend\n",
 			wantSub: "'proc' is a procedure (void) and does not return a value",
 		},
 		{
@@ -2288,7 +2292,7 @@ end
 		},
 		{
 			name:    "discarded return value of function call",
-			src:     "to add a b -> a + b\nadd 1 2\n",
+			src:     "to add a b\n  -> a + b\nend\nadd 1 2\n",
 			wantSub: "Return value of 'add' is unused",
 		},
 		{
@@ -2562,7 +2566,7 @@ func TestUnclosedCheckInsideFunctionDiagnosticHint(t *testing.T) {
 		},
 		{
 			name: "unclosed loop directly enclosing nested to",
-			src:  "to f x\n  loop range 1 3\n    say it\n  to g y -> y\nend\n",
+			src:  "to f x\n  loop range 1 3\n    say it\n  to g y\n    -> y\n  end\nend\n",
 			wantSubs: []string{
 				"SyntaxError",
 				"Nested 'to' function definitions are not allowed",
@@ -2689,7 +2693,7 @@ end
 		},
 		{
 			name:     "item5 list field access with untyped function param",
-			src:      "to bump slots slot_idx -> slots.slot_idx\nxs = list 10, 20\nsay bump xs 1\n",
+			src:      "to bump slots slot_idx\n  -> slots.slot_idx\nend\nxs = list 10, 20\nsay bump xs 1\n",
 			wantSubs: []string{"TypeError", "Cannot access field '.slot_idx' on a list", ".(slot_idx)"},
 		},
 		{
@@ -2724,7 +2728,7 @@ end
 		},
 		{
 			name:     "item7 final call in function missing arrow",
-			src:      "to add a b -> a + b\nto f x\n  add x 1\nend\n",
+			src:      "to add a b\n  -> a + b\nend\nto f x\n  add x 1\nend\n",
 			wantSubs: []string{"TypeError", "Return value of 'add' is unused", "prefix the final line with '-> add ...'"},
 		},
 	}
@@ -2885,7 +2889,9 @@ def patient
     age      = 0
 end
 
-to order_queue items -> sort items by it.priority, -it.age, it.name
+to order_queue items
+  -> sort items by it.priority, -it.age, it.name
+end
 
 test "sort by multi-key, stability, union declaration order, and CSV map"
     q = list as patient with
@@ -3036,15 +3042,25 @@ def block
     y = 0
 end
 
-to add a b as number -> a + b
-to greet name as text -> "hi {name}"
-to make_block cx cy as block -> block with x = cx, y = cy
+to add a b as number
+    -> a + b
+end
+to greet name as text
+    -> "hi {name}"
+end
+to make_block cx cy as block
+    -> block with x = cx, y = cy
+end
 to inspect_move n as move_check
     check n > 0 -> "clear"
     -> "blocked"
 end
-to move_blocks bs dx as list of block -> update bs with x = it.x + dx
-to empty_blocks as list of block -> list as block
+to move_blocks bs dx as list of block
+    -> update bs with x = it.x + dx
+end
+to empty_blocks as list of block
+    -> list as block
+end
 to fact n as number
     check n <= 1 -> 1
     -> n * (fact (n - 1))
@@ -3069,7 +3085,9 @@ say fact 4
 			src: `
 import screen
 
-to make_box as screen.box -> screen.box with x = 1, y = 2, width = 10, height = 10
+to make_box as screen.box
+    -> screen.box with x = 1, y = 2, width = 10, height = 10
+end
 bx = make_box
 say bx.width
 `,
@@ -3125,7 +3143,7 @@ say xs.1.name
 		},
 		{
 			name:     "union typo in return",
-			src:      "def move_check = \"clear\" | \"blocked\"\nto check_mv as move_check -> \"typo\"\n",
+			src:      "def move_check = \"clear\" | \"blocked\"\nto check_mv as move_check\n    -> \"typo\"\nend\n",
 			wantSubs: []string{"TypeError", "Invalid value \"typo\""},
 		},
 		{
@@ -3135,22 +3153,22 @@ say xs.1.name
 		},
 		{
 			name:     "wrong typed list returned as list of block",
-			src:      "def block\n    x = 0\nend\nto empty_b as list of block -> list as number\n",
+			src:      "def block\n    x = 0\nend\nto empty_b as list of block\n    -> list as number\nend\n",
 			wantSubs: []string{"TypeError", "declares return type 'list of block', got 'list of number'"},
 		},
 		{
 			name:     "bare as list without of",
-			src:      "to xs as list -> list 1, 2\n",
+			src:      "to xs as list\n    -> list 1, 2\nend\n",
 			wantSubs: []string{"SyntaxError", "Expected 'of <type>' after 'as list'"},
 		},
 		{
 			name:     "format pseudo-type as json rejected",
-			src:      "to f x as json -> x\n",
+			src:      "to f x as json\n    -> x\nend\n",
 			wantSubs: []string{"TypeError", "conversion/I/O format"},
 		},
 		{
 			name:     "or fallback on function header rejected",
-			src:      "to f x as number or 0 -> x\n",
+			src:      "to f x as number or 0\n    -> x\nend\n",
 			wantSubs: []string{"SyntaxError", "'or' fallback cannot be used in a function return type"},
 		},
 		{
@@ -3193,8 +3211,12 @@ def job
     named  = status_kind
 end
 
-to read_a as number -> A
-to set_status w s -> w with status = s, named = s
+to read_a as number
+    -> A
+end
+to set_status w s
+    -> w with status = s, named = s
+end
 
 j = set_status (job) "closed"
 say read_a + j.status.1?0
@@ -3212,8 +3234,12 @@ def job
     named  = status_kind
 end
 
-to read_a as number -> A
-to set_status w s -> w with status = s, named = s
+to read_a as number
+    -> A
+end
+to set_status w s
+    -> w with status = s, named = s
+end
 
 st = "closed" as status_kind
 j = set_status job st
@@ -3255,7 +3281,7 @@ say j.status
 		},
 		{
 			name:     "parameter shadowing def constant rejected",
-			src:      "def max_cols = 10\nto f max_cols -> max_cols + 1\n",
+			src:      "def max_cols = 10\nto f max_cols\n    -> max_cols + 1\nend\n",
 			wantSubs: []string{"TypeError", "immutable 'def' constant"},
 		},
 		{
@@ -3265,12 +3291,12 @@ say j.status
 		},
 		{
 			name:     "inline union field rejects open text return",
-			src:      "def job\n    status = \"open\" | \"closed\"\nend\nto bad x as text -> \"oops\"\nj = job with status = bad \"x\"\n",
+			src:      "def job\n    status = \"open\" | \"closed\"\nend\nto bad x as text\n    -> \"oops\"\nend\nj = job with status = bad \"x\"\n",
 			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union"},
 		},
 		{
 			name:     "named union field rejects open text return",
-			src:      "def status_kind = \"open\" | \"closed\"\ndef job\n    status = status_kind\nend\nto bad x as text -> \"oops\"\nj = job with status = bad \"x\"\n",
+			src:      "def status_kind = \"open\" | \"closed\"\ndef job\n    status = status_kind\nend\nto bad x as text\n    -> \"oops\"\nend\nj = job with status = bad \"x\"\n",
 			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union"},
 		},
 		{
@@ -3315,23 +3341,43 @@ say j.status
 		},
 		{
 			name:     "parameter named return rejected",
-			src:      "to f return -> 1\n",
+			src:      "to f return\n  -> 1\nend\n",
 			wantSubs: []string{"TypeError", "reserved for '-> return' control flow"},
 		},
 		{
 			name:     "project non-list rejected",
-			src:      "x = 42 -> it + 1\n",
+			src:      "x = loop 42 -> it + 1\n",
 			wantSubs: []string{"TypeError", "Cannot project non-list value"},
 		},
 		{
 			name:     "project condition body rejected",
-			src:      "xs = (range 1 3) -> it > 1\n",
+			src:      "xs = loop range 1 3 -> it > 1\n",
 			wantSubs: []string{"TypeError", "Conditions cannot be"},
 		},
 		{
 			name:     "project void body rejected",
-			src:      "xs = (range 1 3) -> say it\n",
+			src:      "xs = loop range 1 3 -> say it\n",
 			wantSubs: []string{"SyntaxError"},
+		},
+		{
+			name:     "single-line to declaration rejected",
+			src:      "to add a b -> a + b\n",
+			wantSubs: []string{"SyntaxError", "Single-line 'to add ... -> <expr>' declarations are not allowed"},
+		},
+		{
+			name:     "bare list arrow projection rejected",
+			src:      "xs = (range 1 3) -> it * 2\n",
+			wantSubs: []string{"SyntaxError"},
+		},
+		{
+			name:     "two arrows on same line rejected",
+			src:      "to f xs\n  -> loop xs -> it * 2\nend\n",
+			wantSubs: []string{"SyntaxError"},
+		},
+		{
+			name:     "two arrows in check and swarm loop rejected",
+			src:      "check 1 is 1 -> swarm loop range 1 3 -> it * 2\n",
+			wantSubs: []string{"SyntaxError", "Only one '->' is allowed per line"},
 		},
 	}
 
@@ -3360,28 +3406,32 @@ def block
     row = 1
 end
 
-to make_box b as screen.box -> screen.box with x = b.col, y = b.row, width = 10, height = 10
+to make_box b as screen.box
+    -> screen.box with x = b.col, y = b.row, width = 10, height = 10
+end
 to first_x xs as number
-    check count (xs -> it.col) > 0 -> xs.1.col
+    check count (loop xs -> it.col) > 0 -> xs.1.col
     -> 0
 end
 
 bs = list as block with
     col = 2, row = 3
 end
-cols = bs -> it.col
-doubled = (range 1 5) -> it * 2
-filtered_boxes = bs where it.row >= 1 -> screen.box with
+cols = loop bs -> it.col
+doubled = loop range 1 5 -> it * 2
+swarmed = swarm loop range 1 4 -> it * 3
+filtered_boxes = loop bs where it.row >= 1 -> screen.box with
     x = it.col
     y = it.row
     width = 10
     height = 10
 end
-helper_boxes = bs -> make_box it
-empty_boxes = (list as block) -> make_box it
-chained = bs -> it.col -> it + 1
+helper_boxes = loop bs -> make_box it
+empty_boxes = loop (list as block) -> make_box it
+cols_only = loop bs -> it.col
+chained = loop cols_only -> it + 1
 
-say cols.1 + doubled.1 + filtered_boxes.1.x + helper_boxes.1.x + (count empty_boxes) + chained.1 + (first_x bs)
+say cols.1 + doubled.1 + swarmed.1 + filtered_boxes.1.x + helper_boxes.1.x + (count empty_boxes) + chained.1 + (first_x bs)
 `
 	if _, err := ParseProgram(src); err != nil {
 		t.Fatalf("expected valid projection program, got error:\n%v", err)

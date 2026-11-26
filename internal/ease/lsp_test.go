@@ -13,7 +13,9 @@ import (
 
 func TestDiagnoseSourceValidAndInvalid(t *testing.T) {
 	valid := `
-to greet name -> "Hello {name}"
+to greet name
+    -> "Hello {name}"
+end
 
 test
     greet "World" is "Hello World"
@@ -257,7 +259,7 @@ func TestLSPDiagnoseRelativeModuleImportInSubdir(t *testing.T) {
 		t.Fatal(err)
 	}
 	billingPath := filepath.Join(srcDir, "billing.ease")
-	billingSrc := "def invoice\n  net = 0\nend\nto total inv -> inv.net * 1.19\n"
+	billingSrc := "def invoice\n  net = 0\nend\nto total inv\n  -> inv.net * 1.19\nend\n"
 	if err := os.WriteFile(billingPath, []byte(billingSrc), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +325,7 @@ x = synth:play m
 func TestDocumentSymbolsImportsConstsAndFilter(t *testing.T) {
 	dir := t.TempDir()
 	helperPath := filepath.Join(dir, "helper.ease")
-	if err := os.WriteFile(helperPath, []byte("def Remote\n    id = 0\nend\nto ping -> \"pong\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(helperPath, []byte("def Remote\n    id = 0\nend\nto ping\n    -> \"pong\"\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mainPath := filepath.Join(dir, "main.ease")
@@ -338,7 +340,9 @@ end
 
 def Status = "ok" | "err"
 
-to run -> "ok"
+to run
+    -> "ok"
+end
 `
 	mainURI := pathToFileURI(mainPath)
 	syms := DocumentSymbolsForURI(mainURI, mainSrc)
@@ -368,7 +372,9 @@ func TestLSPDefinitionLocalCrossFileAndFields(t *testing.T) {
     role = "admin"
 end
 
-to greet u -> "Hi {u.name}"
+to greet u
+    -> "Hi {u.name}"
+end
 `
 	if err := os.WriteFile(helperPath, []byte(helperSrc), 0o644); err != nil {
 		t.Fatal(err)
@@ -442,7 +448,9 @@ func TestLSPHoverAndReferences(t *testing.T) {
     x = 0
 end
 
-to double n -> n * 2
+to double n
+    -> n * 2
+end
 
 to log_msg msg
     say msg
@@ -472,7 +480,7 @@ say count system.arguments
 	}
 
 	// Hover on `log_msg` -> shows `void procedure`.
-	hVoid := s.hoverForURI(modURI, LSPPosition{Line: 6, Character: 4})
+	hVoid := s.hoverForURI(modURI, LSPPosition{Line: 8, Character: 4})
 	if hVoid == nil || !strings.Contains(hVoid.Contents.Value, "void procedure") {
 		t.Fatalf("unexpected hover for void function: %+v", hVoid)
 	}
@@ -505,7 +513,9 @@ func TestLSPLastGoodASTFallbackOnSyntaxError(t *testing.T) {
     name = "Ada"
 end
 
-to greet u -> "Hi {u.name}"
+to greet u
+    -> "Hi {u.name}"
+end
 
 u = User with name = "Grace"
 say greet u
@@ -520,15 +530,15 @@ say greet u
 	if len(syms) == 0 {
 		t.Fatalf("expected lastGoodAST fallback symbols during syntax error, got 0")
 	}
-	locs := s.definitionForURI(uri, LSPPosition{Line: 7, Character: 5})
+	locs := s.definitionForURI(uri, LSPPosition{Line: 9, Character: 5})
 	if len(locs) != 1 || locs[0].Range.Start.Line != 4 {
 		t.Fatalf("expected lastGoodAST fallback definition for 'greet' at line 4, got: %+v", locs)
 	}
-	hov := s.hoverForURI(uri, LSPPosition{Line: 7, Character: 5})
+	hov := s.hoverForURI(uri, LSPPosition{Line: 9, Character: 5})
 	if hov == nil || !strings.Contains(hov.Contents.Value, "to greet u") {
 		t.Fatalf("expected lastGoodAST fallback hover for 'greet', got: %+v", hov)
 	}
-	refs := s.referencesForURI(uri, LSPPosition{Line: 7, Character: 5}, true)
+	refs := s.referencesForURI(uri, LSPPosition{Line: 9, Character: 5}, true)
 	if len(refs) != 2 {
 		t.Fatalf("expected lastGoodAST fallback references for 'greet', got: %+v", refs)
 	}
@@ -539,14 +549,16 @@ func TestLSPReturnTypeHoverDefAndInfer(t *testing.T) {
     x = 0
 end
 
-to make_block v as block -> block with x = v
+to make_block v as block
+    -> block with x = v
+end
 
 b = make_block 5
 say b.x
 `
 	uri := "file:///ret.ease"
-	// Hover on `make_block` call at line 6, col 5
-	hov := HoverForURI(uri, src, LSPPosition{Line: 6, Character: 5})
+	// Hover on `make_block` call at line 8, col 5
+	hov := HoverForURI(uri, src, LSPPosition{Line: 8, Character: 5})
 	if hov == nil || !strings.Contains(hov.Contents.Value, "to make_block v as block") {
 		t.Fatalf("expected hover with 'as block', got: %+v", hov)
 	}
@@ -555,15 +567,17 @@ say b.x
 	if len(locs) != 1 || locs[0].Range.Start.Line != 0 {
 		t.Fatalf("expected definition jump to def block at line 0, got: %+v", locs)
 	}
-	// Go-to-Definition on `b.x` (line 7, col 6) relies on lspInferExprType(make_block 5) -> block
-	fieldLocs := DefinitionForURI(uri, src, LSPPosition{Line: 7, Character: 6})
+	// Go-to-Definition on `b.x` (line 9, col 6) relies on lspInferExprType(make_block 5) -> block
+	fieldLocs := DefinitionForURI(uri, src, LSPPosition{Line: 9, Character: 6})
 	if len(fieldLocs) != 1 || fieldLocs[0].Range.Start.Line != 1 {
 		t.Fatalf("expected definition jump to block.x at line 1, got: %+v", fieldLocs)
 	}
 }
 
 func TestLSPOrderIndependentDefConstant(t *testing.T) {
-	src := `to get_val as number -> catalog.1.x
+	src := `to get_val as number
+    -> catalog.1.x
+end
 
 def item
     x = 0
@@ -574,9 +588,9 @@ def catalog = list as item with
 end
 `
 	uri := "file:///const.ease"
-	locs := DefinitionForURI(uri, src, LSPPosition{Line: 0, Character: 25})
-	if len(locs) != 1 || locs[0].Range.Start.Line != 6 {
-		t.Fatalf("expected definition jump to def catalog at line 6, got: %+v", locs)
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 1, Character: 7})
+	if len(locs) != 1 || locs[0].Range.Start.Line != 8 {
+		t.Fatalf("expected definition jump to def catalog at line 8, got: %+v", locs)
 	}
 }
 
@@ -586,12 +600,12 @@ func TestLSPListProjectionItFieldDefinition(t *testing.T) {
 end
 
 users = list as user
-names = users -> it.name
+names = loop users -> it.name
 say count names
 `
 	uri := "file:///proj.ease"
-	// Cursor on `name` in `users -> it.name` (line 5, col 21)
-	locs := DefinitionForURI(uri, src, LSPPosition{Line: 5, Character: 21})
+	// Cursor on `name` in `loop users -> it.name` (line 5, col 26)
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 5, Character: 26})
 	if len(locs) != 1 || locs[0].Range.Start.Line != 1 {
 		t.Fatalf("expected definition jump to user.name at line 1, got: %+v", locs)
 	}

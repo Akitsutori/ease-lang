@@ -570,7 +570,7 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 				params = " " + strings.Join(fn.Params, " ")
 			}
 			if stmtsHaveReturn(fn.Body) {
-				fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
+				fmt.Fprintf(&b, "to %s%s\n  -> 0\nend\n", fn.Name, params)
 			} else {
 				fmt.Fprintf(&b, "to %s%s\n  say \"\"\nend\n", fn.Name, params)
 			}
@@ -591,7 +591,7 @@ func (s *Service) buildDebugPreamble(chunkFuncs map[string]bool) string {
 			params = " " + strings.Join(fn.Params, " ")
 		}
 		if stmtsHaveReturn(fn.Body) {
-			fmt.Fprintf(&b, "to %s%s -> 0\n", fn.Name, params)
+			fmt.Fprintf(&b, "to %s%s\n  -> 0\nend\n", fn.Name, params)
 		} else {
 			fmt.Fprintf(&b, "to %s%s\n  say \"\"\nend\n", fn.Name, params)
 		}

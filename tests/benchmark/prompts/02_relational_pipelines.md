@@ -1,4 +1,4 @@
-# Arena 02: Relational Pipelines (`where`, `->`, `update`, `sort`, `any`/`none`)
+# Arena 02: Relational Pipelines (`where`, `loop ... ->`, `update`, `sort`, `any`/`none`)
 
 Write a single self-contained Ease program (no `test` block needed; hidden tests will be appended).
 Output ONLY valid Ease code with no markdown fences and no explanation.
@@ -17,11 +17,11 @@ Output ONLY valid Ease code with no markdown fences and no explanation.
 4. Write `to apply_vip_discount orders as list of order`:
    - Using `update ... where ... with ...` (NOT an imperative loop), reduce `total` by 10% (`it.total * 0.9`) for orders where `it.vip is "gold"`.
 5. Write `to build_receipts orders min_total as list of receipt`:
-   - Filter `orders` where `it.total >= min_total`, sort ascending by `it.vip` (closed union order: gold, silver, bronze) then by `it.id`, and project with `->` into `receipt` records where `id = it.id` and `summary = "{it.customer}:{it.total}"`.
+   - Filter `orders` where `it.total >= min_total`, sort ascending by `it.vip` (closed union order: gold, silver, bronze) then by `it.id`, and project with `loop ... -> ...` into `receipt` records where `id = it.id` and `summary = "{it.customer}:{it.total}"`.
 6. Write `to queue_status orders as text`:
    - Using `none` / `any` existential predicates (NOT `count (... where ...)`):
      - If `none orders where it.total > 0` -> `"empty"`
      - If `any orders where it.vip is "gold" and it.total >= 100` -> `"priority"`
      - Otherwise -> `"standard"`
 
-Use idiomatic declarative pipelines (`where`, `->`, `update`, `sort ... by`, `any`/`none`) with zero imperative `loop` + `append` boilerplate and explicit `as <return_type>` contracts.
+Use idiomatic declarative pipelines (`where`, `loop ... ->`, `update`, `sort ... by`, `any`/`none`) with zero imperative `loop` + `append` boilerplate and explicit `as <return_type>` contracts.

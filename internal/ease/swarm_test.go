@@ -301,7 +301,9 @@ s = sum res
 
 	// Dynamic mixed return types via untyped helper
 	dynMixed := `
-to id x -> x
+to id x
+  -> x
+end
 res = swarm loop range 1 2
   check it is 1 -> id 10
   -> id "two"

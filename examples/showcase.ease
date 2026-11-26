@@ -29,8 +29,10 @@ def account
     points = 0
 end
 
-# 2. One-liner Function & Void Procedure
-to with_tax net -> round (net * (1 + tax_rate) * 100) / 100
+# 2. Pure Function & Void Procedure
+to with_tax net
+    -> round (net * (1 + tax_rate) * 100) / 100
+end
 
 to announce tag msg
     say "[{tag}] {msg}"

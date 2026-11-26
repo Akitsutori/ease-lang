@@ -95,7 +95,9 @@ end
 
 # Presents a scene to the window, renders 1 frame,
 # and returns the current frame_state serialized as JSON text.
-to present target current_scene -> screen_present target current_scene
+to present target current_scene
+    -> screen_present target current_scene
+end
 
 # Clears the window frame buffer with `bg_color` (opening the window lazily on first frame).
 to clear target bg_color
@@ -109,4 +111,6 @@ to draw target item_or_list
 end
 
 # Flushes the current frame buffer to the window and returns a typed `screen.frame_state`.
-to show target -> screen_show target
+to show target
+    -> screen_show target
+end

@@ -62,7 +62,9 @@ func TestStdNetworkImportAndHTTPCall(t *testing.T) {
 	src := fmt.Sprintf(`
 import network
 
-to parse_age raw -> raw as number
+to parse_age raw
+    -> raw as number
+end
 
 to validate_age age
     check age is not number -> "Ungültiges Zahlenformat"
@@ -186,7 +188,9 @@ def my_record
     second = ""
 end
 
-to make_pair a b -> ("\{\"first\": \"{a}\", \"second\": \"{b}\"\}") as json
+to make_pair a b
+    -> ("\{\"first\": \"{a}\", \"second\": \"{b}\"\}") as json
+end
 
 x = make_pair "a" "b" as my_record
 `
@@ -538,7 +542,9 @@ def Config
   lvl = "INFO" | "WARN" | "ERROR"
 end
 
-to fallback_port -> 9090
+to fallback_port
+    -> 9090
+end
 
 to check_guard raw flag
   check raw as number or 0 > 5 -> "big"
@@ -686,9 +692,13 @@ say "{p1}|{p2}"
 		src := `
 def Level = "INFO" | "WARN"
 
-to dyn_num raw fb -> raw as number or fb
+to dyn_num raw fb
+    -> raw as number or fb
+end
 
-to dyn_lvl raw fb -> raw as Level or fb
+to dyn_lvl raw fb
+    -> raw as Level or fb
+end
 
 good1 = dyn_num "nope" 99
 good2 = dyn_lvl "nope" "WARN"
@@ -703,7 +713,9 @@ say "{good1}|{good2}"
 		}
 
 		badDynNum := `
-to dyn_num raw fb -> raw as number or fb
+to dyn_num raw fb
+    -> raw as number or fb
+end
 say dyn_num "nope" "still-bad"
 `
 		if _, err := EvalProgram(badDynNum, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "Fallback for 'as number' must be number") {
@@ -712,7 +724,9 @@ say dyn_num "nope" "still-bad"
 
 		badDynLvl := `
 def Level = "INFO" | "WARN"
-to dyn_lvl raw fb -> raw as Level or fb
+to dyn_lvl raw fb
+    -> raw as Level or fb
+end
 say dyn_lvl "nope" "TYPO"
 `
 		if _, err := EvalProgram(badDynLvl, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "is not valid for union \"Level\"") {

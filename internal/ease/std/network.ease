@@ -64,7 +64,9 @@ to send target path payload
     -> res.body
 end
 
-to serve_http port requests -> net_serve_http port requests
+to serve_http port requests
+    -> net_serve_http port requests
+end
 
 to reply_text req status body
     net_reply_text req status body
@@ -74,7 +76,9 @@ to reply_json req status data
     net_reply_json req status data
 end
 
-to serve_tcp port clients -> net_serve_tcp port clients
+to serve_tcp port clients
+    -> net_serve_tcp port clients
+end
 
 to tcp_send client msg
     net_send client msg

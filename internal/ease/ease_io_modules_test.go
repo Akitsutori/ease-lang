@@ -21,7 +21,7 @@ func TestStandaloneBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	programSrc := "to greet who -> \"Hi \" + who\ntest\n  greet \"Ease\" is \"Hi Ease\"\nend\nsay greet \"Go\"\n"
+	programSrc := "to greet who\n  -> \"Hi \" + who\nend\ntest\n  greet \"Ease\" is \"Hi Ease\"\nend\nsay greet \"Go\"\n"
 	if err := BuildStandaloneExe(hostPath, programSrc, outPath); err != nil {
 		t.Fatalf("BuildStandaloneExe failed: %v", err)
 	}
@@ -316,11 +316,17 @@ end
 
 def outcome = invoice | "empty"
 
-to version -> "v1"
+to version
+  -> "v1"
+end
 
-to total inv -> inv.net * (1 + default_tax)
+to total inv
+  -> inv.net * (1 + default_tax)
+end
 
-to apply_tax amount rate -> amount * (1 + rate)
+to apply_tax amount rate
+  -> amount * (1 + rate)
+end
 
 test "module internal check should be ignored on import"
   1 is 2
@@ -333,10 +339,10 @@ end
 	// 2. Write two sibling modules with colliding names to verify encapsulation.
 	aPath := filepath.Join(dir, "mod_a.ease")
 	bPath := filepath.Join(dir, "mod_b.ease")
-	if err := os.WriteFile(aPath, []byte("def rate = 10\ndef item\n  label = \"A\"\nend\nto tag x -> \"A:\" + x\n"), 0o644); err != nil {
+	if err := os.WriteFile(aPath, []byte("def rate = 10\ndef item\n  label = \"A\"\nend\nto tag x\n  -> \"A:\" + x\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bPath, []byte("def rate = 20\ndef item\n  label = \"B\"\nend\nto tag x -> \"B:\" + x\n"), 0o644); err != nil {
+	if err := os.WriteFile(bPath, []byte("def rate = 20\ndef item\n  label = \"B\"\nend\nto tag x\n  -> \"B:\" + x\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -346,7 +352,7 @@ end
 		t.Fatal(err)
 	}
 	helperPath := filepath.Join(subDir, "helper.ease")
-	if err := os.WriteFile(helperPath, []byte("import \"../mod_a.ease\" as ma\nto double_rate -> ma.rate * 2\n"), 0o644); err != nil {
+	if err := os.WriteFile(helperPath, []byte("import \"../mod_a.ease\" as ma\nto double_rate\n  -> ma.rate * 2\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -360,7 +366,9 @@ def item
   label = "local"
 end
 
-to tag x -> "L:" + x
+to tag x
+  -> "L:" + x
+end
 
 inv = billing.invoice with id = "INV-1", net = 100
 inv2 = billing.invoice with id = "INV-1", net = 100
@@ -477,7 +485,9 @@ end
 func TestAskEOFLoopPreventionAndTestChecks(t *testing.T) {
 	interactiveSrc := `def prompt_label = "> "
 
-to format_cmd c -> "{prompt_label}{c}"
+to format_cmd c
+  -> "{prompt_label}{c}"
+end
 
 loop
   cmd = ask prompt_label
@@ -582,12 +592,12 @@ func TestStandaloneBundleMultiFileRoundTrip(t *testing.T) {
 	}
 
 	utilPath := filepath.Join(sharedDir, "util.ease")
-	if err := os.WriteFile(utilPath, []byte("to bonus x -> x + 5\n"), 0o644); err != nil {
+	if err := os.WriteFile(utilPath, []byte("to bonus x\n  -> x + 5\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	combatPath := filepath.Join(subDir, "combat.ease")
-	combatSrc := "import \"../shared/util.ease\" as util\ndef crit = 1.5\ndef fighter\n  hp = 100\nend\nto strike f power -> f with hp = f.hp - util:bonus (power * crit)\n"
+	combatSrc := "import \"../shared/util.ease\" as util\ndef crit = 1.5\ndef fighter\n  hp = 100\nend\nto strike f power\n  -> f with hp = f.hp - util:bonus (power * crit)\nend\n"
 	if err := os.WriteFile(combatPath, []byte(combatSrc), 0o644); err != nil {
 		t.Fatal(err)
 	}
