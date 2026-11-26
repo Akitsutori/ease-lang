@@ -1103,8 +1103,16 @@ func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
 
 	collectReadsStmts(stmts)
 
-	var checkDecls func(list []Stmt) error
-	checkDecls = func(list []Stmt) error {
+	unusedHint := func(name string, inChildBlock bool) string {
+		h := fmt.Sprintf("Use '%s' in a subsequent expression, return it with '-> %s', or remove the unused assignment.", name, name)
+		if inChildBlock {
+			h += fmt.Sprintf(" Variables first assigned inside a 'check'/'loop' block stay local to that block; initialize '%s' before the block if you want to read it afterwards.", name)
+		}
+		return h
+	}
+
+	var checkDecls func(list []Stmt, inChildBlock bool) error
+	checkDecls = func(list []Stmt, inChildBlock bool) error {
 		for _, s := range list {
 			switch st := s.(type) {
 			case *AssignStmt:
@@ -1115,7 +1123,7 @@ func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
 						st.Col,
 						v.source,
 						fmt.Sprintf("Local variable %q is assigned but never used", st.Name),
-						fmt.Sprintf("Use '%s' in a subsequent expression, return it with '-> %s', or remove the unused assignment.", st.Name, st.Name),
+						unusedHint(st.Name, inChildBlock),
 					)
 				}
 			case *ConstDeclStmt:
@@ -1126,48 +1134,48 @@ func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
 						st.Col,
 						v.source,
 						fmt.Sprintf("Local variable %q is assigned but never used", st.Name),
-						fmt.Sprintf("Use '%s' in a subsequent expression, return it with '-> %s', or remove the unused assignment.", st.Name, st.Name),
+						unusedHint(st.Name, inChildBlock),
 					)
 				}
 			case *LoopStmt:
-				if err := checkDecls(st.Body); err != nil {
+				if err := checkDecls(st.Body, true); err != nil {
 					return err
 				}
 			case *TakeStmt:
-				if err := checkDecls(st.Body); err != nil {
+				if err := checkDecls(st.Body, true); err != nil {
 					return err
 				}
 			case *CheckGuardStmt:
-				if err := checkDecls(st.Body); err != nil {
+				if err := checkDecls(st.Body, true); err != nil {
 					return err
 				}
 				for _, r := range st.Rules {
 					if r.Action != nil {
-						if err := checkDecls([]Stmt{r.Action}); err != nil {
+						if err := checkDecls([]Stmt{r.Action}, true); err != nil {
 							return err
 						}
 					}
 				}
-				if err := checkDecls(st.ElseBody); err != nil {
+				if err := checkDecls(st.ElseBody, true); err != nil {
 					return err
 				}
 			case *MatchStmt:
 				for _, arm := range st.Arms {
 					if arm.Action != nil {
-						if err := checkDecls([]Stmt{arm.Action}); err != nil {
+						if err := checkDecls([]Stmt{arm.Action}, true); err != nil {
 							return err
 						}
 					}
-					if err := checkDecls(arm.Body); err != nil {
+					if err := checkDecls(arm.Body, true); err != nil {
 						return err
 					}
 				}
-				if err := checkDecls(st.ElseBody); err != nil {
+				if err := checkDecls(st.ElseBody, true); err != nil {
 					return err
 				}
 			}
 		}
 		return nil
 	}
-	return checkDecls(stmts)
+	return checkDecls(stmts, false)
 }

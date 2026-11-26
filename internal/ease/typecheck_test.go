@@ -2302,6 +2302,11 @@ end
 			wantSub: `Local variable "dead" is assigned but never used`,
 		},
 		{
+			name:    "unused local variable inside check block gets block-local hint",
+			src:     "to f cond\n  check cond is 1\n    coffee = \"yes\"\n  end\n  -> \"no\"\nend\n",
+			wantSub: "Variables first assigned inside a 'check'/'loop' block stay local to that block; initialize 'coffee' before the block if you want to read it afterwards.",
+		},
+		{
 			name:    "match expr else without explicit arrow rejected",
 			src:     "to f raw\n  res = match raw\n    \"a\" -> 1\n    else\n      say raw\n      2\n  end\n  -> res\nend\n",
 			wantSub: "must end with '-> <expression>'",

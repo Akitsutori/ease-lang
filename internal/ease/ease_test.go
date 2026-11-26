@@ -1615,6 +1615,16 @@ loop range 1 3 say it end
 			want: "Cannot name variable \"count\" the same as a built-in function",
 		},
 		{
+			name: "var collides with builtin before later read",
+			src:  "count = 5\nsay \"{count}\"\n",
+			want: "TypeError at line 1",
+		},
+		{
+			name: "param collides with builtin before later read",
+			src:  "to f type\n  check type is \"a\" -> 1\n  -> 0\nend\n",
+			want: "TypeError at line 1",
+		},
+		{
 			name: "func collides with builtin",
 			src:  "to count x\n  -> x\nend\n",
 			want: "Cannot define function \"count\": it conflicts with a built-in function",

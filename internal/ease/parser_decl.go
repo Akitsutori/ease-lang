@@ -322,7 +322,18 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 
 	var params []string
 	for p.check(TOK_IDENT) {
-		params = append(params, p.advance().Lexeme)
+		paramTok := p.advance()
+		if _, isBuiltin := builtinArities[paramTok.Lexeme]; isBuiltin {
+			return nil, newError(
+				"TypeError",
+				paramTok.Line,
+				paramTok.Col,
+				p.source,
+				fmt.Sprintf("Cannot name parameter %q the same as a built-in function", paramTok.Lexeme),
+				"Choose a domain-specific name (e.g. 'total' instead of 'count', 'kind' instead of 'type').",
+			)
+		}
+		params = append(params, paramTok.Lexeme)
 		if p.check(TOK_COMMA) {
 			tok := p.current()
 			return nil, newError(

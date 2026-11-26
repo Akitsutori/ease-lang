@@ -463,6 +463,16 @@ func (p *Parser) checkNoFieldOrIndexAssign(expr Expr) error {
 
 func (p *Parser) parseBareAssignStmt() (Stmt, error) {
 	nameTok := p.advance()
+	if _, isBuiltin := builtinArities[nameTok.Lexeme]; isBuiltin {
+		return nil, newError(
+			"TypeError",
+			nameTok.Line,
+			nameTok.Col,
+			p.source,
+			fmt.Sprintf("Cannot name variable %q the same as a built-in function", nameTok.Lexeme),
+			"Choose a domain-specific name (e.g. 'total' instead of 'count', 'kind' instead of 'type').",
+		)
+	}
 	p.advance() // '='
 	val, err := p.parseExpr()
 	if err != nil {
