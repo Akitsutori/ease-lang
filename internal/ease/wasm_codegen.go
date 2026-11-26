@@ -151,6 +151,9 @@ func (wc *wasmCompiler) compileEntryPoints() error {
 	wc.locals = nil
 	wc.localTypes = nil
 	var ic wasmCodeBuf
+	if err := wc.emitTopLevelConsts(&ic); err != nil {
+		return err
+	}
 	if err := wc.emitStmts(&ic, wc.prog.Body); err != nil {
 		return err
 	}
@@ -318,6 +321,9 @@ func (wc *wasmCompiler) emitDirectLoopScreenApp(initFn, stepFn uint32, preLoop [
 	wc.locals = nil
 	wc.localTypes = nil
 	var ic wasmCodeBuf
+	if err := wc.emitTopLevelConsts(&ic); err != nil {
+		return err
+	}
 	if err := wc.emitStmts(&ic, preLoop); err != nil {
 		return err
 	}
@@ -380,6 +386,9 @@ func (wc *wasmCompiler) emitSpawnTakeScreenApp(initFn, stepFn uint32, preOpenStm
 	wc.locals = nil
 	wc.localTypes = nil
 	var ic wasmCodeBuf
+	if err := wc.emitTopLevelConsts(&ic); err != nil {
+		return err
+	}
 	if err := wc.emitStmts(&ic, preOpenStmts); err != nil {
 		return err
 	}
@@ -423,7 +432,7 @@ func (wc *wasmCompiler) emitSpawnTakeScreenApp(initFn, stepFn uint32, preOpenStm
 	// Execute takeStmt body (check close/escape -> activeGlobal = 0)
 	for _, st := range takeStmt.Body {
 		if cg, ok := st.(*CheckGuardStmt); ok && len(cg.Rules) == 1 {
-			if _, isEnd := cg.Rules[0].Action.(*LoopEndStmt); isEnd {
+			if _, isStop := cg.Rules[0].Action.(*LoopStopStmt); isStop {
 				if err := wc.emitExpr(&sc, cg.Rules[0].Cond, wasmTypeInfo{kind: wkCond}); err != nil {
 					return err
 				}
@@ -485,7 +494,7 @@ func (wc *wasmCompiler) emitSpawnTakeScreenApp(initFn, stepFn uint32, preOpenStm
 }
 
 func (wc *wasmCompiler) emitStepStmt(c *wasmCodeBuf, st Stmt) error {
-	if _, isEnd := st.(*LoopEndStmt); isEnd {
+	if _, isStop := st.(*LoopStopStmt); isStop {
 		c.i32Const(0)
 		c.globalSet(wc.activeGlobal)
 		c.br(0)
@@ -493,9 +502,9 @@ func (wc *wasmCompiler) emitStepStmt(c *wasmCodeBuf, st Stmt) error {
 	}
 	if cg, ok := st.(*CheckGuardStmt); ok && len(cg.Rules) == 1 {
 		if cg.Rules[0].Action != nil {
-			_, isEnd := cg.Rules[0].Action.(*LoopEndStmt)
+			_, isStop := cg.Rules[0].Action.(*LoopStopStmt)
 			_, isRet := cg.Rules[0].Action.(*ReturnStmt)
-			if isEnd || isRet {
+			if isStop || isRet {
 				_ = wc.emitExpr(c, cg.Rules[0].Cond, wasmTypeInfo{kind: wkCond})
 				c.ifOp(wasmBlockVoid)
 				c.i32Const(0)
@@ -747,9 +756,36 @@ func (wc *wasmCompiler) emitStmts(c *wasmCodeBuf, stmts []Stmt) error {
 	return nil
 }
 
+func (wc *wasmCompiler) emitTopLevelConsts(c *wasmCodeBuf) error {
+	for _, cs := range wc.sortedConsts {
+		if wc.emittedConsts[cs.Name] {
+			continue
+		}
+		wc.emittedConsts[cs.Name] = true
+		wt := wc.inferExprTypeWithEnv(cs.Value, wc.curEnvTypes(), "")
+		if wt.kind == wkVoid {
+			wt = wasmTypeInfo{kind: wkNum}
+		}
+		slot := wc.ensureVar(cs.Name, wt)
+		before := len(c.b)
+		if err := wc.emitExpr(c, cs.Value, wt); err != nil {
+			return err
+		}
+		if len(c.b) == before {
+			return fmt.Errorf("wasm: ConstDeclStmt %q emitted 0 bytes for %T", cs.Name, cs.Value)
+		}
+		wc.emitSetVar(c, slot)
+	}
+	return nil
+}
+
 func (wc *wasmCompiler) emitStmt(c *wasmCodeBuf, st Stmt) error {
 	switch s := st.(type) {
 	case *ConstDeclStmt:
+		if wc.emittedConsts[s.Name] {
+			return nil
+		}
+		wc.emittedConsts[s.Name] = true
 		wt := wc.inferExprTypeWithEnv(s.Value, wc.curEnvTypes(), "")
 		if wt.kind == wkVoid {
 			wt = wasmTypeInfo{kind: wkNum}
@@ -829,10 +865,14 @@ func (wc *wasmCompiler) emitStmt(c *wasmCodeBuf, st Stmt) error {
 		c.op(opReturn)
 		return nil
 
-	case *LoopEndStmt:
+	case *LoopStopStmt:
 		if wc.loopDepth > 0 {
 			c.br(uint32(wc.breakDepth + 1))
 		}
+		return nil
+
+	case *VoidReturnStmt:
+		c.op(opReturn)
 		return nil
 
 	case *CheckGuardStmt:
@@ -1331,6 +1371,178 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		c.op(opEnd)
 		c.op(opEnd)
 		c.localGet(outList)
+		return nil
+
+	case *ProjectExpr:
+		lt := wc.inferExprTypeWithEnv(ex.Source, wc.curEnvTypes(), "")
+		srcList := wc.allocLocal(wasmI32)
+		outList := wc.allocLocal(wasmI32)
+		if err := wc.emitExpr(c, ex.Source, lt); err != nil {
+			return err
+		}
+		c.localTee(srcList)
+		c.memOp(opI32Load, 2, 4)
+		nLocal := wc.allocLocal(wasmI32)
+		c.localSet(nLocal)
+		c.i32Const(4)
+		c.call(wc.rt.fnListNew)
+		c.localSet(outList)
+
+		dataLocal := wc.allocLocal(wasmI32)
+		c.localGet(srcList)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(dataLocal)
+
+		srcElem := wasmTypeInfo{kind: lt.elemKind, name: lt.name}
+		if srcElem.kind == wkList && strings.HasPrefix(lt.name, "list<") && strings.HasSuffix(lt.name, ">") {
+			inner := lt.name[5 : len(lt.name)-1]
+			srcElem = wasmTypeInfo{kind: wkList, name: inner, elemKind: wc.typeKindForName(inner)}
+		}
+		if srcElem.kind == wkVoid {
+			srcElem.kind = wkNum
+		}
+		itSlot, idxSlot, restoreIt := wc.pushLoopItVars(srcElem)
+		defer restoreIt()
+
+		dstElem := wc.inferExprTypeWithEnv(ex.Body, wc.curEnvTypes(), "")
+		if dstElem.kind == wkVoid {
+			dstElem.kind = wkNum
+		}
+
+		iLocal := wc.allocLocal(wasmI32)
+		c.i32Const(0)
+		c.localSet(iLocal)
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(iLocal)
+		c.localGet(nLocal)
+		c.op(opI32GeS)
+		c.brIf(1)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.op(opF64ConvertI32S)
+		wc.emitSetVar(c, idxSlot)
+
+		c.localGet(dataLocal)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		switch srcElem.wasmStorageType() {
+		case wasmF64:
+			c.op(opF64ReinterpretI64)
+		case wasmI32:
+			c.op(opI32WrapI64)
+		}
+		wc.emitSetVar(c, itSlot)
+
+		c.localGet(outList)
+		if err := wc.emitExpr(c, ex.Body, dstElem); err != nil {
+			return err
+		}
+		switch dstElem.wasmStorageType() {
+		case wasmF64:
+			c.op(opI64ReinterpretF64)
+		case wasmI32:
+			c.op(opI64ExtendI32U)
+		}
+		c.call(wc.rt.fnListPush)
+		c.localSet(outList)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(iLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+		c.localGet(outList)
+		return nil
+
+	case *QuantifierExpr:
+		lt := wc.inferExprTypeWithEnv(ex.Source, wc.curEnvTypes(), "")
+		srcList := wc.allocLocal(wasmI32)
+		if err := wc.emitExpr(c, ex.Source, lt); err != nil {
+			return err
+		}
+		c.localTee(srcList)
+		c.memOp(opI32Load, 2, 4)
+		nLocal := wc.allocLocal(wasmI32)
+		c.localSet(nLocal)
+		dataLocal := wc.allocLocal(wasmI32)
+		c.localGet(srcList)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(dataLocal)
+
+		resLocal := wc.allocLocal(wasmI32)
+		if ex.Kind == "none" {
+			c.i32Const(1)
+		} else {
+			c.i32Const(0)
+		}
+		c.localSet(resLocal)
+
+		srcElem := wasmTypeInfo{kind: lt.elemKind, name: lt.name}
+		if srcElem.kind == wkVoid {
+			srcElem.kind = wkNum
+		}
+		itSlot, idxSlot, restoreIt := wc.pushLoopItVars(srcElem)
+		defer restoreIt()
+
+		iLocal := wc.allocLocal(wasmI32)
+		c.i32Const(0)
+		c.localSet(iLocal)
+		c.block(wasmBlockVoid)
+		c.loop(wasmBlockVoid)
+		c.localGet(iLocal)
+		c.localGet(nLocal)
+		c.op(opI32GeS)
+		c.brIf(1)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.op(opF64ConvertI32S)
+		wc.emitSetVar(c, idxSlot)
+
+		c.localGet(dataLocal)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		switch srcElem.wasmStorageType() {
+		case wasmF64:
+			c.op(opF64ReinterpretI64)
+		case wasmI32:
+			c.op(opI32WrapI64)
+		}
+		wc.emitSetVar(c, itSlot)
+
+		if err := wc.emitExpr(c, ex.Cond, wasmTypeInfo{kind: wkCond}); err != nil {
+			return err
+		}
+		c.ifOp(wasmBlockVoid)
+		if ex.Kind == "none" {
+			c.i32Const(0)
+		} else {
+			c.i32Const(1)
+		}
+		c.localSet(resLocal)
+		c.br(2)
+		c.op(opEnd)
+
+		c.localGet(iLocal)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(iLocal)
+		c.br(0)
+		c.op(opEnd)
+		c.op(opEnd)
+		c.localGet(resLocal)
 		return nil
 
 	case *UpdateExpr:

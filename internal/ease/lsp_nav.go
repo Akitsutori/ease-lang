@@ -321,7 +321,13 @@ func collectLSPScope(prog *Program, cursorLine int) *lspScopeInfo {
 		sc.funcs[fn.Name] = fn
 	}
 
-	// Collect top-level constants and variables.
+	// Collect top-level constants (order-independent) and variables.
+	for _, st := range prog.Body {
+		if cs, ok := st.(*ConstDeclStmt); ok {
+			sc.vars[cs.Name] = posInfo{Line: cs.Line, Col: cs.Col}
+			sc.varTypes[cs.Name] = lspInferExprType(cs.Value, sc)
+		}
+	}
 	collectVarsFromStmts(prog.Body, sc, cursorLine, false)
 
 	// Find enclosing function (highest fn.Line <= cursorLine whose body spans cursorLine).
@@ -345,6 +351,24 @@ func collectLSPScope(prog *Program, cursorLine int) *lspScopeInfo {
 			collectVarsFromStmts(chk.Body, sc, cursorLine, true)
 		}
 	}
+	walkAllExprs(prog, func(e Expr) {
+		switch ex := e.(type) {
+		case *ProjectExpr:
+			if ex.Line == cursorLine {
+				srcT := lspInferExprType(ex.Source, sc)
+				if strings.HasPrefix(srcT, "list<") && strings.HasSuffix(srcT, ">") {
+					sc.varTypes["it"] = srcT[5 : len(srcT)-1]
+				}
+			}
+		case *QuantifierExpr:
+			if ex.Line == cursorLine {
+				srcT := lspInferExprType(ex.Source, sc)
+				if strings.HasPrefix(srcT, "list<") && strings.HasSuffix(srcT, ">") {
+					sc.varTypes["it"] = srcT[5 : len(srcT)-1]
+				}
+			}
+		}
+	})
 	return sc
 }
 
@@ -446,6 +470,22 @@ func lspInferExprType(e Expr, sc *lspScopeInfo) string {
 		return lspInferExprType(ex.Target, sc)
 	case *SortByExpr:
 		return lspInferExprType(ex.Target, sc)
+	case *ProjectExpr:
+		srcT := lspInferExprType(ex.Source, sc)
+		prevIt, hadIt := sc.varTypes["it"]
+		if strings.HasPrefix(srcT, "list<") && strings.HasSuffix(srcT, ">") {
+			sc.varTypes["it"] = srcT[5 : len(srcT)-1]
+		}
+		bodyT := lspInferExprType(ex.Body, sc)
+		if hadIt {
+			sc.varTypes["it"] = prevIt
+		} else {
+			delete(sc.varTypes, "it")
+		}
+		if bodyT != "" {
+			return "list<" + bodyT + ">"
+		}
+		return "list"
 	case *CastExpr:
 		if ex.TypeName == "json" {
 			return "json"
@@ -473,14 +513,37 @@ func lspInferExprType(e Expr, sc *lspScopeInfo) string {
 		}
 	case *CallExpr:
 		if ex.Module != "" {
-			if imp, isImp := sc.imports[ex.Module]; isImp && imp.Name == "screen" && ex.Callee == "show" {
-				return ex.Module + ".frame_state"
-			}
-			if imp, isImp := sc.imports[ex.Module]; isImp && imp.Name == "system" && ex.Callee == "run" {
-				return ex.Module + ".process_report"
+			if imp, isImp := sc.imports[ex.Module]; isImp {
+				if imp.Name == "screen" && ex.Callee == "show" {
+					return ex.Module + ".frame_state"
+				}
+				if imp.Name == "system" && ex.Callee == "run" {
+					return ex.Module + ".process_report"
+				}
+				if imp.ModuleProg != nil {
+					for _, fn := range imp.ModuleProg.Functions {
+						if fn.Name == ex.Callee && fn.ReturnType != "" {
+							if fn.ReturnElemType != "" {
+								elem := fn.ReturnElemType
+								if elem != "number" && elem != "text" && !strings.Contains(elem, ".") {
+									elem = ex.Module + "." + elem
+								}
+								return "list<" + elem + ">"
+							}
+							rt := fn.ReturnType
+							if rt != "number" && rt != "text" && !strings.Contains(rt, ".") {
+								rt = ex.Module + "." + rt
+							}
+							return rt
+						}
+					}
+				}
 			}
 		}
 		if ex.Module == "" {
+			if fn := sc.funcs[ex.Callee]; fn != nil && fn.ReturnType != "" {
+				return fn.ReturnType
+			}
 			switch ex.Callee {
 			case "ask", "trim", "upper", "lower", "replace", "join", "type":
 				return "text"
@@ -795,8 +858,11 @@ func hoverFromProgram(prog *Program, name, modPrefix string) string {
 			if len(fn.Params) > 0 {
 				sig += " " + strings.Join(fn.Params, " ")
 			}
+			if fn.ReturnType != "" {
+				sig += " as " + formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)
+			}
 			kind := "void procedure"
-			if stmtsHaveReturn(fn.Body) {
+			if fn.ReturnType != "" || stmtsHaveReturn(fn.Body) {
 				kind = "returns value (`->`)"
 			}
 			return fmt.Sprintf("```ease\n%s\n```\nFunction (%s)", sig, kind)
@@ -1188,6 +1254,12 @@ func walkExprTree(e Expr, onExpr func(Expr)) {
 		for _, c := range ex.Conditions {
 			walkExprTree(c, onExpr)
 		}
+	case *ProjectExpr:
+		walkExprTree(ex.Source, onExpr)
+		walkExprTree(ex.Body, onExpr)
+	case *QuantifierExpr:
+		walkExprTree(ex.Source, onExpr)
+		walkExprTree(ex.Cond, onExpr)
 	case *UpdateExpr:
 		walkExprTree(ex.Target, onExpr)
 		walkExprTree(ex.Where, onExpr)

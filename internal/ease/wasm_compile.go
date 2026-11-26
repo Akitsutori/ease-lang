@@ -83,22 +83,24 @@ type wasmVarSlot struct {
 }
 
 type wasmCompiler struct {
-	prog       *Program
-	mod        *wasmModule
-	rt         *wasmRuntime
-	records    map[string]*wasmRecordLayout
-	unions     map[string]*wasmUnionLayout
-	unionDecls map[string]*UnionDecl
-	consts     map[string]*ConstDeclStmt
-	funcs      map[string]*wasmFuncInfo
-	globals    map[string]wasmVarSlot
-	modules    map[string]*Program
-	loopDepth  int
-	breakDepth int
-	curFn      *wasmFuncInfo
-	locals     map[string]wasmVarSlot
-	localTypes []byte
-	nextLocal  uint32
+	prog          *Program
+	mod           *wasmModule
+	rt            *wasmRuntime
+	records       map[string]*wasmRecordLayout
+	unions        map[string]*wasmUnionLayout
+	unionDecls    map[string]*UnionDecl
+	consts        map[string]*ConstDeclStmt
+	sortedConsts  []*ConstDeclStmt
+	emittedConsts map[string]bool
+	funcs         map[string]*wasmFuncInfo
+	globals       map[string]wasmVarSlot
+	modules       map[string]*Program
+	loopDepth     int
+	breakDepth    int
+	curFn         *wasmFuncInfo
+	locals        map[string]wasmVarSlot
+	localTypes    []byte
+	nextLocal     uint32
 
 	// Browser screen-loop state machine
 	hasScreenLoop    bool
@@ -148,16 +150,17 @@ func CompileProgramToWasm(source, filePath string) ([]byte, error) {
 	mod := newWasmModule(wasmStaticBase, 4) // 256 KB initial memory
 	rt := newWasmRuntime(mod)
 	wc := &wasmCompiler{
-		prog:       prog,
-		mod:        mod,
-		rt:         rt,
-		records:    make(map[string]*wasmRecordLayout),
-		unions:     make(map[string]*wasmUnionLayout),
-		unionDecls: make(map[string]*UnionDecl),
-		consts:     make(map[string]*ConstDeclStmt),
-		funcs:      make(map[string]*wasmFuncInfo),
-		globals:    make(map[string]wasmVarSlot),
-		modules:    make(map[string]*Program),
+		prog:          prog,
+		mod:           mod,
+		rt:            rt,
+		records:       make(map[string]*wasmRecordLayout),
+		unions:        make(map[string]*wasmUnionLayout),
+		unionDecls:    make(map[string]*UnionDecl),
+		consts:        make(map[string]*ConstDeclStmt),
+		emittedConsts: make(map[string]bool),
+		funcs:         make(map[string]*wasmFuncInfo),
+		globals:       make(map[string]wasmVarSlot),
+		modules:       make(map[string]*Program),
 	}
 
 	if err := wc.compile(); err != nil {
@@ -263,6 +266,16 @@ func (wc *wasmCompiler) collectDecls() {
 	for _, st := range wc.prog.Body {
 		if cs, ok := st.(*ConstDeclStmt); ok {
 			wc.consts[cs.Name] = cs
+		}
+	}
+	if sorted, err := toposortConsts(wc.prog.Body, ""); err == nil {
+		wc.sortedConsts = sorted
+		for _, cs := range sorted {
+			wt := wc.inferExprTypeWithEnv(cs.Value, wc.curEnvTypes(), "")
+			if wt.kind == wkVoid {
+				wt = wasmTypeInfo{kind: wkNum}
+			}
+			wc.ensureVar(cs.Name, wt)
 		}
 	}
 	for _, fn := range wc.prog.Functions {
@@ -402,6 +415,38 @@ func (wc *wasmCompiler) inferFuncSig(fi *wasmFuncInfo, finalize bool) {
 			fi.paramTypes[i] = wasmTypeInfo{kind: wkNum}
 		}
 	}
+	if fi.decl.ReturnType != "" {
+		qualify := func(name string) string {
+			if fi.modAlias != "" && name != "number" && name != "text" && !strings.Contains(name, ".") {
+				q := fi.modAlias + "." + name
+				if wc.records[q] != nil || wc.unions[q] != nil {
+					return q
+				}
+			}
+			return name
+		}
+		if fi.decl.ReturnElemType != "" {
+			elemName := qualify(fi.decl.ReturnElemType)
+			fi.retType = wasmTypeInfo{kind: wkList, name: elemName, elemKind: wc.typeKindForName(elemName)}
+			return
+		}
+		retName := qualify(fi.decl.ReturnType)
+		switch retName {
+		case "number":
+			fi.retType = wasmTypeInfo{kind: wkNum}
+		case "text":
+			fi.retType = wasmTypeInfo{kind: wkText}
+		default:
+			if wc.records[retName] != nil {
+				fi.retType = wasmTypeInfo{kind: wkRec, name: retName}
+			} else if wc.unions[retName] != nil {
+				fi.retType = wc.unionWasmType(retName)
+			} else {
+				fi.retType = wasmTypeInfo{kind: wc.typeKindForName(retName), name: retName}
+			}
+		}
+		return
+	}
 	if !stmtsHaveReturn(fi.decl.Body) {
 		fi.retType = wasmTypeInfo{kind: wkVoid}
 		return
@@ -475,20 +520,42 @@ func (wc *wasmCompiler) guessParamType(fn *FuncDecl, param string) wasmTypeInfo 
 	// Check call sites across program (including caller local variable types) for argument types first.
 	var guessed wasmTypeInfo
 	checkStmts := func(stmts []Stmt, env map[string]wasmTypeInfo) {
-		walkStmtsAndExprs(stmts, nil, func(e Expr) {
-			if guessed.kind != wkVoid {
+		var checkExpr func(e Expr, curEnv map[string]wasmTypeInfo)
+		checkExpr = func(e Expr, curEnv map[string]wasmTypeInfo) {
+			if guessed.kind != wkVoid || e == nil {
+				return
+			}
+			if pe, ok := e.(*ProjectExpr); ok {
+				lt := wc.inferExprTypeWithEnv(pe.Source, curEnv, "")
+				srcElem := wasmTypeInfo{kind: lt.elemKind, name: lt.name}
+				if srcElem.kind != wkVoid {
+					pEnv := make(map[string]wasmTypeInfo, len(curEnv)+2)
+					for k, v := range curEnv {
+						pEnv[k] = v
+					}
+					pEnv["it"] = srcElem
+					pEnv["it.index"] = wasmTypeInfo{kind: wkNum}
+					walkExprTree(pe.Body, func(sub Expr) {
+						if guessed.kind == wkVoid {
+							checkExpr(sub, pEnv)
+						}
+					})
+				}
 				return
 			}
 			if ce, ok := e.(*CallExpr); ok && ce.Callee == fn.Name {
 				for i, p := range fn.Params {
 					if p == param && i < len(ce.Args) {
-						t := wc.inferExprTypeWithEnv(ce.Args[i], env, "")
+						t := wc.inferExprTypeWithEnv(ce.Args[i], curEnv, "")
 						if t.kind != wkVoid {
 							guessed = t
 						}
 					}
 				}
 			}
+		}
+		walkStmtsAndExprs(stmts, nil, func(e Expr) {
+			checkExpr(e, env)
 		})
 	}
 	topEnv := make(map[string]wasmTypeInfo)
@@ -694,7 +761,7 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 			return wasmTypeInfo{kind: wkRec, name: ex.TypeName}
 		}
 		if wc.unions[ex.TypeName] != nil {
-			return wasmTypeInfo{kind: wkUnion, name: ex.TypeName}
+			return wc.unionWasmType(ex.TypeName)
 		}
 	case *BinaryExpr:
 		switch ex.Op {
@@ -720,8 +787,35 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 		return wasmTypeInfo{kind: wkList, name: ex.ElemType}
 	case *BoolExpr:
 		return wasmTypeInfo{kind: wkCond}
+	case *QuantifierExpr:
+		return wasmTypeInfo{kind: wkCond}
 	case *WhereExpr:
 		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
+	case *ProjectExpr:
+		lt := wc.inferExprTypeWithEnv(ex.Source, env, modPrefix)
+		srcElem := wasmTypeInfo{kind: lt.elemKind, name: lt.name}
+		if srcElem.kind == wkList && strings.HasPrefix(lt.name, "list<") && strings.HasSuffix(lt.name, ">") {
+			inner := lt.name[5 : len(lt.name)-1]
+			srcElem = wasmTypeInfo{kind: wkList, name: inner, elemKind: wc.typeKindForName(inner)}
+		}
+		if srcElem.kind == wkVoid {
+			srcElem.kind = wkNum
+		}
+		projEnv := make(map[string]wasmTypeInfo, len(env)+2)
+		for k, v := range env {
+			projEnv[k] = v
+		}
+		projEnv["it"] = srcElem
+		projEnv["it.index"] = wasmTypeInfo{kind: wkNum}
+		bt := wc.inferExprTypeWithEnv(ex.Body, projEnv, modPrefix)
+		if bt.kind == wkVoid {
+			bt.kind = wkNum
+		}
+		outName := bt.name
+		if bt.kind == wkList {
+			outName = "list<" + bt.name + ">"
+		}
+		return wasmTypeInfo{kind: wkList, name: outName, elemKind: bt.kind}
 	case *UpdateExpr:
 		return wc.inferExprTypeWithEnv(ex.Target, env, modPrefix)
 	case *SortByExpr:
@@ -800,10 +894,34 @@ func (wc *wasmCompiler) typeKindForName(name string) wasmValKind {
 			return wkRec
 		}
 		if wc.unions[name] != nil {
-			return wkUnion
+			return wc.unionWasmType(name).kind
 		}
 		return wkNum
 	}
+}
+
+func (wc *wasmCompiler) unionWasmType(name string) wasmTypeInfo {
+	ul := wc.unions[name]
+	if ul == nil || len(ul.variants) == 0 {
+		return wasmTypeInfo{kind: wkUnion, name: name}
+	}
+	allText := true
+	allNum := true
+	for _, vr := range ul.variants {
+		if vr.kind != wkText {
+			allText = false
+		}
+		if vr.kind != wkNum {
+			allNum = false
+		}
+	}
+	if allText {
+		return wasmTypeInfo{kind: wkText}
+	}
+	if allNum {
+		return wasmTypeInfo{kind: wkNum}
+	}
+	return wasmTypeInfo{kind: wkUnion, name: name}
 }
 
 func (wc *wasmCompiler) emitPresentSceneHelper() {

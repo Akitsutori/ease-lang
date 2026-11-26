@@ -286,9 +286,9 @@ to run_pacman
         raw_state = screen:present win sc
         parsed = raw_state as json
         frame = parsed as screen.frame_state
-        check frame is not screen.frame_state -> end
-        check frame.status is "closed" -> end
-        check frame.key is "escape" -> end
+        check frame is not screen.frame_state -> stop
+        check frame.status is "closed" -> stop
+        check frame.key is "escape" -> stop
 
         # Steering input (Arrow keys or WASD)
         check frame.key is "left" or frame.key is "a"

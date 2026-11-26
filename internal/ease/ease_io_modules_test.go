@@ -481,7 +481,7 @@ to format_cmd c -> "{prompt_label}{c}"
 
 loop
   cmd = ask prompt_label
-  check cmd is "quit" -> end
+  check cmd is "quit" -> stop
   say format_cmd cmd
 end
 
@@ -530,7 +530,7 @@ spawn drain box
 
 loop
   cmd = ask "> "
-  check cmd is "q" -> end
+  check cmd is "q" -> stop
   put box cmd
 end
 close box

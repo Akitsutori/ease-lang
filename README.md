@@ -44,9 +44,9 @@ say log_line handled
 ```
 
 Look closely at the counter beside you:
-- **`def` describes things; `to` describes verbs.** Records (`guest_note`) and closed unions (`RequestKind`, `SlipStatus`) have no methods inside them, and `to` functions take space-separated inputs without outer parentheses or commas.
-- **`with` always makes a fresh copy.** Both `slip` (still `"waiting"`) and `handled` (`"done"`) stay alive without locking or cloning boilerplate.
-- **No `bool`, no `if`, no `null`.** Choices are explicit words checked with `is`, and in `log_line` the compiler makes sure you never forget a status — or misspell `"done"` as `"doen"`.
+- **`def` describes things; `to` describes verbs.** Records (`guest_note`) and closed unions (`RequestKind`, `SlipStatus`) have no methods inside them, `to` functions take space-separated inputs without outer parentheses or commas, and optional return contracts (`to add a b as number -> a + b`, `as list of guest_note`) are enforced both statically and at runtime.
+- **`with` always makes a fresh copy; `->` projects lists.** Both `slip` (still `"waiting"`) and `handled` (`"done"`) stay alive without locking or cloning boilerplate, and declarative list pipelines like `users where it.active -> it.name` transform data without imperative loops.
+- **No `bool`, no `if`, no `null`.** Choices are explicit words checked with `is`, existential list checks read like English (`any items where it.urgent`, `none tasks where it.status is not "done"`), and in `log_line` the compiler makes sure you never forget a status — or misspell `"done"` as `"doen"`.
 
 ---
 
@@ -202,7 +202,7 @@ to paint_hotel win
         raw = screen:present win sc
         parsed_st = raw as json
         st = parsed_st as screen.frame_state
-        check st.status is "closed" -> end
+        check st.status is "closed" -> stop
     end
 end
 
@@ -213,7 +213,7 @@ to watch_window win events
         check it.kind is "key" and it.key is "escape"
             close events
         end
-        check it.kind is "close" -> end
+        check it.kind is "close" -> stop
     end
     -> "Shift ended"
 end

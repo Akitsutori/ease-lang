@@ -44,12 +44,16 @@ type posInfo struct {
 
 func (p posInfo) Pos() (int, int) { return p.Line, p.Col }
 
-// FuncDecl defines a `to <name> <params> ... end` function.
+// FuncDecl defines a `to <name> <params> [as <return_type>] ... end` function.
 type FuncDecl struct {
 	posInfo
-	Name   string
-	Params []string
-	Body   []Stmt
+	Name           string
+	Params         []string
+	ReturnType     string
+	ReturnElemType string
+	ReturnTypeLine int
+	ReturnTypeCol  int
+	Body           []Stmt
 }
 
 // DefField defines a field and its default value (plus optional union allowed values) inside a `def <name> ... end` record.
@@ -118,12 +122,19 @@ type LoopStmt struct {
 
 func (*LoopStmt) stmtNode() {}
 
-// LoopEndStmt represents `-> end` inside a `check` or `match` guard to exit the enclosing `loop`/`take`.
-type LoopEndStmt struct {
+// LoopStopStmt represents `-> stop` inside a `check` or `match` guard to exit the enclosing `loop`/`take`.
+type LoopStopStmt struct {
 	posInfo
 }
 
-func (*LoopEndStmt) stmtNode() {}
+func (*LoopStopStmt) stmtNode() {}
+
+// VoidReturnStmt represents `-> return` inside a void `to` procedure to exit early.
+type VoidReturnStmt struct {
+	posInfo
+}
+
+func (*VoidReturnStmt) stmtNode() {}
 
 // ReturnStmt represents `-> <expr>` inside a `to` function or `swarm loop`.
 type ReturnStmt struct {
@@ -442,6 +453,25 @@ type WhereExpr struct {
 }
 
 func (*WhereExpr) exprNode() {}
+
+// ProjectExpr represents `<source> -> <body>` declarative list projection.
+type ProjectExpr struct {
+	posInfo
+	Source Expr
+	Body   Expr
+}
+
+func (*ProjectExpr) exprNode() {}
+
+// QuantifierExpr represents `any <source> where <cond>` or `none <source> where <cond>`.
+type QuantifierExpr struct {
+	posInfo
+	Kind   string // "any" or "none"
+	Source Expr
+	Cond   Expr
+}
+
+func (*QuantifierExpr) exprNode() {}
 
 // UpdateExpr returns a new list of records with specified fields updated on all or matching items.
 type UpdateExpr struct {

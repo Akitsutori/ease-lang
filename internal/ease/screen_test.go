@@ -127,7 +127,7 @@ to render_loop win
         raw = screen:present win sc
         decoded_st = raw as json
         st = decoded_st as screen.frame_state
-        check st.status is "closed" -> end
+        check st.status is "closed" -> stop
     end
 end
 
@@ -136,7 +136,7 @@ spawn render_loop win
 seen = list as text
 take events
     seen = append seen "{it.kind}:{it.key}:{it.x}:{it.y}"
-    check it.kind is "close" -> end
+    check it.kind is "close" -> stop
 end
 
 say (seen as json)
@@ -223,7 +223,7 @@ loop
     screen:draw win (screen.label with x = 5, y = 5, content = "OK", size = 14)
     st = screen:show win
     frames = frames + 1
-    check st.status is "closed" -> end
+    check st.status is "closed" -> stop
     say "{frames}:{st.status}:{st.key}:{count st.keys}:{st.mouse_x}"
 end
 say "done:{frames}"

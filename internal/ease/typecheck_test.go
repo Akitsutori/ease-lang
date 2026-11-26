@@ -1119,9 +1119,9 @@ end
 to loop_with_match_exit cmds
   i = 1
   loop
-    check i > count cmds -> end
+    check i > count cmds -> stop
     match cmds.(i)
-      "quit" -> end
+      "quit" -> stop
       else
         i = i + 1
     end
@@ -3003,6 +3003,446 @@ end
 			name:     "screen:draw rejects non-drawable primitive",
 			src:      "import screen\nw = screen.screen\nscreen:draw w 42\n",
 			wantSubs: []string{"TypeError", "screen:draw"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}
+
+func TestReturnTypeContracts(t *testing.T) {
+	posCases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "scalars records unions typed lists and recursion",
+			src: `
+def move_check = "clear" | "blocked"
+def block
+    x = 0
+    y = 0
+end
+
+to add a b as number -> a + b
+to greet name as text -> "hi {name}"
+to make_block cx cy as block -> block with x = cx, y = cy
+to inspect_move n as move_check
+    check n > 0 -> "clear"
+    -> "blocked"
+end
+to move_blocks bs dx as list of block -> update bs with x = it.x + dx
+to empty_blocks as list of block -> list as block
+to fact n as number
+    check n <= 1 -> 1
+    -> n * (fact (n - 1))
+end
+
+say add 2 3
+say greet "ada"
+b = make_block 1 2
+say b.x
+say inspect_move 1
+bs_in = list as block with
+    x = 1, y = 2
+end
+moved = move_blocks bs_in 3
+say moved.1.x
+say count empty_blocks
+say fact 4
+`,
+		},
+		{
+			name: "qualified module return type",
+			src: `
+import screen
+
+to make_box as screen.box -> screen.box with x = 1, y = 2, width = 10, height = 10
+bx = make_box
+say bx.width
+`,
+		},
+	}
+
+	for _, tc := range posCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseProgram(tc.src); err != nil {
+				t.Fatalf("expected valid program, got error:\n%v", err)
+			}
+		})
+	}
+
+	// Cross-module `as list of Item` test using a temp module file.
+	tmpDir := t.TempDir()
+	modPath := filepath.Join(tmpDir, "items.ease")
+	modSrc := `
+def Item
+    name = "x"
+end
+to get_items as list of Item
+    -> list as Item with
+        name = "sword"
+    end
+end
+`
+	if err := os.WriteFile(modPath, []byte(modSrc), 0644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+	mainSrc := `import "./items.ease" as items
+xs = items:get_items
+say xs.1.name
+`
+	if _, err := ParseProgramFromFile(mainSrc, filepath.Join(tmpDir, "main.ease")); err != nil {
+		t.Fatalf("cross-module as list of Item failed: %v", err)
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "void proc declaring return type",
+			src:      "to log_it x as number\n    say x\nend\n",
+			wantSubs: []string{"TypeError", "does not return a value"},
+		},
+		{
+			name:     "nested check return wrong type",
+			src:      "to check_num x as number\n    check x > 0 -> \"oops\"\n    -> 1\nend\n",
+			wantSubs: []string{"TypeError", "declares return type 'number', got text"},
+		},
+		{
+			name:     "union typo in return",
+			src:      "def move_check = \"clear\" | \"blocked\"\nto check_mv as move_check -> \"typo\"\n",
+			wantSubs: []string{"TypeError", "Invalid value \"typo\""},
+		},
+		{
+			name:     "uncast dynamic json field returned as number",
+			src:      "to get_age raw as number\n    m = raw as json\n    -> m.(\"age\")\nend\n",
+			wantSubs: []string{"TypeError", "Cannot verify return value matches declared type 'number'"},
+		},
+		{
+			name:     "wrong typed list returned as list of block",
+			src:      "def block\n    x = 0\nend\nto empty_b as list of block -> list as number\n",
+			wantSubs: []string{"TypeError", "declares return type 'list of block', got 'list of number'"},
+		},
+		{
+			name:     "bare as list without of",
+			src:      "to xs as list -> list 1, 2\n",
+			wantSubs: []string{"SyntaxError", "Expected 'of <type>' after 'as list'"},
+		},
+		{
+			name:     "format pseudo-type as json rejected",
+			src:      "to f x as json -> x\n",
+			wantSubs: []string{"TypeError", "conversion/I/O format"},
+		},
+		{
+			name:     "or fallback on function header rejected",
+			src:      "to f x as number or 0 -> x\n",
+			wantSubs: []string{"SyntaxError", "'or' fallback cannot be used in a function return type"},
+		},
+		{
+			name:     "of is a reserved keyword",
+			src:      "of = 1\n",
+			wantSubs: []string{"SyntaxError"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}
+
+func TestDefConstantsAndUnionFieldHole(t *testing.T) {
+	posCases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "out-of-order def constants and typed helper with untyped param",
+			src: `
+def A = B + 1
+def B = 10
+
+def status_kind = "open" | "closed"
+def job
+    status = "open" | "closed"
+    named  = status_kind
+end
+
+to read_a as number -> A
+to set_status w s -> w with status = s, named = s
+
+j = set_status (job) "closed"
+say read_a + j.status.1?0
+`,
+		},
+	}
+	// Keep valid expression in posCases[0]
+	posCases[0].src = `
+def A = B + 1
+def B = 10
+
+def status_kind = "open" | "closed"
+def job
+    status = "open" | "closed"
+    named  = status_kind
+end
+
+to read_a as number -> A
+to set_status w s -> w with status = s, named = s
+
+st = "closed" as status_kind
+j = set_status job st
+say read_a
+say j.status
+`
+	for _, tc := range posCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseProgram(tc.src); err != nil {
+				t.Fatalf("expected valid program, got error:\n%v", err)
+			}
+		})
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "cyclic def constants rejected",
+			src:      "def A = B\ndef B = A\n",
+			wantSubs: []string{"TypeError", "Cyclic 'def' constant dependency"},
+		},
+		{
+			name:     "impure random def constant rejected",
+			src:      "import random\ndef x = random:roll 1 6\n",
+			wantSubs: []string{"TypeError", "'def' constant cannot call impure or user function"},
+		},
+		{
+			name:     "impure ask def constant rejected",
+			src:      "def x = ask \"p\"\n",
+			wantSubs: []string{"TypeError", "'def' constant cannot call impure or user function"},
+		},
+		{
+			name:     "reassigning def constant rejected",
+			src:      "def max_cols = 10\nmax_cols = 20\n",
+			wantSubs: []string{"TypeError", "immutable 'def' constant"},
+		},
+		{
+			name:     "parameter shadowing def constant rejected",
+			src:      "def max_cols = 10\nto f max_cols -> max_cols + 1\n",
+			wantSubs: []string{"TypeError", "immutable 'def' constant"},
+		},
+		{
+			name:     "nested def inside to rejected",
+			src:      "to f\n    def x = 1\nend\n",
+			wantSubs: []string{"SyntaxError", "Nested 'def'"},
+		},
+		{
+			name:     "inline union field rejects open text return",
+			src:      "def job\n    status = \"open\" | \"closed\"\nend\nto bad x as text -> \"oops\"\nj = job with status = bad \"x\"\n",
+			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union"},
+		},
+		{
+			name:     "named union field rejects open text return",
+			src:      "def status_kind = \"open\" | \"closed\"\ndef job\n    status = status_kind\nend\nto bad x as text -> \"oops\"\nj = job with status = bad \"x\"\n",
+			wantSubs: []string{"TypeError", "not statically guaranteed to belong to union"},
+		},
+		{
+			name:     "void procedure after arrow gets multi-line hint",
+			src:      "import synth\nto f x\n    check x > 0 -> synth:stop\nend\n",
+			wantSubs: []string{"TypeError", "multi-line 'check <cond> ... end'"},
+		},
+		{
+			name:     "arrow end rejected with migration hint",
+			src:      "loop range 1 3\n    check it is 2 -> end\nend\n",
+			wantSubs: []string{"SyntaxError", "Use '-> stop' to exit a loop, or '-> return' to exit a void 'to' procedure"},
+		},
+		{
+			name:     "arrow return inside explicit value-returning function rejected",
+			src:      "to f x as number\n    check x < 0 -> return\n    -> x\nend\n",
+			wantSubs: []string{"TypeError", "Cannot use '-> return' inside value-returning function 'f'"},
+		},
+		{
+			name:     "arrow return inside implicit value-returning function rejected",
+			src:      "to f x\n    check x < 0 -> return\n    -> 1\nend\n",
+			wantSubs: []string{"TypeError", "Cannot use '-> return' inside value-returning function 'f'"},
+		},
+		{
+			name:     "arrow stop at top level rejected",
+			src:      "check 1 is 1 -> stop\n",
+			wantSubs: []string{"TypeError", "'-> stop' can only be used inside a 'loop' or 'take' block"},
+		},
+		{
+			name:     "arrow return at top level rejected",
+			src:      "check 1 is 1 -> return\n",
+			wantSubs: []string{"TypeError", "'-> return' can only be used inside a void 'to' procedure"},
+		},
+		{
+			name:     "arrow stop directly inside swarm loop rejected",
+			src:      "xs = swarm loop range 1 3\n    check it is 2 -> stop\n    -> it\nend\n",
+			wantSubs: []string{"TypeError", "'-> stop' cannot be used inside 'swarm loop'"},
+		},
+		{
+			name:     "variable named stop rejected",
+			src:      "stop = 1\n",
+			wantSubs: []string{"TypeError", "reserved for '-> stop' control flow"},
+		},
+		{
+			name:     "parameter named return rejected",
+			src:      "to f return -> 1\n",
+			wantSubs: []string{"TypeError", "reserved for '-> return' control flow"},
+		},
+		{
+			name:     "project non-list rejected",
+			src:      "x = 42 -> it + 1\n",
+			wantSubs: []string{"TypeError", "Cannot project non-list value"},
+		},
+		{
+			name:     "project condition body rejected",
+			src:      "xs = (range 1 3) -> it > 1\n",
+			wantSubs: []string{"TypeError", "Conditions cannot be"},
+		},
+		{
+			name:     "project void body rejected",
+			src:      "xs = (range 1 3) -> say it\n",
+			wantSubs: []string{"SyntaxError"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}
+
+func TestListProjectionTypechecking(t *testing.T) {
+	src := `
+import screen
+
+def block
+    col = 1
+    row = 1
+end
+
+to make_box b as screen.box -> screen.box with x = b.col, y = b.row, width = 10, height = 10
+to first_x xs as number
+    check count (xs -> it.col) > 0 -> xs.1.col
+    -> 0
+end
+
+bs = list as block with
+    col = 2, row = 3
+end
+cols = bs -> it.col
+doubled = (range 1 5) -> it * 2
+filtered_boxes = bs where it.row >= 1 -> screen.box with
+    x = it.col
+    y = it.row
+    width = 10
+    height = 10
+end
+helper_boxes = bs -> make_box it
+empty_boxes = (list as block) -> make_box it
+chained = bs -> it.col -> it + 1
+
+say cols.1 + doubled.1 + filtered_boxes.1.x + helper_boxes.1.x + (count empty_boxes) + chained.1 + (first_x bs)
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("expected valid projection program, got error:\n%v", err)
+	}
+}
+
+func TestQuantifiersAnyAndNone(t *testing.T) {
+	posSrc := `
+def task
+    id     = 0
+    status = "open" | "done"
+end
+
+tasks = list as task with
+    id = 1, status = "done"
+    id = 2, status = "open"
+end
+
+to check_done ts as text
+    check none ts where it.status is not "done" -> "all_done"
+    check any ts where it.status is "open" and it.id is 2 -> "has_open_2"
+    -> "other"
+end
+
+say check_done tasks
+
+test "quantifier assertions"
+    any tasks where it.status is "open"
+    none tasks where it.id > 10
+    not (any (list as task) where it.id > 0)
+    none (list as task) where it.id > 0
+end
+`
+	if _, err := ParseProgram(posSrc); err != nil {
+		t.Fatalf("expected valid quantifier program, got error:\n%v", err)
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name:     "cannot store any in variable",
+			src:      "x = any (range 1 3) where it > 1\n",
+			wantSubs: []string{"TypeError", "Conditions cannot be"},
+		},
+		{
+			name:     "cannot store none in variable",
+			src:      "x = none (range 1 3) where it > 1\n",
+			wantSubs: []string{"TypeError", "Conditions cannot be"},
+		},
+		{
+			name:     "any on non-list rejected",
+			src:      "check any 42 where it > 0\n    say 1\nend\n",
+			wantSubs: []string{"TypeError", "Cannot use 'any' on non-list value"},
+		},
+		{
+			name:     "none with non-condition body rejected",
+			src:      "check none (range 1 3) where it + 1\n    say 1\nend\n",
+			wantSubs: []string{"TypeError"},
 		},
 	}
 

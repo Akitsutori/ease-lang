@@ -134,13 +134,13 @@ func (ev *Evaluator) evalSwarmLoop(e *SwarmLoopExpr, env *Env) (Value, error) {
 		}
 		var val Value
 		if sig != nil {
-			if sig.loopEnd {
+			if sig.loopStop {
 				return newError(
 					"RuntimeError",
 					e.Line,
 					e.Col,
 					ev.source,
-					"'-> end' cannot be used inside 'swarm loop'",
+					"'-> stop' cannot be used inside 'swarm loop'",
 					"Use '-> <value>' or 'check <cond> -> <value>' to return from a 'swarm loop' iteration.",
 				)
 			}

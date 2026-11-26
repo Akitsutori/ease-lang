@@ -736,7 +736,7 @@ func (ev *Evaluator) execTakeStmt(s *TakeStmt, env *Env) (Value, *reportSignal, 
 			return nil, nil, execErr
 		}
 		if sig != nil {
-			if sig.loopEnd {
+			if sig.loopStop {
 				break
 			}
 			return val, sig, nil

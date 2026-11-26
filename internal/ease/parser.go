@@ -27,6 +27,7 @@ type Parser struct {
 	disallowAs         bool
 	disallowWhere      bool
 	disallowWith       bool
+	disallowArrow      bool
 	inCallArg          bool
 	inTestBlock        bool
 	inSingleLineWith   bool
@@ -833,7 +834,10 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 	}
 
 	// Form 1 (single-line) or Form 2 (multi-line block): `check <cond> ...`
+	prevDisallowArrow := p.disallowArrow
+	p.disallowArrow = true
 	cond, err := p.parseExpr()
+	p.disallowArrow = prevDisallowArrow
 	if err != nil {
 		return nil, err
 	}
@@ -956,12 +960,29 @@ func (p *Parser) parseCheckGuardStmt() (Stmt, error) {
 }
 
 func (p *Parser) parseArrowAction(arrowTok Token) (Stmt, error) {
+	if p.check(TOK_IDENT) && (p.current().Lexeme == "stop" || p.current().Lexeme == "return") {
+		next := p.peekNext().Type
+		if next == TOK_NEWLINE || next == TOK_EOF || next == TOK_END {
+			kwTok := p.advance()
+			if err := p.expectStmtEnd("'-> " + kwTok.Lexeme + "'"); err != nil {
+				return nil, err
+			}
+			if kwTok.Lexeme == "stop" {
+				return &LoopStopStmt{posInfo: posInfo{Line: kwTok.Line, Col: kwTok.Col}}, nil
+			}
+			return &VoidReturnStmt{posInfo: posInfo{Line: kwTok.Line, Col: kwTok.Col}}, nil
+		}
+	}
 	if p.check(TOK_END) {
 		endTok := p.advance()
-		if err := p.expectStmtEnd("'-> end'"); err != nil {
-			return nil, err
-		}
-		return &LoopEndStmt{posInfo: posInfo{Line: endTok.Line, Col: endTok.Col}}, nil
+		return nil, newError(
+			"SyntaxError",
+			endTok.Line,
+			endTok.Col,
+			p.source,
+			"'-> end' is not valid in Ease",
+			"Use '-> stop' to exit a loop, or '-> return' to exit a void 'to' procedure.",
+		)
 	}
 	return p.parseArrowReturnValueOnly(arrowTok)
 }

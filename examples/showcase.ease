@@ -90,7 +90,7 @@ to first_over limit nums
     loop nums
         check it > limit
             found = it
-            -> end
+            -> stop
         end
     end
     -> found

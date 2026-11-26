@@ -347,6 +347,76 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 		}
 	}
 
+	var returnType, returnElemType string
+	var returnTypeLine, returnTypeCol int
+	if p.match(TOK_AS) {
+		if p.match(TOK_LIST_KW) {
+			listTok := p.tokens[p.pos-1]
+			if !p.match(TOK_OF) {
+				tok := p.current()
+				return nil, newError(
+					"SyntaxError",
+					tok.Line,
+					tok.Col,
+					p.source,
+					"Expected 'of <type>' after 'as list' in function return type",
+					fmt.Sprintf("Write: to %s ... as list of <type> (e.g. as list of number or as list of block)", nameTok.Lexeme),
+				)
+			}
+			elemName, elemLine, elemCol, err := p.parseTypeTarget(
+				"Expected element type ('number', 'text', or a 'def' type) after 'as list of'",
+				fmt.Sprintf("Example: to %s ... as list of number", nameTok.Lexeme),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if elemName == "json" || elemName == "csv" || elemName == "bytes" {
+				return nil, newError(
+					"TypeError",
+					elemLine,
+					elemCol,
+					p.source,
+					fmt.Sprintf("%q is a conversion/I/O format, not a valid list element return type", elemName),
+					"Return a 'list of <def>' record, 'list of text', or 'list of number' instead.",
+				)
+			}
+			returnType = "list<" + elemName + ">"
+			returnElemType = elemName
+			returnTypeLine, returnTypeCol = listTok.Line, listTok.Col
+		} else {
+			tName, tLine, tCol, err := p.parseTypeTarget(
+				"Expected return type ('number', 'text', 'list of <type>', or a 'def' type) after 'as'",
+				fmt.Sprintf("Example: to %s ... as number", nameTok.Lexeme),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if tName == "json" || tName == "csv" || tName == "bytes" {
+				return nil, newError(
+					"TypeError",
+					tLine,
+					tCol,
+					p.source,
+					fmt.Sprintf("%q is a conversion/I/O format, not a valid function return type", tName),
+					"Return a 'def' record, 'text', 'number', or 'list of <type>' instead.",
+				)
+			}
+			returnType = tName
+			returnTypeLine, returnTypeCol = tLine, tCol
+		}
+		if p.check(TOK_OR) {
+			tok := p.current()
+			return nil, newError(
+				"SyntaxError",
+				tok.Line,
+				tok.Col,
+				p.source,
+				"'or' fallback cannot be used in a function return type declaration",
+				fmt.Sprintf("Declare only the return type: to %s ... as %s", nameTok.Lexeme, formatReturnTypeDisplay(returnType, returnElemType)),
+			)
+		}
+	}
+
 	if arrowTok := p.current(); p.match(TOK_ARROW) {
 		if p.check(TOK_NEWLINE) || p.check(TOK_EOF) || p.check(TOK_END) {
 			tok := p.current()
@@ -364,10 +434,14 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 			return nil, err
 		}
 		return &FuncDecl{
-			posInfo: posInfo{Line: toTok.Line, Col: toTok.Col},
-			Name:    nameTok.Lexeme,
-			Params:  params,
-			Body:    []Stmt{retStmt},
+			posInfo:        posInfo{Line: toTok.Line, Col: toTok.Col},
+			Name:           nameTok.Lexeme,
+			Params:         params,
+			ReturnType:     returnType,
+			ReturnElemType: returnElemType,
+			ReturnTypeLine: returnTypeLine,
+			ReturnTypeCol:  returnTypeCol,
+			Body:           []Stmt{retStmt},
 		}, nil
 	}
 
@@ -419,11 +493,22 @@ func (p *Parser) parseFuncDecl() (*FuncDecl, error) {
 	}
 
 	return &FuncDecl{
-		posInfo: posInfo{Line: toTok.Line, Col: toTok.Col},
-		Name:    nameTok.Lexeme,
-		Params:  params,
-		Body:    body,
+		posInfo:        posInfo{Line: toTok.Line, Col: toTok.Col},
+		Name:           nameTok.Lexeme,
+		Params:         params,
+		ReturnType:     returnType,
+		ReturnElemType: returnElemType,
+		ReturnTypeLine: returnTypeLine,
+		ReturnTypeCol:  returnTypeCol,
+		Body:           body,
 	}, nil
+}
+
+func formatReturnTypeDisplay(retType, elemType string) string {
+	if elemType != "" {
+		return "list of " + elemType
+	}
+	return retType
 }
 
 func (p *Parser) isUnionDelimiter(t TokenType) bool {

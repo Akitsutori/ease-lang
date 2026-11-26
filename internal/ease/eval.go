@@ -14,8 +14,9 @@ import (
 )
 
 type reportSignal struct {
-	val     Value
-	loopEnd bool
+	val        Value
+	loopStop   bool
+	voidReturn bool
 }
 
 const (
@@ -596,7 +597,27 @@ func (ev *Evaluator) ExecStatements(stmts []Stmt, env *Env) (Value, error) {
 		return nil, ev.initErr
 	}
 	var last Value
+	skipConsts := false
+	if env == ev.global {
+		sortedConsts, err := toposortConsts(stmts, ev.source)
+		if err != nil {
+			return nil, err
+		}
+		for _, cs := range sortedConsts {
+			val, _, err := ev.execStmt(cs, env)
+			if err != nil {
+				return nil, err
+			}
+			last = val
+		}
+		skipConsts = true
+	}
 	for _, st := range stmts {
+		if skipConsts {
+			if _, isConst := st.(*ConstDeclStmt); isConst {
+				continue
+			}
+		}
 		val, sig, err := ev.execStmt(st, env)
 		if err != nil {
 			return nil, err
@@ -609,7 +630,7 @@ func (ev *Evaluator) ExecStatements(stmts []Stmt, env *Env) (Value, error) {
 				col,
 				ev.source,
 				"Unexpected control-flow signal at top level",
-				"Use 'say' to print values or 'check <cond> -> end' inside a 'loop'.",
+				"Use 'say' to print values or 'check <cond> -> stop' inside a 'loop'.",
 			)
 		}
 		last = val
@@ -651,8 +672,10 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.logTrace("line %d: take ...", line)
 	case *SpawnStmt:
 		ev.logTrace("line %d: spawn ...", line)
-	case *LoopEndStmt:
-		ev.logTrace("line %d: -> end", line)
+	case *LoopStopStmt:
+		ev.logTrace("line %d: -> stop", line)
+	case *VoidReturnStmt:
+		ev.logTrace("line %d: -> return", line)
 	}
 	switch s := stmt.(type) {
 	case *ConstDeclStmt:
@@ -690,8 +713,11 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 		ev.writeOutString(FormatValue(val) + "\n")
 		return val, nil, nil
 
-	case *LoopEndStmt:
-		return nil, &reportSignal{loopEnd: true}, nil
+	case *LoopStopStmt:
+		return nil, &reportSignal{loopStop: true}, nil
+
+	case *VoidReturnStmt:
+		return nil, &reportSignal{voidReturn: true}, nil
 
 	case *SpawnStmt:
 		return ev.execSpawnStmt(s, env)
@@ -710,7 +736,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 					return val, nil, err
 				}
 				if sig != nil {
-					if sig.loopEnd {
+					if sig.loopStop {
 						break
 					}
 					return val, sig, nil
@@ -755,7 +781,7 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 				return val, nil, err
 			}
 			if sig != nil {
-				if sig.loopEnd {
+				if sig.loopStop {
 					break
 				}
 				return val, sig, nil
@@ -1480,6 +1506,91 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 		}
 		return &ListValue{ElemType: lv.ElemType, Elements: out}, nil
 
+	case *ProjectExpr:
+		srcVal, err := ev.EvalExpr(e.Source, env)
+		if err != nil {
+			return nil, err
+		}
+		lv, ok := srcVal.(*ListValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("Cannot project %s with '->'", TypeName(srcVal)),
+				"List projection '<list> -> <expr>' requires a list on the left.",
+			)
+		}
+		out := make([]Value, 0, len(lv.Elements))
+		elemType := ""
+		for idx, el := range lv.Elements {
+			iterEnv := NewEnv(env)
+			iterEnv.Define("it", el, false)
+			iterEnv.SetLoopIndex(float64(idx + 1))
+			projVal, err := ev.EvalExpr(e.Body, iterEnv)
+			if err != nil {
+				return nil, err
+			}
+			if err := ev.checkNotConditionValue(projVal, e.Line, e.Col); err != nil {
+				return nil, err
+			}
+			if elemType == "" {
+				switch pv := projVal.(type) {
+				case float64:
+					elemType = "number"
+				case string:
+					elemType = "text"
+				case *RecordValue:
+					elemType = pv.TypeName
+				}
+			}
+			out = append(out, projVal)
+		}
+		return &ListValue{ElemType: elemType, Elements: out}, nil
+
+	case *QuantifierExpr:
+		srcVal, err := ev.EvalExpr(e.Source, env)
+		if err != nil {
+			return nil, err
+		}
+		lv, ok := srcVal.(*ListValue)
+		if !ok {
+			return nil, newError(
+				"TypeError",
+				e.Line,
+				e.Col,
+				ev.source,
+				fmt.Sprintf("Cannot use '%s' on %s", e.Kind, TypeName(srcVal)),
+				fmt.Sprintf("'%s <list> where <cond>' requires a list.", e.Kind),
+			)
+		}
+		for idx, el := range lv.Elements {
+			iterEnv := NewEnv(env)
+			iterEnv.Define("it", el, false)
+			iterEnv.SetLoopIndex(float64(idx + 1))
+			condVal, err := ev.EvalExpr(e.Cond, iterEnv)
+			if err != nil {
+				return nil, err
+			}
+			b, isBool := condVal.(bool)
+			if !isBool {
+				cLine, cCol := e.Cond.Pos()
+				return nil, newError(
+					"TypeError",
+					cLine,
+					cCol,
+					ev.source,
+					fmt.Sprintf("'%s' condition must evaluate to a condition, got %s", e.Kind, TypeName(condVal)),
+					"Write a comparison like 'it.status is \"done\"' or 'it > 0'.",
+				)
+			}
+			if b {
+				return e.Kind == "any", nil
+			}
+		}
+		return e.Kind == "none", nil
+
 	case *CallExpr:
 		args := make([]Value, len(e.Args))
 		for i, a := range e.Args {
@@ -1548,8 +1659,8 @@ func (ev *Evaluator) EvalExpr(expr Expr, env *Env) (Value, error) {
 				return nil, err
 			}
 			if sig != nil {
-				if sig.loopEnd {
-					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
+				if sig.loopStop {
+					return nil, newError("RuntimeError", e.Line, e.Col, ev.source, "Unexpected '-> stop' inside 'match' expression", "")
 				}
 				val = sig.val
 			} else if e.ElseValue != nil {
@@ -1669,10 +1780,28 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 		return nil, err
 	}
 	if sig != nil {
+		if sig.voidReturn {
+			return nil, nil
+		}
 		if err := ev.checkNotConditionValue(sig.val, line, col); err != nil {
 			return nil, err
 		}
+		if fn.ReturnType != "" {
+			if err := ev.checkReturnContractRuntime(fn, sig.val, line, col); err != nil {
+				return nil, err
+			}
+		}
 		return sig.val, nil
+	}
+	if fn.ReturnType != "" {
+		return nil, newError(
+			"TypeError",
+			line,
+			col,
+			ev.source,
+			fmt.Sprintf("Function '%s' declares return type '%s' but finished without returning a value", fn.Name, formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)),
+			"Ensure every execution path in the function ends with '-> <value>'.",
+		)
 	}
 	if !stmtsHaveReturn(fn.Body) {
 		return nil, nil
@@ -1684,6 +1813,50 @@ func (ev *Evaluator) callUserFunction(fn *FuncDecl, args []Value, line, col int)
 		ev.source,
 		fmt.Sprintf("Function %q finished without returning a value via '->'", name),
 		"Ensure every execution path ends with '-> <value>'.",
+	)
+}
+
+func (ev *Evaluator) checkReturnContractRuntime(fn *FuncDecl, val Value, line, col int) error {
+	if fn == nil || fn.ReturnType == "" {
+		return nil
+	}
+	retDisplay := formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)
+	if fn.ReturnElemType != "" {
+		lv, ok := val.(*ListValue)
+		if !ok {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("Function '%s' declares return type '%s', got %s", fn.Name, retDisplay, TypeName(val)),
+				fmt.Sprintf("Return a list of %s.", fn.ReturnElemType),
+			)
+		}
+		for idx, el := range lv.Elements {
+			if !matchesListElemType(el, fn.ReturnElemType, ev.global) {
+				return newError(
+					"TypeError",
+					line,
+					col,
+					ev.source,
+					fmt.Sprintf("Function '%s' declares return type '%s', but element %d has %s", fn.Name, retDisplay, idx+1, TypeName(el)),
+					fmt.Sprintf("Ensure all elements match '%s'.", fn.ReturnElemType),
+				)
+			}
+		}
+		return nil
+	}
+	if matchesListElemType(val, fn.ReturnType, ev.global) {
+		return nil
+	}
+	return newError(
+		"TypeError",
+		line,
+		col,
+		ev.source,
+		fmt.Sprintf("Function '%s' declares return type '%s', got %s", fn.Name, retDisplay, TypeName(val)),
+		fmt.Sprintf("Return a value matching '%s'.", retDisplay),
 	)
 }
 

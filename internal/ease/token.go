@@ -25,6 +25,7 @@ const (
 	TOK_IS     TokenType = "is"
 	TOK_SAY    TokenType = "say"
 	TOK_AS     TokenType = "as"
+	TOK_OF     TokenType = "of"
 	TOK_ELSE   TokenType = "else"
 	TOK_LOOP   TokenType = "loop"
 	TOK_SWARM  TokenType = "swarm"
@@ -35,6 +36,8 @@ const (
 	TOK_AND    TokenType = "and"
 	TOK_OR     TokenType = "or"
 	TOK_NOT    TokenType = "not"
+	TOK_ANY    TokenType = "any"
+	TOK_NONE   TokenType = "none"
 
 	TOK_TEXT      TokenType = "text"
 	TOK_NUMBER_KW TokenType = "number"
@@ -75,6 +78,7 @@ var keywords = map[string]TokenType{
 	"is":     TOK_IS,
 	"say":    TOK_SAY,
 	"as":     TOK_AS,
+	"of":     TOK_OF,
 	"else":   TOK_ELSE,
 	"loop":   TOK_LOOP,
 	"swarm":  TOK_SWARM,
@@ -85,6 +89,8 @@ var keywords = map[string]TokenType{
 	"and":    TOK_AND,
 	"or":     TOK_OR,
 	"not":    TOK_NOT,
+	"any":    TOK_ANY,
+	"none":   TOK_NONE,
 	"text":   TOK_TEXT,
 	"number": TOK_NUMBER_KW,
 	"list":   TOK_LIST_KW,

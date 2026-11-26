@@ -668,7 +668,7 @@ loop
     raw = screen:present win sc
     parsed = raw as json
     st = parsed as screen.frame_state
-    check st.status is "closed" -> end
+    check st.status is "closed" -> stop
     spawn synth:play sfx
     has_left = "no"
     check contains st.keys "left"
@@ -676,7 +676,7 @@ loop
     end
     say "{st.status}:{st.key}:{count st.keys}:{has_left}"
     synth:stop
-    -> end
+    -> stop
 end
 `
 	wasmBytes, err := CompileProgramToWasm(src, "")
@@ -730,9 +730,9 @@ loop
     screen:clear win "#0f172a"
     draw_helper win boxes
     st = screen:show win
-    check st.status is "closed" -> end
+    check st.status is "closed" -> stop
     say "{st.status}:{st.key}"
-    -> end
+    -> stop
 end
 `
 	wasmBytes, err := CompileProgramToWasm(src, "")
@@ -746,5 +746,153 @@ end
 	// Expect: clear, line(3), box(2), box(2), label(5) = 5 draw calls
 	if len(res.Draws) != 5 {
 		t.Fatalf("expected 5 immediate draw calls (clear + line + 2 boxes + label), got %d: %s", len(res.Draws), string(res.Draws[0]))
+	}
+}
+
+func TestWasmReturnTypeContracts(t *testing.T) {
+	src := `
+def item
+    val = 0
+end
+
+to make_item n as item -> item with val = n
+to make_items a b as list of item
+    -> list as item with
+        val = a
+        val = b
+    end
+end
+
+one = make_item 7
+xs = make_items 10 20
+say one.val + xs.2.val
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[]`, 1)
+	if len(res.Prints) != 1 || res.Prints[0] != "27" {
+		t.Fatalf("expected ['27'], got: %+v", res.Prints)
+	}
+}
+
+func TestWasmDefListConstantInFunc(t *testing.T) {
+	src := `
+def item
+    val = 0
+end
+
+def catalog = list as item with
+    val = 11
+    val = 31
+end
+
+to total as number -> catalog.1.val + catalog.2.val
+
+say total
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[]`, 1)
+	if len(res.Prints) != 1 || res.Prints[0] != "42" {
+		t.Fatalf("expected ['42'], got: %+v", res.Prints)
+	}
+}
+
+func TestWasmVoidProcArrowReturn(t *testing.T) {
+	src := `
+to print_nonzero x
+    check x is 0 -> return
+    say x
+end
+
+to find_first limit
+    loop range 1 5
+        check it > limit
+            say it
+            -> return
+        end
+    end
+    say 99
+end
+
+loop range 1 4
+    check it is 2
+        print_nonzero 0
+    else
+        print_nonzero it
+    end
+end
+find_first 2
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[]`, 1)
+	want := []string{"1", "3", "4", "3"}
+	if len(res.Prints) != len(want) || res.Prints[0] != want[0] || res.Prints[1] != want[1] || res.Prints[2] != want[2] || res.Prints[3] != want[3] {
+		t.Fatalf("expected %v, got: %+v", want, res.Prints)
+	}
+}
+
+func TestWasmListProjection(t *testing.T) {
+	src := `
+def item
+    val = 0
+end
+
+to bump x as item -> item with val = x.val + 10
+
+xs = list as item with
+    val = 1
+    val = 5
+    val = 2
+end
+
+doubled = (range 1 3) -> it * 2
+bumped = xs where it.val >= 2 -> bump it
+say (sum doubled) + bumped.1.val + bumped.2.val
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[]`, 1)
+	if len(res.Prints) != 1 || res.Prints[0] != "39" {
+		t.Fatalf("expected ['39'], got: %+v", res.Prints)
+	}
+}
+
+func TestWasmQuantifiersAnyAndNone(t *testing.T) {
+	src := `
+nums = list 3, 7, 11
+empty = list as number
+check any nums where it is 7
+    say "any_hit"
+end
+check none nums where it > 20
+    say "none_hit"
+end
+check any empty where it > 0
+    say "bad"
+else
+    say "empty_any"
+end
+check none empty where it > 0
+    say "empty_none"
+end
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[]`, 1)
+	want := []string{"any_hit", "none_hit", "empty_any", "empty_none"}
+	if len(res.Prints) != len(want) || res.Prints[0] != want[0] || res.Prints[1] != want[1] || res.Prints[2] != want[2] || res.Prints[3] != want[3] {
+		t.Fatalf("expected %v, got: %+v", want, res.Prints)
 	}
 }

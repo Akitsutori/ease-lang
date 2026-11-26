@@ -87,7 +87,7 @@
         },
         {
           "name": "keyword.other.ease",
-          "match": "\\b(def|with|where|update|by|say|ask|as|is)\\b"
+          "match": "\\b(def|with|where|update|by|say|ask|as|of|is|any|none)\\b"
         },
         {
           "name": "keyword.operator.logical.ease",

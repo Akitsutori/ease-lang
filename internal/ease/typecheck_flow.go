@@ -118,6 +118,16 @@ func (v *typeValidator) checkFuncReturnConsistency(fn *FuncDecl, fnScope *typeSc
 		return nil
 	}
 	if !stmtsHaveReturn(fn.Body) {
+		if fn.ReturnType != "" {
+			return newError(
+				"TypeError",
+				fn.Line,
+				fn.Col,
+				v.source,
+				fmt.Sprintf("Function '%s' declares return type '%s' but does not return a value", fn.Name, formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)),
+				fmt.Sprintf("Return a value with '-> <expr>' or remove 'as %s' from the function header.", formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)),
+			)
+		}
 		return nil
 	}
 	if v.stmtAlwaysReturnsExpr(fn.Body) {
@@ -206,6 +216,8 @@ type typeValidator struct {
 	verifiedCallSpecs      map[string]bool
 	activeReturnInfer      map[string]bool
 	callSpecDepth          int
+	currentReturnFunc      *FuncDecl
+	inSpecializedCall      bool
 	inErrorTestExpr        bool
 	inErrorBlock           bool
 	inTestBlock            bool
@@ -245,8 +257,12 @@ func (v *typeValidator) checkStmts(stmts []Stmt, inFunction bool) error {
 func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 	for _, s := range stmts {
 		switch st := s.(type) {
-		case *LoopEndStmt:
+		case *LoopStopStmt:
 			if directLoop {
+				return true
+			}
+		case *VoidReturnStmt:
+			if inFunction {
 				return true
 			}
 		case *ReturnStmt:
@@ -281,7 +297,10 @@ func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 				if arm.Action == nil {
 					continue
 				}
-				if _, isEnd := arm.Action.(*LoopEndStmt); isEnd && directLoop {
+				if _, isStop := arm.Action.(*LoopStopStmt); isStop && directLoop {
+					return true
+				}
+				if _, isVoidRet := arm.Action.(*VoidReturnStmt); isVoidRet && inFunction {
 					return true
 				}
 				if _, isExpr := arm.Action.(*ExprStmt); isExpr && inFunction {
@@ -302,6 +321,9 @@ func hasLoopExit(stmts []Stmt, inFunction, directLoop bool) bool {
 func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 	switch st := s.(type) {
 	case *ConstDeclStmt:
+		if !inFunction && !v.inErrorTestExpr && v.consts[st.Name] != 0 {
+			return nil
+		}
 		if err := v.checkNameNotCallable(st.Name, st.Line, st.Col, "constant"); err != nil {
 			return err
 		}
@@ -312,10 +334,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 			return err
 		}
 		if err := v.checkNotVoidValue(st.Value); err != nil {
+			if ee, ok := err.(*EaseError); ok && !strings.Contains(ee.Hint, "multi-line") {
+				ee.Hint += " Use a multi-line 'check <cond> ... end' block without '->' for void side effects."
+			}
 			return err
 		}
 		valSt := v.inferExprTypeState(st.Value)
 		valSt.isParam = false
+		if !hasConcreteTypeInfo(valSt) && v.exprDependsOnUnspecializedParam(st.Value) {
+			valSt.fromParam = true
+		}
 		v.setVarInCurrentOrExisting(st.Name, valSt)
 		return nil
 
@@ -342,10 +370,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 			return err
 		}
 		if err := v.checkNotVoidValue(st.Value); err != nil {
+			if ee, ok := err.(*EaseError); ok && !strings.Contains(ee.Hint, "multi-line") {
+				ee.Hint += " Use a multi-line 'check <cond> ... end' block without '->' for void side effects."
+			}
 			return err
 		}
 		valSt := v.inferExprTypeState(st.Value)
 		valSt.isParam = false
+		if !hasConcreteTypeInfo(valSt) && v.exprDependsOnUnspecializedParam(st.Value) {
+			valSt.fromParam = true
+		}
 		v.setVarInCurrentOrExisting(st.Name, valSt)
 		return nil
 
@@ -356,7 +390,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotCondition(st.Value); err != nil {
 			return err
 		}
-		return v.checkNotVoidValue(st.Value)
+		if err := v.checkNotVoidValue(st.Value); err != nil {
+			if ee, ok := err.(*EaseError); ok && !strings.Contains(ee.Hint, "multi-line") {
+				ee.Hint += " Use a multi-line 'check <cond> ... end' block without '->' for void side effects."
+			}
+			return err
+		}
+		if v.currentReturnFunc != nil && v.currentReturnFunc.ReturnType != "" && !v.inErrorTestExpr {
+			return v.checkReturnValueConforms(v.currentReturnFunc, st.Value, st.Line, st.Col)
+		}
+		return nil
 
 	case *ExprStmt:
 		if err := v.checkExpr(st.Expression); err != nil {
@@ -376,14 +419,14 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		}
 		return v.unusedExprStmtError(st.Expression)
 
-	case *LoopEndStmt:
+	case *LoopStopStmt:
 		if v.directInSwarm {
 			return newError(
 				"TypeError",
 				st.Line,
 				st.Col,
 				v.source,
-				"'-> end' cannot be used inside 'swarm loop'",
+				"'-> stop' cannot be used inside 'swarm loop'",
 				"Use 'check <cond> -> <value>' to return early from a 'swarm loop' iteration.",
 			)
 		}
@@ -393,8 +436,31 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 				st.Line,
 				st.Col,
 				v.source,
-				"'-> end' can only be used inside a 'loop' block",
-				"Use 'check <cond> -> end' inside 'loop ... end' to exit the loop early.",
+				"'-> stop' can only be used inside a 'loop' or 'take' block",
+				"Use 'check <cond> -> stop' inside a loop, or 'check <cond> -> return' to exit a void 'to' procedure.",
+			)
+		}
+		return nil
+
+	case *VoidReturnStmt:
+		if !inFunction {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"'-> return' can only be used inside a void 'to' procedure",
+				"Use 'check <cond> -> return' inside a void 'to' procedure, or '-> stop' inside a loop.",
+			)
+		}
+		if v.currentReturnFunc != nil && (v.currentReturnFunc.ReturnType != "" || stmtsHaveReturn(v.currentReturnFunc.Body)) {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				fmt.Sprintf("Cannot use '-> return' inside value-returning function '%s'", v.currentReturnFunc.Name),
+				"Value-returning functions must exit with '-> <expr>' on all paths.",
 			)
 		}
 		return nil
@@ -416,7 +482,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		if err := v.checkNotCondition(st.Value); err != nil {
 			return err
 		}
-		return v.checkNotVoidValue(st.Value)
+		if err := v.checkNotVoidValue(st.Value); err != nil {
+			if ee, ok := err.(*EaseError); ok && !strings.Contains(ee.Hint, "multi-line") {
+				ee.Hint += " Use a multi-line 'check <cond> ... end' block without '->' for void side effects."
+			}
+			return err
+		}
+		if v.currentReturnFunc != nil && v.currentReturnFunc.ReturnType != "" && !v.inErrorTestExpr {
+			return v.checkReturnValueConforms(v.currentReturnFunc, st.Value, st.Line, st.Col)
+		}
+		return nil
 
 	case *LoopStmt:
 		if st.Iterable != nil {
@@ -456,7 +531,7 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 				st.Col,
 				v.source,
 				"Infinite 'loop' has no exit condition",
-				"Add a 'check <condition> -> end' guard inside the loop to exit cleanly.",
+				"Add a 'check <condition> -> stop' guard inside the loop to exit cleanly.",
 			)
 		}
 		loopScope := v.pushScope()
@@ -676,7 +751,9 @@ func (v *typeValidator) stmtAlwaysExitsStmt(s Stmt, inFunction bool) bool {
 	switch s.(type) {
 	case *ReturnStmt:
 		return inFunction
-	case *LoopEndStmt:
+	case *VoidReturnStmt:
+		return inFunction
+	case *LoopStopStmt:
 		return v.loopDepth > 0
 	default:
 		return false
@@ -689,7 +766,10 @@ func (v *typeValidator) stmtAlwaysExitsBlock(stmts []Stmt, inFunction bool) bool
 	}
 	if v.loopDepth > 0 {
 		for _, s := range stmts {
-			if _, isEnd := s.(*LoopEndStmt); isEnd {
+			if _, isStop := s.(*LoopStopStmt); isStop {
+				return true
+			}
+			if _, isVoidRet := s.(*VoidReturnStmt); isVoidRet && inFunction {
 				return true
 			}
 		}
@@ -1031,6 +1111,12 @@ func (v *typeValidator) checkUnusedLocals(stmts []Stmt, params []string) error {
 			for _, c := range ex.Conditions {
 				collectReadsExpr(c)
 			}
+		case *ProjectExpr:
+			collectReadsExpr(ex.Source)
+			collectReadsExpr(ex.Body)
+		case *QuantifierExpr:
+			collectReadsExpr(ex.Source)
+			collectReadsExpr(ex.Cond)
 		case *UpdateExpr:
 			collectReadsExpr(ex.Target)
 			collectReadsExpr(ex.Where)

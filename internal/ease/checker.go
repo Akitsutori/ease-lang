@@ -480,6 +480,12 @@ func (r *testRunner) buildVarsDetail(exprs []Expr, suffix string, env *Env) stri
 			}
 		case *WhereExpr:
 			walk(ex.Target)
+		case *ProjectExpr:
+			walk(ex.Source)
+			walk(ex.Body)
+		case *QuantifierExpr:
+			walk(ex.Source)
+			walk(ex.Cond)
 		case *UpdateExpr:
 			walk(ex.Target)
 			walk(ex.Where)

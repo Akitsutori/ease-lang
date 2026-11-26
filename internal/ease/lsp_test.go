@@ -533,3 +533,84 @@ say greet u
 		t.Fatalf("expected lastGoodAST fallback references for 'greet', got: %+v", refs)
 	}
 }
+
+func TestLSPReturnTypeHoverDefAndInfer(t *testing.T) {
+	src := `def block
+    x = 0
+end
+
+to make_block v as block -> block with x = v
+
+b = make_block 5
+say b.x
+`
+	uri := "file:///ret.ease"
+	// Hover on `make_block` call at line 6, col 5
+	hov := HoverForURI(uri, src, LSPPosition{Line: 6, Character: 5})
+	if hov == nil || !strings.Contains(hov.Contents.Value, "to make_block v as block") {
+		t.Fatalf("expected hover with 'as block', got: %+v", hov)
+	}
+	// Go-to-Definition on `block` in `to make_block v as block` (line 4, col 20)
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 4, Character: 20})
+	if len(locs) != 1 || locs[0].Range.Start.Line != 0 {
+		t.Fatalf("expected definition jump to def block at line 0, got: %+v", locs)
+	}
+	// Go-to-Definition on `b.x` (line 7, col 6) relies on lspInferExprType(make_block 5) -> block
+	fieldLocs := DefinitionForURI(uri, src, LSPPosition{Line: 7, Character: 6})
+	if len(fieldLocs) != 1 || fieldLocs[0].Range.Start.Line != 1 {
+		t.Fatalf("expected definition jump to block.x at line 1, got: %+v", fieldLocs)
+	}
+}
+
+func TestLSPOrderIndependentDefConstant(t *testing.T) {
+	src := `to get_val as number -> catalog.1.x
+
+def item
+    x = 0
+end
+
+def catalog = list as item with
+    x = 42
+end
+`
+	uri := "file:///const.ease"
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 0, Character: 25})
+	if len(locs) != 1 || locs[0].Range.Start.Line != 6 {
+		t.Fatalf("expected definition jump to def catalog at line 6, got: %+v", locs)
+	}
+}
+
+func TestLSPListProjectionItFieldDefinition(t *testing.T) {
+	src := `def user
+    name = ""
+end
+
+users = list as user
+names = users -> it.name
+say count names
+`
+	uri := "file:///proj.ease"
+	// Cursor on `name` in `users -> it.name` (line 5, col 21)
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 5, Character: 21})
+	if len(locs) != 1 || locs[0].Range.Start.Line != 1 {
+		t.Fatalf("expected definition jump to user.name at line 1, got: %+v", locs)
+	}
+}
+
+func TestLSPQuantifierItFieldDefinition(t *testing.T) {
+	src := `def user
+    name = ""
+end
+
+users = list as user
+check any users where it.name is "Ada"
+    say 1
+end
+`
+	uri := "file:///quant.ease"
+	// Cursor on `name` in `check any users where it.name is "Ada"` (line 5, col 26)
+	locs := DefinitionForURI(uri, src, LSPPosition{Line: 5, Character: 26})
+	if len(locs) != 1 || locs[0].Range.Start.Line != 1 {
+		t.Fatalf("expected definition jump to user.name at line 1, got: %+v", locs)
+	}
+}

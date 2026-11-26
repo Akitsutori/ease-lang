@@ -84,8 +84,8 @@ func (ev *Evaluator) evalMatchList(lv *ListValue, arms []MatchArmExpr, hasElse b
 				return nil, err
 			}
 			if sig != nil {
-				if sig.loopEnd {
-					return nil, newError("RuntimeError", line, col, ev.source, "Unexpected '-> end' inside 'match' expression", "")
+				if sig.loopStop {
+					return nil, newError("RuntimeError", line, col, ev.source, "Unexpected '-> stop' inside 'match' expression", "")
 				}
 				val = sig.val
 			} else if elseVal != nil {

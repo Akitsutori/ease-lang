@@ -2,6 +2,7 @@ package ease
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -42,6 +43,7 @@ type varTypeState struct {
 	listElemType         string
 	inboxElemType        string
 	isParam              bool
+	fromParam            bool
 	excludedRecords      map[string]bool
 	inlineUnionLabel     string
 	inlineUnionVariants  []resolvedUnionVariant
@@ -283,6 +285,41 @@ func validateProgramTypesWithOptions(prog *Program, source string, allowInternal
 		}
 	}
 
+	sortedConsts, err := toposortConsts(prog.Body, source)
+	if err != nil {
+		return err
+	}
+	for _, cs := range sortedConsts {
+		if err := v.checkNameNotCallable(cs.Name, cs.Line, cs.Col, "constant"); err != nil {
+			return err
+		}
+		if _, isType := v.known[cs.Name]; isType {
+			return newError(
+				"TypeError",
+				cs.Line,
+				cs.Col,
+				source,
+				fmt.Sprintf("Cannot define constant %q: it conflicts with a 'def' type", cs.Name),
+				"Choose a different constant name.",
+			)
+		}
+		if err := v.checkExpr(cs.Value); err != nil {
+			return err
+		}
+		if err := v.checkNotCondition(cs.Value); err != nil {
+			return err
+		}
+		if err := v.checkNotVoidValue(cs.Value); err != nil {
+			return err
+		}
+		if err := v.checkPureConstExpr(cs.Value); err != nil {
+			return err
+		}
+		valSt := v.inferExprTypeState(cs.Value)
+		valSt.isParam = false
+		v.globalScope.vars[cs.Name] = valSt
+	}
+
 	v.isTopLevelBody = true
 	if err := v.checkStmts(prog.Body, false); err != nil {
 		return err
@@ -295,7 +332,28 @@ func validateProgramTypesWithOptions(prog *Program, source string, allowInternal
 				return err
 			}
 		}
+		if fn.ReturnType != "" {
+			if fn.ReturnElemType != "" {
+				if err := v.validateTypeTarget(fn.ReturnElemType, fn.ReturnTypeLine, fn.ReturnTypeCol, "as list of", false); err != nil {
+					return err
+				}
+			} else {
+				if err := v.validateTypeTarget(fn.ReturnType, fn.ReturnTypeLine, fn.ReturnTypeCol, "as", false); err != nil {
+					return err
+				}
+			}
+		}
 		if !stmtsHaveReturn(fn.Body) && len(fn.Body) == 0 {
+			if fn.ReturnType != "" {
+				return newError(
+					"TypeError",
+					fn.Line,
+					fn.Col,
+					v.source,
+					fmt.Sprintf("Function '%s' declares return type '%s' but does not return a value", fn.Name, formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)),
+					fmt.Sprintf("Return a value with '-> <expr>' or remove 'as %s' from the function header.", formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)),
+				)
+			}
 			return newError(
 				"TypeError",
 				fn.Line,
@@ -310,11 +368,15 @@ func validateProgramTypesWithOptions(prog *Program, source string, allowInternal
 		for _, p := range fn.Params {
 			st := fnScope.vars[p]
 			st.isParam = true
+			st.fromParam = !hasConcreteTypeInfo(st)
 			fnScope.vars[p] = st
 		}
+		prevRetFn := v.currentReturnFunc
+		v.currentReturnFunc = fn
 		v.isFuncBodyTop = true
 		err := v.checkStmts(fn.Body, true)
 		v.isFuncBodyTop = false
+		v.currentReturnFunc = prevRetFn
 		if err != nil {
 			v.popScope()
 			return err
@@ -499,6 +561,16 @@ func (v *typeValidator) isVoidCallStmt(s Stmt) bool {
 }
 
 func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind string) error {
+	if name == "stop" || name == "return" {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Cannot name %s %q: reserved for '-> %s' control flow", kind, name, name),
+			fmt.Sprintf("Choose a different %s name so '-> %s' remains unambiguous.", kind, name),
+		)
+	}
 	if _, isBuiltin := builtinArities[name]; isBuiltin {
 		return newError(
 			"TypeError",
@@ -528,6 +600,18 @@ func (v *typeValidator) checkNameNotCallable(name string, line, col int, kind st
 			fmt.Sprintf("Cannot name %s %q the same as an imported module alias", kind, name),
 			fmt.Sprintf("Choose a different %s name.", kind),
 		)
+	}
+	if kind != "constant" {
+		if _, isConst := v.consts[name]; isConst {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Cannot reassign or shadow immutable 'def' constant %q", name),
+				fmt.Sprintf("Use a different %s name; 'def %s = ...' constants are immutable.", kind, name),
+			)
+		}
 	}
 	return nil
 }
@@ -705,6 +789,9 @@ func (v *typeValidator) exprToPatternVariants(e Expr) ([]resolvedUnionVariant, b
 }
 
 func (v *typeValidator) typeStateFromName(name string) varTypeState {
+	if strings.HasPrefix(name, "list<") && strings.HasSuffix(name, ">") {
+		return varTypeState{listElemType: name[5 : len(name)-1]}
+	}
 	if v.unions[name] != nil {
 		return varTypeState{unionName: name}
 	}
@@ -837,6 +924,29 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 		}
 	case *WhereExpr:
 		return v.inferExprTypeState(ex.Target)
+	case *ProjectExpr:
+		projScope := v.pushScope()
+		projScope.vars["it"] = v.inferIterableElemState(ex.Source)
+		v.loopDepth++
+		bodySt := v.inferExprTypeState(ex.Body)
+		v.loopDepth--
+		v.popScope()
+		if bodySt.exactRecord != "" {
+			return varTypeState{listElemType: bodySt.exactRecord}
+		}
+		if bodySt.unionName != "" {
+			return varTypeState{listElemType: bodySt.unionName}
+		}
+		if bodySt.exactBaseType != "" {
+			return varTypeState{listElemType: bodySt.exactBaseType}
+		}
+		if bodySt.listElemType != "" {
+			return varTypeState{listElemType: "list<" + bodySt.listElemType + ">"}
+		}
+		if kind := v.staticTypeKind(bodySt, false); kind != "" {
+			return varTypeState{listElemType: kind}
+		}
+		return varTypeState{listElemType: "any"}
 	case *UpdateExpr:
 		return v.inferExprTypeState(ex.Target)
 	case *SortByExpr:
@@ -1898,6 +2008,64 @@ func (v *typeValidator) checkExpr(e Expr) error {
 		v.popScope()
 		return condErr
 
+	case *ProjectExpr:
+		if err := v.checkExpr(ex.Source); err != nil {
+			return err
+		}
+		sourceSt := v.inferExprTypeState(ex.Source)
+		if !v.inErrorTestExpr && (sourceSt.exactRecord != "" || sourceSt.exactNonRecord || sourceSt.unionName != "" || sourceSt.inboxElemType != "") {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				"Cannot project non-list value with '->'",
+				"List projection '<list> -> <expr>' requires a list on the left.",
+			)
+		}
+		projScope := v.pushScope()
+		projScope.vars["it"] = v.inferIterableElemState(ex.Source)
+		v.loopDepth++
+		var bodyErr error
+		if err := v.checkExpr(ex.Body); err != nil {
+			bodyErr = err
+		} else if err := v.checkNotCondition(ex.Body); err != nil {
+			bodyErr = err
+		} else if err := v.checkNotVoidValue(ex.Body); err != nil {
+			bodyErr = err
+		}
+		v.loopDepth--
+		v.popScope()
+		return bodyErr
+
+	case *QuantifierExpr:
+		if err := v.checkExpr(ex.Source); err != nil {
+			return err
+		}
+		sourceSt := v.inferExprTypeState(ex.Source)
+		if !v.inErrorTestExpr && (sourceSt.exactRecord != "" || sourceSt.exactNonRecord || sourceSt.unionName != "" || sourceSt.inboxElemType != "") {
+			return newError(
+				"TypeError",
+				ex.Line,
+				ex.Col,
+				v.source,
+				fmt.Sprintf("Cannot use '%s' on non-list value", ex.Kind),
+				fmt.Sprintf("'%s <list> where <cond>' requires a list.", ex.Kind),
+			)
+		}
+		qScope := v.pushScope()
+		qScope.vars["it"] = v.inferIterableElemState(ex.Source)
+		v.loopDepth++
+		var condErr error
+		if err := v.checkExpr(ex.Cond); err != nil {
+			condErr = err
+		} else if err := v.checkMustBeCondition(ex.Cond, ex.Kind); err != nil {
+			condErr = err
+		}
+		v.loopDepth--
+		v.popScope()
+		return condErr
+
 	case *MatchExpr:
 		return v.checkMatchExpr(ex)
 
@@ -2502,8 +2670,11 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 				st = unprefixVarTypeState(argStates[i], ex.Module)
 			}
 			st.isParam = true
+			st.fromParam = !hasConcreteTypeInfo(st)
 			fnScope.vars[p] = st
 		}
+		targetV.currentReturnFunc = fn
+		targetV.inSpecializedCall = true
 		err = targetV.checkStmts(fn.Body, true)
 	} else {
 		// Save validator state so specialized check runs in an isolated scope.
@@ -2514,6 +2685,8 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 		savedWorkerAssigned := v.workerAssigned
 		savedWorkerOuter := v.workerOuterScope
 		savedInErrorBlock := v.inErrorBlock
+		savedRetFn := v.currentReturnFunc
+		savedInSpec := v.inSpecializedCall
 
 		v.scope = newTypeScope(v.globalScope)
 		v.loopDepth = 0
@@ -2522,6 +2695,8 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 		v.workerAssigned = nil
 		v.workerOuterScope = nil
 		v.inErrorBlock = false
+		v.currentReturnFunc = fn
+		v.inSpecializedCall = true
 
 		fnScope := v.pushScope()
 		v.inferFuncUnionParams(fn, fnScope)
@@ -2531,6 +2706,7 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 				st = argStates[i].clone()
 			}
 			st.isParam = true
+			st.fromParam = !hasConcreteTypeInfo(st)
 			fnScope.vars[p] = st
 		}
 
@@ -2543,6 +2719,8 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 		v.workerAssigned = savedWorkerAssigned
 		v.workerOuterScope = savedWorkerOuter
 		v.inErrorBlock = savedInErrorBlock
+		v.currentReturnFunc = savedRetFn
+		v.inSpecializedCall = savedInSpec
 	}
 
 	delete(v.activeCallSpecs, sig)
@@ -2566,7 +2744,27 @@ func (v *typeValidator) checkCallSiteSpecialization(ex *CallExpr) error {
 }
 
 func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argStates []varTypeState) varTypeState {
-	if fn == nil || !stmtsHaveReturn(fn.Body) {
+	if fn == nil {
+		return varTypeState{}
+	}
+	if fn.ReturnType != "" {
+		targetV := v
+		var modInfo modTypeInfo
+		isMod := false
+		if modName != "" {
+			if mod, ok := v.modules[modName]; ok && mod.origName == "" {
+				modInfo = mod
+				isMod = true
+				targetV = v.buildModuleValidator(mod)
+			}
+		}
+		out := targetV.returnTypeState(fn)
+		if isMod {
+			return prefixVarTypeState(out, modName, modInfo.defs, modInfo.unions)
+		}
+		return out
+	}
+	if !stmtsHaveReturn(fn.Body) {
 		return varTypeState{}
 	}
 	key := modName + ":" + fn.Name + "("
@@ -2733,6 +2931,8 @@ func (v *typeValidator) inferFuncReturnState(modName string, fn *FuncDecl, argSt
 func isConditionExpr(e Expr) bool {
 	switch ex := e.(type) {
 	case *BoolExpr:
+		return true
+	case *QuantifierExpr:
 		return true
 	case *TypeCheckExpr:
 		return true
@@ -2920,6 +3120,9 @@ func (v *typeValidator) checkRecordWithUpdates(recName string, updates []WithFie
 				if err := v.checkValueAgainstUnionVariants(upd.Value, valSt, variants, label, line, col); err != nil {
 					return err
 				}
+				if err := v.checkNonLiteralMatchesUnion(upd.Value, valSt, variants, label, line, col); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -2932,6 +3135,9 @@ func (v *typeValidator) checkRecordWithUpdates(recName string, updates []WithFie
 			}
 			if uName != "" {
 				if err := v.checkValueAgainstUnionVariants(upd.Value, valSt, v.resolvedUnions[uName], uName, line, col); err != nil {
+					return err
+				}
+				if err := v.checkNonLiteralMatchesUnion(upd.Value, valSt, v.resolvedUnions[uName], uName, line, col); err != nil {
 					return err
 				}
 				continue
@@ -3065,4 +3271,575 @@ func (v *typeValidator) checkValueAgainstUnionVariants(valExpr Expr, valSt varTy
 		)
 	}
 	return nil
+}
+
+func (v *typeValidator) returnTypeState(fn *FuncDecl) varTypeState {
+	if fn == nil || fn.ReturnType == "" {
+		return varTypeState{}
+	}
+	if fn.ReturnElemType != "" {
+		return varTypeState{listElemType: fn.ReturnElemType}
+	}
+	if st := v.typeStateFromName(fn.ReturnType); hasConcreteTypeInfo(st) {
+		return st
+	}
+	if modName, memberName, ok := strings.Cut(fn.ReturnType, "."); ok {
+		if mod, exists := v.modules[modName]; exists {
+			if mod.defs[memberName] != nil {
+				return varTypeState{exactRecord: fn.ReturnType}
+			}
+			if mod.unions[memberName] != nil {
+				return varTypeState{unionName: fn.ReturnType}
+			}
+		}
+	}
+	return varTypeState{}
+}
+
+func (v *typeValidator) isKnownRecordName(name string) bool {
+	if v.defs[name] != nil {
+		return true
+	}
+	if modName, memberName, ok := strings.Cut(name, "."); ok {
+		if mod, exists := v.modules[modName]; exists {
+			return mod.defs[memberName] != nil
+		}
+	}
+	return false
+}
+
+func (v *typeValidator) resolveUnionVariantsByName(name string) ([]resolvedUnionVariant, bool) {
+	if variants, ok := v.resolvedUnions[name]; ok {
+		return variants, true
+	}
+	if modName, memberName, ok := strings.Cut(name, "."); ok {
+		if mod, exists := v.modules[modName]; exists && mod.unions[memberName] != nil {
+			modV := v.buildModuleValidator(mod)
+			if variants, ok := modV.resolvedUnions[memberName]; ok {
+				prefixed := make([]resolvedUnionVariant, len(variants))
+				for i, vr := range variants {
+					prefixed[i] = vr
+					if vr.kind == variantRecord && !strings.Contains(vr.recordName, ".") {
+						prefixed[i].recordName = modName + "." + vr.recordName
+					}
+				}
+				return prefixed, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (v *typeValidator) exprDependsOnUnspecializedParam(e Expr) bool {
+	if e == nil {
+		return false
+	}
+	switch ex := e.(type) {
+	case *IdentExpr:
+		for sc := v.scope; sc != nil; sc = sc.parent {
+			if st, ok := sc.vars[ex.Name]; ok {
+				return (st.isParam || st.fromParam) && !hasConcreteTypeInfo(st)
+			}
+		}
+		return false
+	case *WithExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Base)
+	case *UpdateExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Target)
+	case *WhereExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Target)
+	case *ProjectExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Source) || v.exprDependsOnUnspecializedParam(ex.Body)
+	case *QuantifierExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Source) || v.exprDependsOnUnspecializedParam(ex.Cond)
+	case *SortByExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Target)
+	case *FieldExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Target)
+	case *IndexExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Target)
+	case *BinaryExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Left) || v.exprDependsOnUnspecializedParam(ex.Right)
+	case *UnaryExpr:
+		return v.exprDependsOnUnspecializedParam(ex.Right)
+	case *CallExpr:
+		for _, a := range ex.Args {
+			if v.exprDependsOnUnspecializedParam(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (v *typeValidator) checkReturnValueConforms(fn *FuncDecl, valExpr Expr, line, col int) error {
+	valSt := v.inferExprTypeState(valExpr)
+	retDisplay := formatReturnTypeDisplay(fn.ReturnType, fn.ReturnElemType)
+
+	if fn.ReturnElemType != "" {
+		if le, isList := valExpr.(*ListExpr); isList && len(le.Elements) == 0 || valSt.listElemType == "any" {
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Function '%s' declares return type '%s', but returned an untyped empty list", fn.Name, retDisplay),
+				fmt.Sprintf("Write 'list as %s' for an empty typed list.", fn.ReturnElemType),
+			)
+		}
+		if valSt.listElemType != "" && valSt.listElemType != "any" {
+			if valSt.listElemType == fn.ReturnElemType {
+				return nil
+			}
+			if variants, isUnion := v.resolveUnionVariantsByName(fn.ReturnElemType); isUnion {
+				if le, isList := valExpr.(*ListExpr); isList {
+					for _, el := range le.Elements {
+						elSt := v.inferExprTypeState(el)
+						if err := v.checkValueAgainstUnionVariants(el, elSt, variants, fn.ReturnElemType, line, col); err != nil {
+							return err
+						}
+						if err := v.checkNonLiteralMatchesUnion(el, elSt, variants, fn.ReturnElemType, line, col); err != nil {
+							return err
+						}
+					}
+					return nil
+				}
+				if v.isKnownRecordName(valSt.listElemType) {
+					for _, vr := range variants {
+						if vr.kind == variantRecord && vr.recordName == valSt.listElemType {
+							return nil
+						}
+					}
+				}
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Function '%s' declares return type '%s', got 'list of %s'", fn.Name, retDisplay, valSt.listElemType),
+				fmt.Sprintf("Return a list of %s.", fn.ReturnElemType),
+			)
+		}
+		if !hasConcreteTypeInfo(valSt) {
+			if v.exprDependsOnUnspecializedParam(valExpr) {
+				return nil
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Cannot verify return value matches declared type '%s' in function '%s'", retDisplay, fn.Name),
+				fmt.Sprintf("Return a typed 'list as %s' or pass typed arguments.", fn.ReturnElemType),
+			)
+		}
+		gotLabel := v.staticConcreteType(valSt)
+		if gotLabel == "" {
+			gotLabel = "incompatible value"
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Function '%s' declares return type '%s', got %s", fn.Name, retDisplay, gotLabel),
+			fmt.Sprintf("Return a value of type '%s'.", retDisplay),
+		)
+	}
+
+	if fn.ReturnType == "number" || fn.ReturnType == "text" {
+		if !hasConcreteTypeInfo(valSt) {
+			if v.exprDependsOnUnspecializedParam(valExpr) {
+				return nil
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Cannot verify return value matches declared type '%s' in function '%s'", fn.ReturnType, fn.Name),
+				fmt.Sprintf("Add an explicit 'as %s' cast or return a statically typed %s.", fn.ReturnType, fn.ReturnType),
+			)
+		}
+		gotKind := v.staticTypeKind(valSt, false)
+		if gotKind == fn.ReturnType {
+			return nil
+		}
+		if gotKind == "" {
+			gotKind = v.staticConcreteType(valSt)
+		}
+		if gotKind == "" {
+			gotKind = "incompatible value"
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Function '%s' declares return type '%s', got %s", fn.Name, fn.ReturnType, gotKind),
+			fmt.Sprintf("Return a %s value from '%s'.", fn.ReturnType, fn.Name),
+		)
+	}
+
+	if v.isKnownRecordName(fn.ReturnType) {
+		if !hasConcreteTypeInfo(valSt) {
+			if v.exprDependsOnUnspecializedParam(valExpr) {
+				return nil
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Cannot verify return value matches declared record type '%s' in function '%s'", fn.ReturnType, fn.Name),
+				fmt.Sprintf("Add an explicit 'as %s' cast or return a '%s' record.", fn.ReturnType, fn.ReturnType),
+			)
+		}
+		if valSt.exactRecord == fn.ReturnType {
+			return nil
+		}
+		gotLabel := v.staticConcreteType(valSt)
+		if gotLabel == "" {
+			gotLabel = "incompatible value"
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Function '%s' declares return type '%s', got %s", fn.Name, fn.ReturnType, gotLabel),
+			fmt.Sprintf("Return a '%s' record from '%s'.", fn.ReturnType, fn.Name),
+		)
+	}
+
+	if variants, isUnion := v.resolveUnionVariantsByName(fn.ReturnType); isUnion {
+		if valSt.unionName == fn.ReturnType {
+			return nil
+		}
+		if !hasConcreteTypeInfo(valSt) {
+			if v.exprDependsOnUnspecializedParam(valExpr) {
+				return nil
+			}
+			return newError(
+				"TypeError",
+				line,
+				col,
+				v.source,
+				fmt.Sprintf("Cannot verify return value matches declared union '%s' in function '%s'", fn.ReturnType, fn.Name),
+				fmt.Sprintf("Add an explicit 'as %s' cast or return a valid '%s' variant.", fn.ReturnType, fn.ReturnType),
+			)
+		}
+		if err := v.checkValueAgainstUnionVariants(valExpr, valSt, variants, fn.ReturnType, line, col); err != nil {
+			return err
+		}
+		return v.checkNonLiteralMatchesUnion(valExpr, valSt, variants, fn.ReturnType, line, col)
+	}
+
+	return nil
+}
+
+func (v *typeValidator) checkNonLiteralMatchesUnion(valExpr Expr, valSt varTypeState, variants []resolvedUnionVariant, unionName string, line, col int) error {
+	switch valExpr.(type) {
+	case *StringExpr, *NumberExpr:
+		return nil
+	}
+	if valSt.exactRecord != "" {
+		return nil
+	}
+	if valSt.exactBaseType != "" {
+		for _, vr := range variants {
+			if vr.kind == variantBaseType && vr.baseType == valSt.exactBaseType {
+				return nil
+			}
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Value of type %s is not statically guaranteed to belong to union '%s'", valSt.exactBaseType, unionName),
+			fmt.Sprintf("Use 'as %s' or return a concrete %s variant.", unionName, unionName),
+		)
+	}
+	if valSt.unionName != "" && valSt.unionName != unionName {
+		if srcVariants, ok := v.resolveUnionVariantsByName(valSt.unionName); ok && len(srcVariants) > 0 && unionVariantsSubset(srcVariants, variants) {
+			return nil
+		}
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Union '%s' does not match declared union '%s'", valSt.unionName, unionName),
+			fmt.Sprintf("Return a valid '%s' variant.", unionName),
+		)
+	}
+	return nil
+}
+
+func unionVariantsSubset(sub, sup []resolvedUnionVariant) bool {
+	for _, sv := range sub {
+		matched := false
+		for _, pv := range sup {
+			if pv.kind == sv.kind {
+				switch sv.kind {
+				case variantStringLit:
+					matched = sv.strVal == pv.strVal
+				case variantNumberLit:
+					matched = sv.numVal == pv.numVal
+				case variantBaseType:
+					matched = sv.baseType == pv.baseType
+				case variantRecord:
+					matched = sv.recordName == pv.recordName
+				}
+			} else if pv.kind == variantBaseType {
+				if (sv.kind == variantStringLit && pv.baseType == "text") || (sv.kind == variantNumberLit && pv.baseType == "number") {
+					matched = true
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func toposortConsts(stmts []Stmt, source string) ([]*ConstDeclStmt, error) {
+	byName := make(map[string]*ConstDeclStmt)
+	var order []string
+	for _, s := range stmts {
+		cs, ok := s.(*ConstDeclStmt)
+		if !ok {
+			continue
+		}
+		if prev, dup := byName[cs.Name]; dup {
+			return nil, newError(
+				"TypeError",
+				cs.Line,
+				cs.Col,
+				source,
+				fmt.Sprintf("Duplicate 'def' constant %q (already defined at line %d)", cs.Name, prev.Line),
+				"Each 'def' constant must have a unique name.",
+			)
+		}
+		byName[cs.Name] = cs
+		order = append(order, cs.Name)
+	}
+	if len(order) == 0 {
+		return nil, nil
+	}
+
+	var collectDeps func(e Expr, deps map[string]bool)
+	collectDeps = func(e Expr, deps map[string]bool) {
+		if e == nil {
+			return
+		}
+		switch ex := e.(type) {
+		case *IdentExpr:
+			if byName[ex.Name] != nil {
+				deps[ex.Name] = true
+			}
+		case *UnaryExpr:
+			collectDeps(ex.Right, deps)
+		case *BinaryExpr:
+			collectDeps(ex.Left, deps)
+			collectDeps(ex.Right, deps)
+		case *ListExpr:
+			for _, el := range ex.Elements {
+				collectDeps(el, deps)
+			}
+		case *TypedListExpr:
+			for _, row := range ex.Rows {
+				for _, upd := range row {
+					collectDeps(upd.Value, deps)
+				}
+			}
+		case *WithExpr:
+			collectDeps(ex.Base, deps)
+			for _, upd := range ex.Updates {
+				collectDeps(upd.Value, deps)
+			}
+		case *CallExpr:
+			for _, a := range ex.Args {
+				collectDeps(a, deps)
+			}
+		case *IndexExpr:
+			collectDeps(ex.Target, deps)
+			collectDeps(ex.Index, deps)
+		case *FieldExpr:
+			collectDeps(ex.Target, deps)
+		case *InterpStringExpr:
+			for _, seg := range ex.Parts {
+				if seg.IsExpr && seg.Expr != nil {
+					collectDeps(seg.Expr, deps)
+				}
+			}
+		}
+	}
+
+	state := make(map[string]int, len(order)) // 0=unvisited, 1=visiting, 2=done
+	var sorted []*ConstDeclStmt
+	var stack []string
+
+	var visit func(name string) error
+	visit = func(name string) error {
+		switch state[name] {
+		case 2:
+			return nil
+		case 1:
+			cs := byName[name]
+			cycle := append(append([]string(nil), stack...), name)
+			return newError(
+				"TypeError",
+				cs.Line,
+				cs.Col,
+				source,
+				fmt.Sprintf("Cyclic 'def' constant dependency: %s", strings.Join(cycle, " -> ")),
+				"Remove the circular reference between 'def' constants.",
+			)
+		}
+		state[name] = 1
+		stack = append(stack, name)
+		cs := byName[name]
+		deps := make(map[string]bool)
+		collectDeps(cs.Value, deps)
+		depNames := make([]string, 0, len(deps))
+		for d := range deps {
+			depNames = append(depNames, d)
+		}
+		sort.Strings(depNames)
+		for _, d := range depNames {
+			if err := visit(d); err != nil {
+				return err
+			}
+		}
+		stack = stack[:len(stack)-1]
+		state[name] = 2
+		sorted = append(sorted, cs)
+		return nil
+	}
+
+	for _, name := range order {
+		if err := visit(name); err != nil {
+			return nil, err
+		}
+	}
+	return sorted, nil
+}
+
+func (v *typeValidator) checkPureConstExpr(e Expr) error {
+	if e == nil {
+		return nil
+	}
+	switch ex := e.(type) {
+	case *NumberExpr, *StringExpr:
+		return nil
+	case *InterpStringExpr:
+		for _, seg := range ex.Parts {
+			if seg.IsExpr && seg.Expr != nil {
+				if err := v.checkPureConstExpr(seg.Expr); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	case *IdentExpr:
+		if v.consts[ex.Name] != 0 || v.defs[ex.Name] != nil || v.unions[ex.Name] != nil {
+			return nil
+		}
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("'def' constant cannot reference mutable variable %q", ex.Name),
+			"Use only literals, other 'def' constants, or pure data constructors inside 'def name = ...'.",
+		)
+	case *UnaryExpr:
+		return v.checkPureConstExpr(ex.Right)
+	case *BinaryExpr:
+		if err := v.checkPureConstExpr(ex.Left); err != nil {
+			return err
+		}
+		return v.checkPureConstExpr(ex.Right)
+	case *ListExpr:
+		for _, el := range ex.Elements {
+			if err := v.checkPureConstExpr(el); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *TypedListExpr:
+		for _, row := range ex.Rows {
+			for _, upd := range row {
+				if err := v.checkPureConstExpr(upd.Value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	case *WithExpr:
+		if err := v.checkPureConstExpr(ex.Base); err != nil {
+			return err
+		}
+		for _, upd := range ex.Updates {
+			if err := v.checkPureConstExpr(upd.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *FieldExpr:
+		if id, ok := ex.Target.(*IdentExpr); ok {
+			if mod, isMod := v.modules[id.Name]; isMod {
+				if mod.consts[ex.Field] != nil || mod.defs[ex.Field] != nil || mod.unions[ex.Field] != nil {
+					return nil
+				}
+			}
+		}
+		return v.checkPureConstExpr(ex.Target)
+	case *IndexExpr:
+		if err := v.checkPureConstExpr(ex.Target); err != nil {
+			return err
+		}
+		return v.checkPureConstExpr(ex.Index)
+	case *CallExpr:
+		if ex.Module == "" {
+			switch ex.Callee {
+			case "range", "split", "join", "trim", "upper", "lower", "replace", "floor", "round", "abs", "min", "max", "slice", "count", "append":
+				for _, a := range ex.Args {
+					if err := v.checkPureConstExpr(a); err != nil {
+						return err
+					}
+				}
+				return nil
+			case "sys_args":
+				if v.allowInternalBuiltins {
+					return nil
+				}
+			}
+		}
+		return newError(
+			"TypeError",
+			ex.Line,
+			ex.Col,
+			v.source,
+			fmt.Sprintf("'def' constant cannot call impure or user function %q", ex.Callee),
+			"Keep 'def' constants 100% pure (literals, records, typed lists, or pure built-in transforms like 'split' and 'range').",
+		)
+	default:
+		line, col := e.Pos()
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			"Unsupported expression in 'def' constant",
+			"Use literals, other 'def' constants, records ('with'), or typed lists ('list as ...').",
+		)
+	}
 }

@@ -1,11 +1,13 @@
+def particle_state = "active" | "dead"
+
 def particle
     x = 0
     vx = 10
     life = 100
-    state = "active" | "dead"
+    state = particle_state
 end
 
-to next_particle_state next_life
+to next_particle_state next_life as particle_state
     check next_life <= 0 -> "dead"
     -> "active"
 end

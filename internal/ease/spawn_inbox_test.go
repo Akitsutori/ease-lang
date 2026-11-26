@@ -87,7 +87,7 @@ count_seen = 0
 take ch
   total = total + it
   count_seen = count_seen + 1
-  check count_seen >= 10 -> end
+  check count_seen >= 10 -> stop
 end
 close done
 say "{count_seen}|{total}"
@@ -125,7 +125,7 @@ to close_when_done done results n
   cnt = 0
   take done
     cnt = cnt + it
-    check cnt >= n -> end
+    check cnt >= n -> stop
   end
   close results
 end
@@ -230,7 +230,7 @@ to close_after done ch total_workers
   cnt = 0
   take done
     cnt = cnt + it
-    check cnt >= total_workers -> end
+    check cnt >= total_workers -> stop
   end
   close ch
 end

@@ -19,6 +19,47 @@ func (p *Parser) parseLogicTail(left Expr) (Expr, error) {
 	return left, nil
 }
 
+func (p *Parser) parseQuantifierExpr() (Expr, error) {
+	qTok := p.advance() // consume `any` or `none`
+	prevDisallowWhere := p.disallowWhere
+	p.disallowWhere = true
+	src, err := p.parsePostfix()
+	p.disallowWhere = prevDisallowWhere
+	if err != nil {
+		return nil, err
+	}
+	if !p.match(TOK_WHERE) {
+		cur := p.current()
+		return nil, newError(
+			"SyntaxError",
+			cur.Line,
+			cur.Col,
+			p.source,
+			fmt.Sprintf("Expected 'where <condition>' after '%s <list>', got %q", qTok.Lexeme, cur.Lexeme),
+			fmt.Sprintf("Write: %s <list> where <condition>", qTok.Lexeme),
+		)
+	}
+	prevDisallowTopIs := p.disallowTopIs
+	prevStopChainedIs := p.stopChainedIs
+	prevDisallowArrow := p.disallowArrow
+	p.disallowTopIs = false
+	p.stopChainedIs = false
+	p.disallowArrow = true
+	cond, err := p.parseOr()
+	p.disallowTopIs = prevDisallowTopIs
+	p.stopChainedIs = prevStopChainedIs
+	p.disallowArrow = prevDisallowArrow
+	if err != nil {
+		return nil, err
+	}
+	return &QuantifierExpr{
+		posInfo: posInfo{Line: qTok.Line, Col: qTok.Col},
+		Kind:    qTok.Lexeme,
+		Source:  src,
+		Cond:    cond,
+	}, nil
+}
+
 func (p *Parser) parseInboxExpr() (Expr, error) {
 	inboxTok := p.advance() // consume `inbox`
 	if !p.match(TOK_AS) {
@@ -53,7 +94,27 @@ func (p *Parser) parseExpr() (Expr, error) {
 	}
 	defer p.exitDepth()
 
-	return p.parseOr()
+	return p.parseProject()
+}
+
+func (p *Parser) parseProject() (Expr, error) {
+	left, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	for !p.disallowArrow && p.check(TOK_ARROW) && p.peekNext().Type != TOK_NEWLINE && p.peekNext().Type != TOK_EOF {
+		arrowTok := p.advance()
+		body, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		left = &ProjectExpr{
+			posInfo: posInfo{Line: arrowTok.Line, Col: arrowTok.Col},
+			Source:  left,
+			Body:    body,
+		}
+	}
+	return left, nil
 }
 
 func (p *Parser) parseOr() (Expr, error) {
@@ -434,7 +495,10 @@ func (p *Parser) parsePostfix() (Expr, error) {
 				}
 			} else {
 				p.stopChainedIs = prevDisallowTopIs
+				prevDisallowArrow := p.disallowArrow
+				p.disallowArrow = true
 				cond, err := p.parseExpr()
+				p.disallowArrow = prevDisallowArrow
 				if err != nil {
 					p.disallowTopIs = prevDisallowTopIs
 					p.stopChainedIs = prevStopChainedIs
@@ -962,17 +1026,20 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		prevDisallowWhere := p.disallowWhere
 		prevDisallowWith := p.disallowWith
 		prevDisallowTopIs := p.disallowTopIs
+		prevDisallowArrow := p.disallowArrow
 		prevInCallArg := p.inCallArg
 		p.disallowAs = false
 		p.disallowWhere = false
 		p.disallowWith = false
 		p.disallowTopIs = false
+		p.disallowArrow = false
 		p.inCallArg = false
 		inner, err := p.parseExpr()
 		p.disallowAs = prevDisallowAs
 		p.disallowWhere = prevDisallowWhere
 		p.disallowWith = prevDisallowWith
 		p.disallowTopIs = prevDisallowTopIs
+		p.disallowArrow = prevDisallowArrow
 		p.inCallArg = prevInCallArg
 		if err != nil {
 			return nil, err
@@ -986,6 +1053,8 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		return p.parseTypedOrInlineList()
 	case TOK_UPDATE:
 		return p.parseUpdateExpr()
+	case TOK_ANY, TOK_NONE:
+		return p.parseQuantifierExpr()
 	case TOK_INBOX:
 		return p.parseInboxExpr()
 	case TOK_SPAWN:

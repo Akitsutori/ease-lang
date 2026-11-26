@@ -45,7 +45,7 @@ to close_when_done done treated worker_count
     finished = 0
     take done
         finished = finished + it
-        check finished >= worker_count -> end
+        check finished >= worker_count -> stop
     end
     close treated
 end

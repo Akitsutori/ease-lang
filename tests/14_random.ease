@@ -68,7 +68,7 @@ test "random verbs work safely inside concurrent spawn workers"
         it <= 100
         seen = seen + 1
         total = total + it
-        check seen >= 20 -> end
+        check seen >= 20 -> stop
     end
     close box
     seen is 20

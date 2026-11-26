@@ -22,7 +22,7 @@ Every construct has one canonical form and zero silent fallbacks.
         y = 2
     end
 
-- Arrow '->' rule: '->' ONLY returns a value on the same line or exits a loop ('-> end').
+- Arrow '->' rule: '->' ONLY returns a value on the same line, exits a loop ('-> stop'), or exits a void 'to' procedure ('-> return').
   Never put assignments or statements after '->'.
   Multi-line 'check' blocks NEVER have '->' on the header line and MUST close with 'end':
     check x > 0
@@ -30,7 +30,7 @@ Every construct has one canonical form and zero silent fallbacks.
     end
 
 - Explicit returns: 'to' functions and 'swarm loop' have NO implicit return.
-  Prefix every returned expression with '->' (e.g. -> state).
+  Prefix every returned expression with '->' (e.g. -> state); '-> stop' exits a loop and '-> return' exits a void 'to' procedure early.
   If any branch in 'to' returns a value, ALL paths must return a value.
 
 - Block-local variables: Variables first assigned inside a 'check' or 'loop' block die at 'end'.
@@ -65,8 +65,9 @@ Every construct has one canonical form and zero silent fallbacks.
 
 2. CORE SYNTAX AND SEMANTICS
 
-- Calls and naming: 'def' defines data records/unions/constants; 'to' defines functions without commas:
-  to add a b -> a + b
+- Calls and naming: 'def' defines data records/unions/constants; 'def <name> = <pure_expr>' defines order-independent, immutable domain constants readable inside any 'to' function. 'to' defines functions without commas:
+  to add a b as number -> a + b
+  Optional 'as <type>' (number, text, <Def>, <mod>.<Def>, list of <type>) enforces static and runtime return contracts; 'of' is a reserved keyword.
   res = add (1 + 2) 3
   Parameters and globals are read-only inside 'to' (assigning a name creates a local; reading a global before assigning the same name fails). 'def' fields cannot be named 'index'.
 
@@ -85,6 +86,8 @@ Every construct has one canonical form and zero silent fallbacks.
 
 - Concurrency: 'swarm loop <list_or_range> ... end' runs parallel workers returning a 1..N list via '-> <expr>' (outer vars read-only).
   Channels: ch = inbox as <type> (cap 64), spawn fn a b, put ch val (void), close ch (void), take ch ... end.
+
+- List projection & predicates: '<list> -> <expr>' maps each element ('it', 1-based 'it.index') to a new list without loops (e.g. names = users -> it.name). 'any <list> where <cond>' and 'none <list> where <cond>' are short-circuit conditions (usable in 'check', 'and'/'or'/'not', and 'test'; never stored).
 
 - Precedence (high to low):
   1. ()  .  :  with

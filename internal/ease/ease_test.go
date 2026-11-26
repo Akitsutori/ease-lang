@@ -1411,7 +1411,7 @@ loop range 1 100
         say "seed:{seq.(it.index)}"
     else
         next = seq.(it.index - 1) + seq.(it.index - 2)
-        check next > 25 -> end
+        check next > 25 -> stop
         seq = append seq next
     end
 end
@@ -1436,7 +1436,7 @@ to find_first_over limit xs
             say "small:{it}"
         else
             found = it
-            check it > 0 -> end
+            check it > 0 -> stop
         end
     end
     -> found + 100
@@ -1449,7 +1449,7 @@ pairs = list as text
 loop range 1 2
     outer = it
     loop range 10 12
-        check it is 11 -> end
+        check it is 11 -> stop
         pairs = append pairs "{outer}:{it}:{it.index}"
     end
 end
@@ -1498,14 +1498,14 @@ say pairs.2
 			want: "'repeat' loops were removed; use 'loop range' instead",
 		},
 		{
-			name: "arrow end at top level",
-			src:  "x = 1\ncheck x > 0 -> end\n",
-			want: "'-> end' can only be used inside a 'loop' block",
+			name: "arrow stop at top level",
+			src:  "x = 1\ncheck x > 0 -> stop\n",
+			want: "'-> stop' can only be used inside a 'loop' or 'take' block",
 		},
 		{
-			name: "arrow end in function outside loop",
-			src:  "to f x\n    check x > 0 -> end\n    -> x\nend\n",
-			want: "'-> end' can only be used inside a 'loop' block",
+			name: "arrow return in value-returning function",
+			src:  "to f x\n    check x > 0 -> return\n    -> x\nend\n",
+			want: "Cannot use '-> return' inside value-returning function 'f'",
 		},
 		{
 			name: "def field named index",
@@ -2216,7 +2216,7 @@ func TestInfiniteLoopWithExitCondition(t *testing.T) {
 	// Happy path: command loop reading stdin with `it.index` and exiting on `"quit"`
 	cmdSrc := `loop
   cmd = ask "> "
-  check cmd is "quit" -> end
+  check cmd is "quit" -> stop
   say "{it.index}:{cmd}"
 end
 say "bye"
@@ -2253,7 +2253,7 @@ end
 	// Negative test: infinite loop with no exit condition
 	if _, err := ParseProgram("loop\n  say it.index\nend\n"); err == nil ||
 		!strings.Contains(err.Error(), "Infinite 'loop' has no exit condition") ||
-		!strings.Contains(err.Error(), "check <condition> -> end") {
+		!strings.Contains(err.Error(), "check <condition> -> stop") {
 		t.Fatalf("expected infinite loop exit condition TypeError, got: %v", err)
 	}
 }
@@ -2293,7 +2293,7 @@ end
 	okEndExit := `
 to print_until_zero xs
   loop xs
-    check it is 0 -> end
+    check it is 0 -> stop
     say it
   end
 end
@@ -2465,5 +2465,172 @@ end
 	}
 	if report.Passed != 5 || report.Failed != 0 {
 		t.Fatalf("expected 5 passed / 0 failed, got %d/%d: %+v", report.Passed, report.Failed, report.Results)
+	}
+}
+
+func TestReturnTypeRuntimeEnforcement(t *testing.T) {
+	// Uncalled/dynamic-arg function returning mismatched runtime value from dynamic json map must fail with TypeError.
+	src := `
+to extract_age raw as number
+    -> raw
+end
+raw = '{"age":"not_a_number"}' as json
+say extract_age raw.("age")
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	_, err := EvalProgram(src, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "TypeError") || !strings.Contains(err.Error(), "declares return type 'number'") {
+		t.Fatalf("expected runtime TypeError for return contract violation, got: %v", err)
+	}
+}
+
+func TestDefConstantsEvalOrderAndAccess(t *testing.T) {
+	src := `
+def A = B + 1
+def B = 10
+
+def item
+    val = 0
+end
+
+to sum_catalog as number -> catalog.1.val + catalog.2.val + A
+
+def catalog = list as item with
+    val = 5
+    val = 7
+end
+
+say sum_catalog
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	if strings.TrimSpace(out.String()) != "23" {
+		t.Fatalf("expected 23, got %q", out.String())
+	}
+}
+
+func TestVoidProcArrowReturnAndNestedLoopUnwind(t *testing.T) {
+	src := `
+to log_nonzero x
+    check x is 0 -> return
+    say x
+end
+
+to find_first_gt limit
+    loop range 1 5
+        check it > limit
+            say "found:{it}"
+            -> return
+        end
+    end
+    say "none"
+end
+
+loop range 1 5
+    check it is 3
+        log_nonzero 0
+    else
+        log_nonzero it
+    end
+end
+find_first_gt 2
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	want := "1\n2\n4\n5\nfound:3\n"
+	if out.String() != want {
+		t.Fatalf("expected %q, got %q", want, out.String())
+	}
+}
+
+func TestListProjectionEvalAndNestedIndex(t *testing.T) {
+	src := `
+def user
+    name = ""
+    age  = 0
+end
+
+users = list as user with
+    name = "Ada", age = 30
+    name = "Bob", age = 15
+    name = "Eve", age = 25
+end
+
+names = users where it.age >= 18 -> "{it.index}:{it.name}"
+doubled = (range 1 4) -> it * 2
+empty_proj = (list as user) -> it.name
+matrix = list (list 1, 2), (list 3, 4)
+nested = matrix -> (it -> it * 10 + it.index)
+outer_idx = matrix -> (count (it -> it * 2)) + it.index
+
+say join names ","
+say sum doubled
+say count empty_proj
+say nested.2.2
+say outer_idx.2
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	want := "1:Ada,2:Eve\n20\n0\n42\n4\n"
+	if out.String() != want {
+		t.Fatalf("expected %q, got %q", want, out.String())
+	}
+}
+
+func TestQuantifiersEvalShortCircuitAndEmpty(t *testing.T) {
+	src := `
+# Short-circuit: second element (0) would divide by zero if evaluated!
+xs = list 2, 0
+check any xs where (10 / it) is 5
+    say "any_short"
+end
+check none xs where (10 / it) is 5
+    say "bad"
+else
+    say "none_short"
+end
+
+empty = list as number
+check any empty where it > 0
+    say "bad_empty_any"
+else
+    say "empty_any_false"
+end
+check none empty where it > 0
+    say "empty_none_true"
+end
+
+nums = list 10, 20, 30
+check 1 is 1 and any nums where it.index is 2 and it is 20
+    say "idx_ok"
+end
+`
+	if _, err := ParseProgram(src); err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	var out bytes.Buffer
+	if _, err := EvalProgram(src, &out); err != nil {
+		t.Fatalf("EvalProgram failed: %v", err)
+	}
+	want := "any_short\nnone_short\nempty_any_false\nempty_none_true\nidx_ok\n"
+	if out.String() != want {
+		t.Fatalf("expected %q, got %q", want, out.String())
 	}
 }

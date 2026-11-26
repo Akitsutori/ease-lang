@@ -338,7 +338,7 @@ end
 	mainSrc := `import "./mod.ease" as m
 x = m:compute 4
 loop
-    check x > 1000000 -> end
+    check x > 1000000 -> stop
     x = x + 1
 end
 `

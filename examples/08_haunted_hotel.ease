@@ -51,7 +51,7 @@ to render_hotel win updates
         raw = screen:present win sc
         parsed_st = raw as json
         st = parsed_st as screen.frame_state
-        check st.status is "closed" -> end
+        check st.status is "closed" -> stop
     end
 end
 
@@ -62,7 +62,7 @@ to handle_hotel_events win events
         check it.kind is "key" and it.key is "escape"
             close events
         end
-        check it.kind is "close" -> end
+        check it.kind is "close" -> stop
     end
     -> seen
 end

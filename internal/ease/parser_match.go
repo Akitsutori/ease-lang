@@ -381,7 +381,10 @@ func (p *Parser) parseMatchStmt() (Stmt, error) {
 			)
 		}
 		armTok := p.current()
+		prevDisallowArrow := p.disallowArrow
+		p.disallowArrow = true
 		pat, err := p.parseMatchPattern()
+		p.disallowArrow = prevDisallowArrow
 		if err != nil {
 			return nil, err
 		}
@@ -558,7 +561,10 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 			)
 		}
 		armTok := p.current()
+		prevDisallowArrow := p.disallowArrow
+		p.disallowArrow = true
 		pat, err := p.parseMatchPattern()
+		p.disallowArrow = prevDisallowArrow
 		if err != nil {
 			return nil, err
 		}

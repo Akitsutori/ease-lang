@@ -107,7 +107,7 @@ to inner_seq_loop items
   -> swarm loop items
     acc = 0
     loop range 1 it
-      check it > 3 -> end
+      check it > 3 -> stop
       acc = acc + it
     end
     -> acc
@@ -238,9 +238,9 @@ func TestSwarmLoopStaticAndRuntimeErrors(t *testing.T) {
 			wantSub: "Wrap 'swarm loop ... end' in parentheses",
 		},
 		{
-			name:    "loop exit -> end rejected inside swarm loop",
-			src:     "xs = swarm loop range 1 5\n  check it > 2 -> end\n  it\nend\n",
-			wantSub: "'-> end' cannot be used inside 'swarm loop'",
+			name:    "loop exit -> stop rejected inside swarm loop",
+			src:     "xs = swarm loop range 1 5\n  check it > 2 -> stop\n  it\nend\n",
+			wantSub: "'-> stop' cannot be used inside 'swarm loop'",
 		},
 		{
 			name:    "mutating outer variable inside swarm loop rejected statically",

@@ -106,9 +106,9 @@ to count_until_quit cmds
   steps = 0
   idx = 1
   loop
-    check idx > count cmds -> end
+    check idx > count cmds -> stop
     match cmds.(idx)
-      "quit" -> end
+      "quit" -> stop
       "step"
         steps = steps + 1
     end

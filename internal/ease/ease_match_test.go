@@ -33,7 +33,7 @@ to run_side_effects items
   log = ""
   loop items
     match it
-      "quit" -> end
+      "quit" -> stop
       "add:{n as number}"
         hits = hits + n
       else

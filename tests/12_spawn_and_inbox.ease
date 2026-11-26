@@ -22,7 +22,7 @@ to close_results done results n
   finished = 0
   take done
     finished = finished + it
-    check finished >= n -> end
+    check finished >= n -> stop
   end
   close results
 end
@@ -68,7 +68,7 @@ test "spawn, typed inbox, put, take, and close"
   close done
   res_sum is 60
 
-  # Early exit from take via check -> end
+  # Early exit from take via check -> stop
   nums = inbox as number
   put nums 5
   put nums 10
@@ -76,7 +76,7 @@ test "spawn, typed inbox, put, take, and close"
   close nums
   acc = 0
   take nums
-    check it > 50 -> end
+    check it > 50 -> stop
     acc = acc + it
   end
   acc is 15
