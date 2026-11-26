@@ -53,6 +53,32 @@ func (wc *wasmCompiler) ensureVar(name string, wt wasmTypeInfo) wasmVarSlot {
 	return s
 }
 
+func (wc *wasmCompiler) pushLoopItVars(elemType wasmTypeInfo) (wasmVarSlot, wasmVarSlot, func()) {
+	scopeMap := wc.globals
+	if wc.curFn != nil {
+		scopeMap = wc.locals
+	}
+	prevIt, hadIt := scopeMap["it"]
+	prevIdx, hadIdx := scopeMap["it.index"]
+	if hadIt && prevIt.typ != elemType {
+		delete(scopeMap, "it")
+	}
+	itSlot := wc.ensureVar("it", elemType)
+	idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+	return itSlot, idxSlot, func() {
+		if hadIt {
+			scopeMap["it"] = prevIt
+		} else {
+			delete(scopeMap, "it")
+		}
+		if hadIdx {
+			scopeMap["it.index"] = prevIdx
+		} else {
+			delete(scopeMap, "it.index")
+		}
+	}
+}
+
 func (wc *wasmCompiler) emitGetVar(c *wasmCodeBuf, s wasmVarSlot) {
 	if s.isGlobal {
 		c.globalGet(s.idx)
@@ -904,7 +930,10 @@ func (wc *wasmCompiler) emitLoopStmt(c *wasmCodeBuf, s *LoopStmt) error {
 	if elemType.kind == wkVoid {
 		elemType.kind = wkNum
 	}
-	itSlot := wc.ensureVar("it", elemType)
+	itSlot, loopIdxSlot, restoreIt := wc.pushLoopItVars(elemType)
+	defer restoreIt()
+	_ = idxSlot
+	idxSlot = loopIdxSlot
 
 	iLocal := wc.allocLocal(wasmI32)
 	c.i32Const(0)
@@ -1234,8 +1263,8 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		if elemType.kind == wkVoid {
 			elemType.kind = wkNum
 		}
-		itSlot := wc.ensureVar("it", elemType)
-		idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+		itSlot, idxSlot, restoreIt := wc.pushLoopItVars(elemType)
+		defer restoreIt()
 
 		iLocal := wc.allocLocal(wasmI32)
 		elI64 := wc.allocLocal(wasmI64)
@@ -1318,8 +1347,8 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		c.localSet(dataLocal)
 
 		elemType := wasmTypeInfo{kind: wkRec, name: lt.name}
-		itSlot := wc.ensureVar("it", elemType)
-		idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+		itSlot, idxSlot, restoreIt := wc.pushLoopItVars(elemType)
+		defer restoreIt()
 
 		iLocal := wc.allocLocal(wasmI32)
 		elI64 := wc.allocLocal(wasmI64)
@@ -1449,8 +1478,8 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		if elemType.kind == wkVoid {
 			elemType.kind = wkNum
 		}
-		itSlot := wc.ensureVar("it", elemType)
-		idxSlot := wc.ensureVar("it.index", wasmTypeInfo{kind: wkNum})
+		itSlot, idxSlot, restoreIt := wc.pushLoopItVars(elemType)
+		defer restoreIt()
 
 		kCount := len(ex.Keys)
 		keyBufs := make([]uint32, kCount)

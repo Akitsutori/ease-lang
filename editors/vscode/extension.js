@@ -334,6 +334,11 @@ async function activate(context) {
       } else if (folder && resolved.program.includes("${workspaceFolder}")) {
         resolved.program = resolved.program.replace("${workspaceFolder}", folder.uri.fsPath);
       }
+      if (resolved.noDebug === true) {
+        const targetPath = resolved.program && resolved.program !== "${file}" ? resolved.program : undefined;
+        runEaseSubcommand("run", targetPath);
+        return undefined;
+      }
       return resolved;
     },
   };

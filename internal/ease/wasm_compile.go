@@ -233,11 +233,11 @@ func (wc *wasmCompiler) collectDecls() {
 		}
 		if imp.ModuleProg != nil {
 			wc.modules[alias] = imp.ModuleProg
-			for _, d := range imp.ModuleProg.Defs {
-				wc.registerDef(alias+"."+d.Name, d)
-			}
 			for _, u := range imp.ModuleProg.Unions {
 				wc.registerUnion(alias+"."+u.Name, u, alias+".")
+			}
+			for _, d := range imp.ModuleProg.Defs {
+				wc.registerDef(alias+"."+d.Name, d)
 			}
 			for _, fn := range imp.ModuleProg.Functions {
 				if fn.Name == "open" || fn.Name == "present" || fn.Name == "roll" || fn.Name == "pick" || fn.Name == "shuffle" || fn.Name == "play" || fn.Name == "stop" {
@@ -250,14 +250,14 @@ func (wc *wasmCompiler) collectDecls() {
 			}
 		}
 	}
-	for _, d := range wc.prog.Defs {
-		if !d.Imported {
-			wc.registerDef(d.Name, d)
-		}
-	}
 	for _, u := range wc.prog.Unions {
 		if !u.Imported {
 			wc.registerUnion(u.Name, u, "")
+		}
+	}
+	for _, d := range wc.prog.Defs {
+		if !d.Imported {
+			wc.registerDef(d.Name, d)
 		}
 	}
 	for _, st := range wc.prog.Body {
@@ -311,7 +311,24 @@ func (wc *wasmCompiler) registerDef(name string, d *DefDecl) {
 	for i := range d.Fields {
 		f := &d.Fields[i]
 		ft := wc.inferStaticExprType(f.Default, "")
-		if ft.kind == wkVoid {
+		if ft.kind == wkUnion {
+			if ul := wc.unions[ft.name]; ul != nil && len(ul.variants) > 0 {
+				allText, allNum := true, true
+				for _, uv := range ul.variants {
+					if uv.kind != wkText {
+						allText = false
+					}
+					if uv.kind != wkNum {
+						allNum = false
+					}
+				}
+				if allText {
+					ft = wasmTypeInfo{kind: wkText}
+				} else if allNum {
+					ft = wasmTypeInfo{kind: wkNum}
+				}
+			}
+		} else if ft.kind == wkVoid {
 			if id, ok := f.Default.(*IdentExpr); ok {
 				if dot := strings.LastIndex(name, "."); dot > 0 {
 					qualU := name[:dot+1] + id.Name
