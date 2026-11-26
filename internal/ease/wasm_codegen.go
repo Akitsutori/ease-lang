@@ -168,7 +168,7 @@ func (wc *wasmCompiler) tryCompileScreenApp(initFn, stepFn uint32) (bool, error)
 	// Case B: `06_window.ease`-style: `loop ... screen:present ... end`
 	var hasScreen bool
 	walkAllExprs(wc.prog, func(e Expr) {
-		if ce, ok := e.(*CallExpr); ok && ce.Module == "screen" && (ce.Callee == "present" || ce.Callee == "open") {
+		if ce, ok := e.(*CallExpr); ok && ce.Module == "screen" && (ce.Callee == "present" || ce.Callee == "open" || ce.Callee == "clear" || ce.Callee == "draw" || ce.Callee == "show") {
 			hasScreen = true
 		}
 	})
@@ -289,7 +289,7 @@ func (wc *wasmCompiler) tryCompileScreenApp(initFn, stepFn uint32) (bool, error)
 		if lp, ok := st.(*LoopStmt); ok {
 			hasPres := false
 			walkStmtsAndExprs(lp.Body, nil, func(e Expr) {
-				if ce, ok := e.(*CallExpr); ok && ce.Module == "screen" && ce.Callee == "present" {
+				if ce, ok := e.(*CallExpr); ok && ce.Module == "screen" && (ce.Callee == "present" || ce.Callee == "show") {
 					hasPres = true
 				}
 			})
@@ -1050,6 +1050,17 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		}
 		if lay := wc.records[ex.Name]; lay != nil {
 			return wc.emitDefaultRecord(c, lay)
+		}
+		if ul := wc.unions[ex.Name]; ul != nil && len(ul.variants) > 0 {
+			v0 := ul.variants[0]
+			switch v0.kind {
+			case wkText:
+				c.i64Const(int64(wc.mod.internString(v0.lit)))
+				return nil
+			case wkNum:
+				c.f64Const(v0.num)
+				return nil
+			}
 		}
 		if fi := wc.funcs[ex.Name]; fi != nil && len(fi.decl.Params) == 0 {
 			c.call(fi.fnIdx)
@@ -2167,6 +2178,150 @@ func (wc *wasmCompiler) emitOpenScreenFromExpr(c *wasmCodeBuf, scrExpr Expr) err
 	return nil
 }
 
+func (wc *wasmCompiler) emitDrawShapeItem(c *wasmCodeBuf, itemLocal uint32, itemType wasmTypeInfo) {
+	buf := wc.allocLocal(wasmI32)
+	pos := wc.allocLocal(wasmI32)
+	c.i32Const(72)
+	c.call(wc.rt.fnAlloc)
+	c.localSet(buf)
+
+	emitRecordOp := func(recLocal uint32, opcode byte, recName string) {
+		lay := wc.records[recName]
+		if lay == nil {
+			return
+		}
+		c.localGet(buf)
+		c.i32Const(int32(opcode))
+		c.memOp(opI32Store8, 0, 0)
+		c.localGet(buf)
+		c.i32Const(1)
+		c.op(opI32Add)
+		c.localSet(pos)
+
+		storeF64 := func(field string) {
+			rf := lay.byName[field]
+			c.localGet(pos)
+			c.localGet(recLocal)
+			c.memOp(opF64Load, 3, rf.offset)
+			c.memOp(opF64Store, 3, 0)
+			c.localGet(pos)
+			c.i32Const(8)
+			c.op(opI32Add)
+			c.localSet(pos)
+		}
+		storeStyle := func() {
+			rf := lay.byName["style"]
+			solidStr := wc.mod.internString("solid")
+			c.localGet(pos)
+			c.localGet(recLocal)
+			c.memOp(opI64Load, 3, rf.offset)
+			c.i64Const(int64(solidStr))
+			c.call(wc.rt.fnStrEq)
+			c.memOp(opI32Store8, 0, 0)
+			c.localGet(pos)
+			c.i32Const(1)
+			c.op(opI32Add)
+			c.localSet(pos)
+		}
+		storeText := func(field string) {
+			rf := lay.byName[field]
+			c.localGet(pos)
+			c.localGet(recLocal)
+			c.memOp(opI64Load, 3, rf.offset)
+			emitUnpackPtr(c)
+			c.memOp(opI32Store, 2, 0)
+			c.localGet(pos)
+			c.localGet(recLocal)
+			c.memOp(opI64Load, 3, rf.offset)
+			emitUnpackLen(c)
+			c.memOp(opI32Store, 2, 4)
+			c.localGet(pos)
+			c.i32Const(8)
+			c.op(opI32Add)
+			c.localSet(pos)
+		}
+
+		switch opcode {
+		case 1:
+			storeF64("x")
+			storeF64("y")
+			storeF64("size")
+			storeF64("stroke")
+			storeStyle()
+			storeText("color")
+		case 2:
+			storeF64("x")
+			storeF64("y")
+			storeF64("width")
+			storeF64("height")
+			storeF64("stroke")
+			storeStyle()
+			storeText("color")
+		case 3:
+			storeF64("x1")
+			storeF64("y1")
+			storeF64("x2")
+			storeF64("y2")
+			storeF64("width")
+			storeText("color")
+		case 4:
+			storeF64("x1")
+			storeF64("y1")
+			storeF64("x2")
+			storeF64("y2")
+			storeF64("x3")
+			storeF64("y3")
+			storeF64("stroke")
+			storeStyle()
+			storeText("color")
+		case 5:
+			storeF64("x")
+			storeF64("y")
+			storeF64("size")
+			storeText("content")
+			storeText("color")
+		}
+		c.localGet(buf)
+		c.localGet(pos)
+		c.localGet(buf)
+		c.op(opI32Sub)
+		c.call(wc.rt.impDrawShape)
+	}
+
+	if itemType.kind == wkUnion {
+		tagL := wc.allocLocal(wasmI32)
+		payL := wc.allocLocal(wasmI32)
+		c.localGet(itemLocal)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(tagL)
+		c.localGet(itemLocal)
+		c.memOp(opI32Load, 2, 8)
+		c.localSet(payL)
+		for idx, recName := range []string{"screen.circle", "screen.box", "screen.line", "screen.triangle", "screen.label"} {
+			c.localGet(tagL)
+			c.i32Const(int32(idx + 1))
+			c.op(opI32Eq)
+			c.ifOp(wasmBlockVoid)
+			emitRecordOp(payL, byte(idx+1), recName)
+			c.op(opEnd)
+		}
+		return
+	}
+
+	switch itemType.name {
+	case "screen.circle":
+		emitRecordOp(itemLocal, 1, "screen.circle")
+	case "screen.box":
+		emitRecordOp(itemLocal, 2, "screen.box")
+	case "screen.line":
+		emitRecordOp(itemLocal, 3, "screen.line")
+	case "screen.triangle":
+		emitRecordOp(itemLocal, 4, "screen.triangle")
+	case "screen.label":
+		emitRecordOp(itemLocal, 5, "screen.label")
+	}
+}
+
 func (wc *wasmCompiler) emitCallExpr(c *wasmCodeBuf, ex *CallExpr) error {
 	if ex.Module == "screen" {
 		switch ex.Callee {
@@ -2194,6 +2349,100 @@ func (wc *wasmCompiler) emitCallExpr(c *wasmCodeBuf, ex *CallExpr) error {
 				c.call(wc.rt.fnPresentScene)
 			}
 			c.i64Const(int64(wc.mod.internString("{}")))
+			return nil
+		case "clear":
+			if len(ex.Args) >= 1 {
+				c.globalGet(wc.screenOpenedGlob)
+				c.op(opI32Eqz)
+				c.ifOp(wasmBlockVoid)
+				if err := wc.emitOpenScreenFromExpr(c, ex.Args[0]); err != nil {
+					return err
+				}
+				c.op(opEnd)
+			}
+			if len(ex.Args) >= 2 {
+				bgTmp := wc.allocLocal(wasmI64)
+				if err := wc.emitExpr(c, ex.Args[1], wasmTypeInfo{kind: wkText}); err != nil {
+					return err
+				}
+				c.localTee(bgTmp)
+				emitUnpackPtr(c)
+				c.localGet(bgTmp)
+				emitUnpackLen(c)
+				c.call(wc.rt.impClearScreen)
+			}
+			return nil
+		case "draw":
+			if len(ex.Args) >= 1 {
+				c.globalGet(wc.screenOpenedGlob)
+				c.op(opI32Eqz)
+				c.ifOp(wasmBlockVoid)
+				if err := wc.emitOpenScreenFromExpr(c, ex.Args[0]); err != nil {
+					return err
+				}
+				c.op(opEnd)
+			}
+			if len(ex.Args) >= 2 {
+				dt := wc.inferExprTypeWithEnv(ex.Args[1], wc.curEnvTypes(), "")
+				if dt.kind == wkList {
+					listLocal := wc.allocLocal(wasmI32)
+					nLocal := wc.allocLocal(wasmI32)
+					dataLocal := wc.allocLocal(wasmI32)
+					iLocal := wc.allocLocal(wasmI32)
+					elLocal := wc.allocLocal(wasmI32)
+					if err := wc.emitExpr(c, ex.Args[1], dt); err != nil {
+						return err
+					}
+					c.localTee(listLocal)
+					c.memOp(opI32Load, 2, 4)
+					c.localSet(nLocal)
+					c.localGet(listLocal)
+					c.memOp(opI32Load, 2, 0)
+					c.localSet(dataLocal)
+					c.i32Const(0)
+					c.localSet(iLocal)
+					c.block(wasmBlockVoid)
+					c.loop(wasmBlockVoid)
+					c.localGet(iLocal)
+					c.localGet(nLocal)
+					c.op(opI32GeS)
+					c.brIf(1)
+					c.localGet(dataLocal)
+					c.localGet(iLocal)
+					c.i32Const(8)
+					c.op(opI32Mul)
+					c.op(opI32Add)
+					c.memOp(opI32Load, 2, 0)
+					c.localSet(elLocal)
+					wc.emitDrawShapeItem(c, elLocal, wasmTypeInfo{kind: dt.elemKind, name: dt.name})
+					c.localGet(iLocal)
+					c.i32Const(1)
+					c.op(opI32Add)
+					c.localSet(iLocal)
+					c.br(0)
+					c.op(opEnd)
+					c.op(opEnd)
+				} else {
+					itemLocal := wc.allocLocal(wasmI32)
+					if err := wc.emitExpr(c, ex.Args[1], dt); err != nil {
+						return err
+					}
+					c.localSet(itemLocal)
+					wc.emitDrawShapeItem(c, itemLocal, dt)
+				}
+			}
+			return nil
+		case "show":
+			if len(ex.Args) >= 1 {
+				c.globalGet(wc.screenOpenedGlob)
+				c.op(opI32Eqz)
+				c.ifOp(wasmBlockVoid)
+				if err := wc.emitOpenScreenFromExpr(c, ex.Args[0]); err != nil {
+					return err
+				}
+				c.op(opEnd)
+			}
+			wc.emitBuildFrameStateFromBuf(c)
 			return nil
 		}
 	}
@@ -2336,12 +2585,55 @@ func (wc *wasmCompiler) emitCallExpr(c *wasmCodeBuf, ex *CallExpr) error {
 				return err
 			}
 			argT := wc.inferExprTypeWithEnv(ex.Args[1], wc.curEnvTypes(), "")
+			if lt.kind == wkList && argT.kind == wkList {
+				outL := wc.allocLocal(wasmI32)
+				srcL := wc.allocLocal(wasmI32)
+				nL := wc.allocLocal(wasmI32)
+				dL := wc.allocLocal(wasmI32)
+				iL := wc.allocLocal(wasmI32)
+				c.localSet(outL)
+				if err := wc.emitExpr(c, ex.Args[1], argT); err != nil {
+					return err
+				}
+				c.localTee(srcL)
+				c.memOp(opI32Load, 2, 4)
+				c.localSet(nL)
+				c.localGet(srcL)
+				c.memOp(opI32Load, 2, 0)
+				c.localSet(dL)
+				c.i32Const(0)
+				c.localSet(iL)
+				c.block(wasmBlockVoid)
+				c.loop(wasmBlockVoid)
+				c.localGet(iL)
+				c.localGet(nL)
+				c.op(opI32GeS)
+				c.brIf(1)
+				c.localGet(outL)
+				c.localGet(dL)
+				c.localGet(iL)
+				c.i32Const(8)
+				c.op(opI32Mul)
+				c.op(opI32Add)
+				c.memOp(opI64Load, 3, 0)
+				c.call(wc.rt.fnListPush)
+				c.localSet(outL)
+				c.localGet(iL)
+				c.i32Const(1)
+				c.op(opI32Add)
+				c.localSet(iL)
+				c.br(0)
+				c.op(opEnd)
+				c.op(opEnd)
+				c.localGet(outL)
+				return nil
+			}
 			// Handle union element wrapping when appending a concrete shape record into list<screen.shape>
 			if lt.name == "screen.shape" && argT.kind == wkRec {
 				if ul := wc.unions["screen.shape"]; ul != nil {
 					var tag int32 = 1
 					for _, vr := range ul.variants {
-						if vr.name == argT.name {
+						if vr.name == argT.name || strings.HasSuffix(argT.name, "."+vr.name) {
 							tag = vr.tag
 							break
 						}

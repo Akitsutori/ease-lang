@@ -278,6 +278,8 @@ type runtimeLifecycle struct {
 	activeScreen     *screenSession
 	screenEvents     *InboxValue
 	screenFrameCount int
+	pendingScene     screenScene
+	hasPendingScene  bool
 	bgmMu            sync.Mutex
 	bgmCancel        context.CancelFunc
 }

@@ -240,7 +240,7 @@ func (wc *wasmCompiler) collectDecls() {
 				wc.registerDef(alias+"."+d.Name, d)
 			}
 			for _, fn := range imp.ModuleProg.Functions {
-				if fn.Name == "open" || fn.Name == "present" || fn.Name == "roll" || fn.Name == "pick" || fn.Name == "shuffle" || fn.Name == "play" || fn.Name == "stop" {
+				if fn.Name == "open" || fn.Name == "present" || fn.Name == "clear" || fn.Name == "draw" || fn.Name == "show" || fn.Name == "roll" || fn.Name == "pick" || fn.Name == "shuffle" || fn.Name == "play" || fn.Name == "stop" {
 					if !imp.IsFileImport {
 						continue
 					}
@@ -375,7 +375,7 @@ func (wc *wasmCompiler) registerUnion(name string, u *UnionDecl, prefix string) 
 				ul.variants = append(ul.variants, wasmUnionVariant{tag: tag, kind: wkNum, name: "number"})
 			} else {
 				recName := prefix + v.Name
-				if prefix != "" && wc.records[recName] == nil {
+				if prefix != "" && wc.records[recName] == nil && wc.records[v.Name] != nil {
 					recName = v.Name
 				}
 				ul.variants = append(ul.variants, wasmUnionVariant{tag: tag, kind: wkRec, name: recName})
@@ -731,11 +731,14 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 			if fi := wc.funcs[ex.Module+":"+ex.Callee]; fi != nil {
 				return fi.retType
 			}
-			if ex.Module == "screen" && ex.Callee == "open" {
+			if ex.Module == "screen" && (ex.Callee == "open" || ex.Callee == "clear" || ex.Callee == "draw") {
 				return wasmTypeInfo{kind: wkVoid}
 			}
 			if ex.Module == "screen" && ex.Callee == "present" {
 				return wasmTypeInfo{kind: wkText}
+			}
+			if ex.Module == "screen" && ex.Callee == "show" {
+				return wasmTypeInfo{kind: wkRec, name: "screen.frame_state"}
 			}
 			if ex.Module == "synth" && (ex.Callee == "play" || ex.Callee == "stop") {
 				return wasmTypeInfo{kind: wkVoid}

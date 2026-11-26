@@ -15,6 +15,8 @@ type wasmRuntime struct {
 	impPanic        uint32
 	impOpenScreen   uint32
 	impPresentScene uint32
+	impClearScreen  uint32
+	impDrawShape    uint32
 	impPollEvent    uint32
 	impPollKeys     uint32
 	impRandomInt    uint32
@@ -61,6 +63,8 @@ func newWasmRuntime(mod *wasmModule) *wasmRuntime {
 	rt.impPanic = mod.addImportFunc("env", "panic", []byte{wasmI32, wasmI32}, nil)
 	rt.impOpenScreen = mod.addImportFunc("env", "open_screen", []byte{wasmF64, wasmF64, wasmI32, wasmI32, wasmF64}, nil)
 	rt.impPresentScene = mod.addImportFunc("env", "present_scene", []byte{wasmI32, wasmI32}, nil)
+	rt.impClearScreen = mod.addImportFunc("env", "clear_screen", []byte{wasmI32, wasmI32}, nil)
+	rt.impDrawShape = mod.addImportFunc("env", "draw_shape", []byte{wasmI32, wasmI32}, nil)
 	rt.impPollEvent = mod.addImportFunc("env", "poll_event", []byte{wasmI32}, []byte{wasmI32})
 	rt.impPollKeys = mod.addImportFunc("env", "poll_keys", []byte{wasmI32, wasmI32}, []byte{wasmI32})
 	rt.impRandomInt = mod.addImportFunc("env", "random_int", []byte{wasmI64, wasmI64}, []byte{wasmI64})

@@ -2984,6 +2984,26 @@ end
 			src:      "import synth\nx = synth:stop\n",
 			wantSubs: []string{"TypeError", "synth:stop"},
 		},
+		{
+			name:     "private screen_clear intrinsic rejected",
+			src:      "screen_clear 1 \"black\"\n",
+			wantSubs: []string{"TypeError", "screen:clear"},
+		},
+		{
+			name:     "screen:clear cannot be assigned as a value",
+			src:      "import screen\nw = screen.screen\nx = screen:clear w \"black\"\n",
+			wantSubs: []string{"TypeError", "screen:clear"},
+		},
+		{
+			name:     "screen:draw cannot be assigned as a value",
+			src:      "import screen\nw = screen.screen\nx = screen:draw w (screen.box)\n",
+			wantSubs: []string{"TypeError", "screen:draw"},
+		},
+		{
+			name:     "screen:draw rejects non-drawable primitive",
+			src:      "import screen\nw = screen.screen\nscreen:draw w 42\n",
+			wantSubs: []string{"TypeError", "screen:draw"},
+		},
 	}
 
 	for _, tc := range negCases {

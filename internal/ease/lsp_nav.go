@@ -472,6 +472,14 @@ func lspInferExprType(e Expr, sc *lspScopeInfo) string {
 			}
 		}
 	case *CallExpr:
+		if ex.Module != "" {
+			if imp, isImp := sc.imports[ex.Module]; isImp && imp.Name == "screen" && ex.Callee == "show" {
+				return ex.Module + ".frame_state"
+			}
+			if imp, isImp := sc.imports[ex.Module]; isImp && imp.Name == "system" && ex.Callee == "run" {
+				return ex.Module + ".process_report"
+			}
+		}
 		if ex.Module == "" {
 			switch ex.Callee {
 			case "ask", "trim", "upper", "lower", "replace", "join", "type":

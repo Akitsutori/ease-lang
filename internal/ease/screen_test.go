@@ -206,3 +206,34 @@ say "{st.status}:{st.key}:{count st.keys}:{st.keys.1}"
 		t.Fatalf("expected 'open:right:1:right', got %q", out.String())
 	}
 }
+
+func TestScreenImmediateClearDrawShowHeadless(t *testing.T) {
+	src := `import screen
+
+win = screen.screen with width = 320, height = 240, fps = 60
+boxes = list as screen.box with
+    x = 10, y = 20, width = 30, height = 30, color = "#06b6d4"
+end
+
+frames = 0
+loop
+    screen:clear win "#0f172a"
+    screen:draw win (screen.line with x1 = 0, y1 = 0, x2 = 100, y2 = 100, color = "#1e293b")
+    screen:draw win boxes
+    screen:draw win (screen.label with x = 5, y = 5, content = "OK", size = 14)
+    st = screen:show win
+    frames = frames + 1
+    check st.status is "closed" -> end
+    say "{frames}:{st.status}:{st.key}:{count st.keys}:{st.mouse_x}"
+end
+say "done:{frames}"
+`
+	var out bytes.Buffer
+	if _, err := EvalProgramHeadlessWithTrace(src, strings.NewReader(""), &out, nil); err != nil {
+		t.Fatalf("headless immediate screen failed: %v", err)
+	}
+	want := "1:open:right:1:0\n2:open::0:320\ndone:3"
+	if strings.TrimSpace(out.String()) != want {
+		t.Fatalf("expected %q, got %q", want, strings.TrimSpace(out.String()))
+	}
+}

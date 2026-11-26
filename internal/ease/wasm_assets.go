@@ -219,6 +219,82 @@ const wasmHostJS = `(function () {
     scheduleCycle(actx.currentTime + 0.02);
   }
 
+  function renderShapeOp(dv, off, dbgShapes) {
+    const op = dv.getUint8(off); off += 1;
+    if (op === 1) { // circle
+      const x = dv.getFloat64(off, true); off += 8;
+      const y = dv.getFloat64(off, true); off += 8;
+      const size = dv.getFloat64(off, true); off += 8;
+      const stroke = dv.getFloat64(off, true); off += 8;
+      const filled = dv.getUint8(off); off += 1;
+      const cp = dv.getUint32(off, true); off += 4;
+      const cl = dv.getUint32(off, true); off += 4;
+      const col = resolveColor(readStr(cp, cl));
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      if (filled) { ctx.fillStyle = col; ctx.fill(); }
+      else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.stroke(); }
+      if (dbgShapes) dbgShapes.push({ type: "circle", x, y, size, color: col, style: filled ? "solid" : "outline" });
+    } else if (op === 2) { // box
+      const x = dv.getFloat64(off, true); off += 8;
+      const y = dv.getFloat64(off, true); off += 8;
+      const w = dv.getFloat64(off, true); off += 8;
+      const h = dv.getFloat64(off, true); off += 8;
+      const stroke = dv.getFloat64(off, true); off += 8;
+      const filled = dv.getUint8(off); off += 1;
+      const cp = dv.getUint32(off, true); off += 4;
+      const cl = dv.getUint32(off, true); off += 4;
+      const col = resolveColor(readStr(cp, cl));
+      if (filled) { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); }
+      else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.strokeRect(x, y, w, h); }
+      if (dbgShapes) dbgShapes.push({ type: "box", x, y, w, h, color: col, style: filled ? "solid" : "outline" });
+    } else if (op === 3) { // line
+      const x1 = dv.getFloat64(off, true); off += 8;
+      const y1 = dv.getFloat64(off, true); off += 8;
+      const x2 = dv.getFloat64(off, true); off += 8;
+      const y2 = dv.getFloat64(off, true); off += 8;
+      const w = dv.getFloat64(off, true); off += 8;
+      const cp = dv.getUint32(off, true); off += 4;
+      const cl = dv.getUint32(off, true); off += 4;
+      const col = resolveColor(readStr(cp, cl));
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
+      if (dbgShapes) dbgShapes.push({ type: "line", x1, y1, x2, y2, color: col });
+    } else if (op === 4) { // triangle
+      const x1 = dv.getFloat64(off, true); off += 8;
+      const y1 = dv.getFloat64(off, true); off += 8;
+      const x2 = dv.getFloat64(off, true); off += 8;
+      const y2 = dv.getFloat64(off, true); off += 8;
+      const x3 = dv.getFloat64(off, true); off += 8;
+      const y3 = dv.getFloat64(off, true); off += 8;
+      const stroke = dv.getFloat64(off, true); off += 8;
+      const filled = dv.getUint8(off); off += 1;
+      const cp = dv.getUint32(off, true); off += 4;
+      const cl = dv.getUint32(off, true); off += 4;
+      const col = resolveColor(readStr(cp, cl));
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
+      if (filled) { ctx.fillStyle = col; ctx.fill(); }
+      else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.stroke(); }
+      if (dbgShapes) dbgShapes.push({ type: "triangle", x1, y1, x2, y2, x3, y3, color: col });
+    } else if (op === 5) { // label
+      const x = dv.getFloat64(off, true); off += 8;
+      const y = dv.getFloat64(off, true); off += 8;
+      const size = dv.getFloat64(off, true); off += 8;
+      const tp = dv.getUint32(off, true); off += 4;
+      const tl = dv.getUint32(off, true); off += 4;
+      const cp = dv.getUint32(off, true); off += 4;
+      const cl = dv.getUint32(off, true); off += 4;
+      const text = readStr(tp, tl);
+      const col = resolveColor(readStr(cp, cl));
+      ctx.fillStyle = col;
+      ctx.font = size + "px monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(text, x, y);
+      if (dbgShapes) dbgShapes.push({ type: "label", x, y, size, content: text, color: col });
+    }
+    return off;
+  }
+
   const env = {
     log(ptr, len) {
       const msg = readStr(ptr, len);
@@ -250,85 +326,25 @@ const wasmHostJS = `(function () {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const dbgShapes = [];
+      const dbgShapes = debugMode ? [] : null;
       for (let i = 0; i < count; i++) {
-        const op = dv.getUint8(off); off += 1;
-        if (op === 1) { // circle
-          const x = dv.getFloat64(off, true); off += 8;
-          const y = dv.getFloat64(off, true); off += 8;
-          const size = dv.getFloat64(off, true); off += 8;
-          const stroke = dv.getFloat64(off, true); off += 8;
-          const filled = dv.getUint8(off); off += 1;
-          const cp = dv.getUint32(off, true); off += 4;
-          const cl = dv.getUint32(off, true); off += 4;
-          const col = resolveColor(readStr(cp, cl));
-          ctx.beginPath();
-          ctx.arc(x, y, size, 0, Math.PI * 2);
-          if (filled) { ctx.fillStyle = col; ctx.fill(); }
-          else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.stroke(); }
-          if (debugMode) dbgShapes.push({ type: "circle", x, y, size, color: col, style: filled ? "solid" : "outline" });
-        } else if (op === 2) { // box
-          const x = dv.getFloat64(off, true); off += 8;
-          const y = dv.getFloat64(off, true); off += 8;
-          const w = dv.getFloat64(off, true); off += 8;
-          const h = dv.getFloat64(off, true); off += 8;
-          const stroke = dv.getFloat64(off, true); off += 8;
-          const filled = dv.getUint8(off); off += 1;
-          const cp = dv.getUint32(off, true); off += 4;
-          const cl = dv.getUint32(off, true); off += 4;
-          const col = resolveColor(readStr(cp, cl));
-          if (filled) { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); }
-          else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.strokeRect(x, y, w, h); }
-          if (debugMode) dbgShapes.push({ type: "box", x, y, w, h, color: col, style: filled ? "solid" : "outline" });
-        } else if (op === 3) { // line
-          const x1 = dv.getFloat64(off, true); off += 8;
-          const y1 = dv.getFloat64(off, true); off += 8;
-          const x2 = dv.getFloat64(off, true); off += 8;
-          const y2 = dv.getFloat64(off, true); off += 8;
-          const w = dv.getFloat64(off, true); off += 8;
-          const cp = dv.getUint32(off, true); off += 4;
-          const cl = dv.getUint32(off, true); off += 4;
-          const col = resolveColor(readStr(cp, cl));
-          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
-          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
-          if (debugMode) dbgShapes.push({ type: "line", x1, y1, x2, y2, color: col });
-        } else if (op === 4) { // triangle
-          const x1 = dv.getFloat64(off, true); off += 8;
-          const y1 = dv.getFloat64(off, true); off += 8;
-          const x2 = dv.getFloat64(off, true); off += 8;
-          const y2 = dv.getFloat64(off, true); off += 8;
-          const x3 = dv.getFloat64(off, true); off += 8;
-          const y3 = dv.getFloat64(off, true); off += 8;
-          const stroke = dv.getFloat64(off, true); off += 8;
-          const filled = dv.getUint8(off); off += 1;
-          const cp = dv.getUint32(off, true); off += 4;
-          const cl = dv.getUint32(off, true); off += 4;
-          const col = resolveColor(readStr(cp, cl));
-          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
-          if (filled) { ctx.fillStyle = col; ctx.fill(); }
-          else { ctx.strokeStyle = col; ctx.lineWidth = stroke; ctx.stroke(); }
-          if (debugMode) dbgShapes.push({ type: "triangle", x1, y1, x2, y2, x3, y3, color: col });
-        } else if (op === 5) { // label
-          const x = dv.getFloat64(off, true); off += 8;
-          const y = dv.getFloat64(off, true); off += 8;
-          const size = dv.getFloat64(off, true); off += 8;
-          const tp = dv.getUint32(off, true); off += 4;
-          const tl = dv.getUint32(off, true); off += 4;
-          const cp = dv.getUint32(off, true); off += 4;
-          const cl = dv.getUint32(off, true); off += 4;
-          const text = readStr(tp, tl);
-          const col = resolveColor(readStr(cp, cl));
-          ctx.fillStyle = col;
-          ctx.font = size + "px monospace";
-          ctx.textBaseline = "top";
-          ctx.fillText(text, x, y);
-          if (debugMode) dbgShapes.push({ type: "label", x, y, size, content: text, color: col });
-        }
+        off = renderShapeOp(dv, off, dbgShapes);
       }
       frameCount++;
       if (debugMode && frameStateEl) {
         frameStateEl.textContent = JSON.stringify({ frame: frameCount, background: bg, shapes: dbgShapes, queuedEvents: eventQueue.length }, null, 2);
       }
+    },
+    clear_screen(bgPtr, bgLen) {
+      if (!wasmMemory || !ctx) return;
+      const bg = resolveColor(readStr(bgPtr, bgLen));
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    },
+    draw_shape(ptr, len) {
+      if (!wasmMemory || !ctx) return;
+      const dv = new DataView(wasmMemory.buffer, ptr >>> 0, len >>> 0);
+      renderShapeOp(dv, 0, null);
     },
     poll_event(outPtr) {
       if (!wasmMemory) return 0;

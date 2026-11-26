@@ -47,6 +47,9 @@ var builtinArities = map[string]int{
 	"max":            2,
 	"screen_present": 2,
 	"screen_open":    2,
+	"screen_clear":   2,
+	"screen_draw":    2,
+	"screen_show":    1,
 	"replace":        3,
 	"slice":          3,
 	"net_serve_http": 2,
@@ -701,6 +704,27 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_present takes 2 arguments (screen, scene)", "")
 		}
 		v, err := ev.execScreenPresent(args, line, col)
+		return v, true, err
+
+	case "screen_clear":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_clear takes 2 arguments (screen, color)", "")
+		}
+		v, err := ev.execScreenClear(args, line, col)
+		return v, true, err
+
+	case "screen_draw":
+		if len(args) != 2 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_draw takes 2 arguments (screen, drawable_or_list)", "")
+		}
+		v, err := ev.execScreenDraw(args, line, col)
+		return v, true, err
+
+	case "screen_show":
+		if len(args) != 1 {
+			return nil, true, newError("RuntimeError", line, col, ev.source, "screen_show takes 1 argument (screen)", "")
+		}
+		v, err := ev.execScreenShow(args, line, col)
 		return v, true, err
 
 	case "net_serve_http":

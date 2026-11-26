@@ -353,6 +353,9 @@ var internalStdlibBuiltins = map[string]string{
 	"net_send":       "network:tcp_send",
 	"screen_open":    "screen:open",
 	"screen_present": "screen:present",
+	"screen_clear":   "screen:clear",
+	"screen_draw":    "screen:draw",
+	"screen_show":    "screen:show",
 	"rand_roll":      "random:roll",
 	"rand_pick":      "random:pick",
 	"rand_shuffle":   "random:shuffle",
@@ -384,6 +387,10 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 			return "synth:stop", true
 		case "screen_open":
 			return "screen:open", true
+		case "screen_clear":
+			return "screen:clear", true
+		case "screen_draw":
+			return "screen:draw", true
 		case "net_reply_text":
 			return "network:reply_text", true
 		case "net_reply_json":
@@ -406,8 +413,8 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 				return "synth:" + ce.Callee, true
 			}
 		case "screen":
-			if ce.Callee == "open" {
-				return "screen:open", true
+			if ce.Callee == "open" || ce.Callee == "clear" || ce.Callee == "draw" {
+				return "screen:" + ce.Callee, true
 			}
 		case "network":
 			switch ce.Callee {
@@ -917,6 +924,9 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "system" && ex.Callee == "run" {
 				return varTypeState{exactRecord: ex.Module + ".process_report"}
 			}
+			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "screen" && ex.Callee == "show" {
+				return varTypeState{exactRecord: ex.Module + ".frame_state"}
+			}
 			if mod, ok := v.modules[ex.Module]; ok && mod.origName == "random" {
 				switch ex.Callee {
 				case "sys_args":
@@ -949,6 +959,8 @@ func (v *typeValidator) inferExprTypeState(e Expr) varTypeState {
 			return varTypeState{listElemType: "text"}
 		case "sys_run":
 			return varTypeState{exactRecord: "process_report"}
+		case "screen_show":
+			return varTypeState{exactRecord: "frame_state"}
 		case "append":
 			if len(ex.Args) >= 1 {
 				argSt := v.inferExprTypeState(ex.Args[0])
@@ -2021,6 +2033,65 @@ func (v *typeValidator) checkExpr(e Expr) error {
 					fmt.Sprintf("Module %q has no function %q", ex.Module, ex.Callee),
 					fmt.Sprintf("Define 'to %s ...' in module %q.", ex.Callee, ex.Module),
 				)
+			}
+			if !v.inErrorTestExpr && mod.origName == "screen" {
+				if ex.Callee == "clear" && len(ex.Args) >= 2 {
+					bgSt := v.inferExprTypeState(ex.Args[1])
+					if bgSt.exactBaseType != "" && bgSt.exactBaseType != "text" {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("screen:clear requires a text color, got %s", bgSt.exactBaseType),
+							"Pass a color name or hex string, e.g. 'screen:clear win \"#0f172a\"'.",
+						)
+					}
+				}
+				if ex.Callee == "draw" && len(ex.Args) >= 2 {
+					isDrawableName := func(n string) bool {
+						base := n
+						if dot := strings.LastIndexByte(base, '.'); dot >= 0 {
+							base = base[dot+1:]
+						}
+						switch base {
+						case "box", "circle", "line", "triangle", "label", "shape", "drawable":
+							return true
+						}
+						return false
+					}
+					dSt := v.inferExprTypeState(ex.Args[1])
+					if dSt.exactBaseType != "" {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("screen:draw requires a screen drawable or list of drawables, got %s", dSt.exactBaseType),
+							"Draw a screen.box, circle, line, triangle, label, or a list of them.",
+						)
+					}
+					if dSt.exactRecord != "" && !isDrawableName(dSt.exactRecord) {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("screen:draw cannot draw record %q", dSt.exactRecord),
+							"Draw a screen.box, circle, line, triangle, or label.",
+						)
+					}
+					if dSt.listElemType != "" && !isDrawableName(dSt.listElemType) {
+						return newError(
+							"TypeError",
+							ex.Line,
+							ex.Col,
+							v.source,
+							fmt.Sprintf("screen:draw requires a list of drawables, got list of %s", dSt.listElemType),
+							"Pass a list of screen.box, circle, line, triangle, label, or screen.drawable.",
+						)
+					}
+				}
 			}
 		}
 		isSystemExitCall := (ex.Module == "" && ex.Callee == "sys_exit")

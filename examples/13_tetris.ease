@@ -2,660 +2,278 @@ import screen
 import random
 import synth
 
-# Arcade Tetris in pure Ease — runs natively (Ebiten + Oto) and compiles to browser WASM!
-# Controls:
-#   Left / Right (or A / D) : Move with DAS/ARR
-#   Up / W                  : Rotate clockwise (with wall-kicks)
-#   Down / S                : Soft drop (+1 score/cell)
-#   Space                   : Hard drop (+2 score/cell)
-#   P                       : Pause / Resume
-#   M                       : Mute / Unmute Korobeiniki BGM
-#   R                       : Restart
-#   Escape                  : Quit
-
-def piece_kind = "I" | "O" | "T" | "S" | "Z" | "J" | "L"
-def game_status = "playing" | "paused" | "over"
-def audio_mode = "on" | "muted"
-def rot_outcome = "rotated" | "blocked"
-
+# Arcade Tetris in pure Ease — native desktop & browser WASM.
+def piece_spec
+    kind   = "I" | "O" | "T"
+    color  = "#06b6d4"
+    cx     = 5
+    cy     = 2
+    coords = list as number
+end
 def block
     col   = 0
     row   = 0
     color = "#06b6d4"
+    state = "falling" | "locked"
+end
+def tetris_world
+    blocks    = list as block
+    prev_keys = list as text
+    spec      = piece_spec
+    next_spec = piece_spec
+    cx        = 5
+    cy        = 2
+    score     = 0
+    lines     = 0
+    level     = 1
+    grav_cd   = 0
+    move_cd   = 0
+    status    = "playing" | "paused" | "over"
+    audio     = "on" | "muted"
 end
 
-def rotation_result
-    blocks  = list as block
-    cx      = 5
-    cy      = 2
-    outcome = rot_outcome
-end
-
-def clear_result
-    locked  = list as block
-    cleared = 0
-end
-
-def tetris_state
-    kind         = piece_kind
-    next_kind    = piece_kind
-    cx           = 5
-    cy           = 2
-    score        = 0
-    lines        = 0
-    level        = 1
-    gravity_tick = 0
-    das_dir      = 0
-    das_timer    = 0
-    soft_tick    = 0
-    status       = game_status
-    audio        = audio_mode
-end
-
-to piece_color kind
-    check kind is "I" -> "#06b6d4"
-    check kind is "O" -> "#eab308"
-    check kind is "T" -> "#a855f7"
-    check kind is "S" -> "#22c55e"
-    check kind is "Z" -> "#ef4444"
-    check kind is "J" -> "#3b82f6"
-    -> "#f97316"
-end
-
-to spawn_blocks kind
-    clr = piece_color kind
-    check kind is "I"
-        -> list as block with
-            col = 4, row = 1, color = clr
-            col = 5, row = 1, color = clr
-            col = 6, row = 1, color = clr
-            col = 7, row = 1, color = clr
-        end
-    end
-    check kind is "O"
-        -> list as block with
-            col = 5, row = 1, color = clr
-            col = 6, row = 1, color = clr
-            col = 5, row = 2, color = clr
-            col = 6, row = 2, color = clr
-        end
-    end
-    check kind is "T"
-        -> list as block with
-            col = 5, row = 1, color = clr
-            col = 4, row = 2, color = clr
-            col = 5, row = 2, color = clr
-            col = 6, row = 2, color = clr
-        end
-    end
-    check kind is "S"
-        -> list as block with
-            col = 5, row = 1, color = clr
-            col = 6, row = 1, color = clr
-            col = 4, row = 2, color = clr
-            col = 5, row = 2, color = clr
-        end
-    end
-    check kind is "Z"
-        -> list as block with
-            col = 4, row = 1, color = clr
-            col = 5, row = 1, color = clr
-            col = 5, row = 2, color = clr
-            col = 6, row = 2, color = clr
-        end
-    end
-    check kind is "J"
-        -> list as block with
-            col = 4, row = 1, color = clr
-            col = 4, row = 2, color = clr
-            col = 5, row = 2, color = clr
-            col = 6, row = 2, color = clr
-        end
-    end
-    -> list as block with
-        col = 6, row = 1, color = clr
-        col = 4, row = 2, color = clr
-        col = 5, row = 2, color = clr
-        col = 6, row = 2, color = clr
+to piece_catalog
+    -> list as piece_spec with
+        kind = "I", color = "#06b6d4", cx = 5.5, cy = 1.5, coords = (list 4, 1, 5, 1, 6, 1, 7, 1)
+        kind = "O", color = "#eab308", cx = 5.5, cy = 1.5, coords = (list 5, 1, 6, 1, 5, 2, 6, 2)
+        kind = "T", color = "#a855f7", cx = 5,   cy = 2,   coords = (list 5, 1, 4, 2, 5, 2, 6, 2)
+        kind = "T", color = "#22c55e", cx = 5,   cy = 2,   coords = (list 5, 1, 6, 1, 4, 2, 5, 2)
+        kind = "T", color = "#ef4444", cx = 5,   cy = 2,   coords = (list 4, 1, 5, 1, 5, 2, 6, 2)
+        kind = "T", color = "#3b82f6", cx = 5,   cy = 2,   coords = (list 4, 1, 4, 2, 5, 2, 6, 2)
+        kind = "T", color = "#f97316", cx = 5,   cy = 2,   coords = (list 6, 1, 4, 2, 5, 2, 6, 2)
     end
 end
-
-to spawn_cx kind
-    check kind is "I" -> 5.5
-    check kind is "O" -> 5.5
-    -> 5
-end
-
-to spawn_cy kind
-    check kind is "I" -> 1.5
-    check kind is "O" -> 1.5
-    -> 2
-end
-
-to shuffle_bag
-    bag = list "I", "O", "T", "S", "Z", "J", "L"
-    idx = 7
-    loop range 1 6
-        j = random:roll 1 idx
-        tmp = bag.(idx)
-        bag = bag with .(idx) = bag.(j)
-        bag = bag with .(j) = tmp
-        idx = idx - 1
+to spawn_blocks sp
+    c = sp.coords
+    out = list as block
+    loop list 1, 3, 5, 7
+        out = append out (block with col = c.(it), row = c.(it + 1), color = sp.color, state = "falling")
     end
-    -> bag
+    -> out
 end
-
-to as_piece_kind raw
-    check raw is "I" -> "I"
-    check raw is "O" -> "O"
-    check raw is "T" -> "T"
-    check raw is "S" -> "S"
-    check raw is "Z" -> "Z"
-    check raw is "J" -> "J"
-    -> "L"
+to key_hit keys prev k
+    check contains keys k and not (contains prev k) -> "hit"
+    -> "none"
 end
-
-to cell_occupied locked c r
-    hit = locked where it.col is c and it.row is r
-    check count hit > 0 -> 1
-    -> 0
+to toggle v a b
+    check v is a -> b
+    -> a
 end
-
-to is_valid_pos blocks locked
-    ok = 1
-    loop blocks
-        check it.col < 1 or it.col > 10 or it.row < -1 or it.row > 20
-            ok = 0
-            -> end
-        end
-        check (cell_occupied locked it.col it.row) is 1
-            ok = 0
-            -> end
-        end
+to valid_pos cand locked
+    loop cand
+        c = it.col
+        r = it.row
+        check c < 1 or c > 10 or r < -1 or r > 20 or (count (locked where it.col is c and it.row is r)) > 0 -> "blocked"
     end
-    -> ok
+    -> "valid"
 end
-
-to move_blocks blocks dx dy
-    -> update blocks with
-        col = it.col + dx
-        row = it.row + dy
-    end
-end
-
-to rotate_cw_blocks blocks cx cy
-    -> update blocks with
-        col = cx - (it.row - cy)
-        row = cy + (it.col - cx)
-    end
-end
-
-to try_rotate kind active locked cx cy
-    check kind is "O"
-        -> rotation_result with blocks = active, cx = cx, cy = cy, outcome = "blocked"
-    end
-    rotated = rotate_cw_blocks active cx cy
-    kicks_x = list 0, -1, 1, -2, 2, 0
-    kicks_y = list 0, 0, 0, 0, 0, -1
-    loop range 1 6
-        kx = kicks_x.(it)
-        ky = kicks_y.(it)
-        cand = move_blocks rotated kx ky
-        check (is_valid_pos cand locked) is 1
-            -> rotation_result with blocks = cand, cx = cx + kx, cy = cy + ky, outcome = "rotated"
-        end
-    end
-    -> rotation_result with blocks = active, cx = cx, cy = cy, outcome = "blocked"
-end
-
-to ghost_drop active locked
-    cur = active
+to ghost_blocks w
+    cur = w.blocks where it.state is "falling"
+    locked = w.blocks where it.state is "locked"
     loop range 1 22
-        next_b = move_blocks cur 0 1
-        check (is_valid_pos next_b locked) is 0 -> end
-        cur = next_b
+        nxt = update cur with row = it.row + 1
+        check (valid_pos nxt locked) is "blocked" -> end
+        cur = nxt
     end
     -> cur
 end
-
 to clear_full_lines locked
     cur = locked
-    cleared = 0
     loop range 1 20
         r = it
-        row_cells = cur where it.row is r
-        check (count row_cells) is 10
-            cur = cur where it.row is not r
-            cur = update cur where it.row < r with row = it.row + 1
-            cleared = cleared + 1
+        check (count (cur where it.state is "locked" and it.row is r)) is 10
+            cur = update (cur where it.row is not r) where it.state is "locked" and it.row < r with row = it.row + 1
         end
     end
-    -> clear_result with locked = cur, cleared = cleared
+    -> cur
 end
-
-to line_clear_points cleared lvl
-    check cleared is 1 -> 100 * lvl
-    check cleared is 2 -> 300 * lvl
-    check cleared is 3 -> 500 * lvl
-    check cleared is 4 -> 800 * lvl
-    -> 0
+to init_world cat audio
+    s1 = random:pick cat
+    s2 = random:pick cat
+    -> tetris_world with blocks = spawn_blocks s1, prev_keys = list as text, spec = s1, next_spec = s2, cx = s1.cx, cy = s1.cy, audio = audio
 end
-
-to gravity_frames lvl
-    frames = 48 - ((lvl - 1) * 4)
-    check frames < 6 -> 6
-    -> frames
-end
-
-to build_korobeiniki_bgm
-    part_a = "E5/4 B4/8 C5/8 D5/4 C5/8 B4/8 A4/4 A4/8 C5/8 E5/4 D5/8 C5/8 B4/4 B4/8 C5/8 D5/4 E5/4 C5/4 A4/4 A4/2 REST/8 D5/4 F5/8 A5/4 G5/8 F5/8 E5/4 REST/8 C5/8 E5/4 D5/8 C5/8 B4/4 B4/8 C5/8 D5/4 E5/4 C5/4 A4/4 A4/2"
-    part_b = "E4/2 C4/2 D4/2 B3/2 C4/2 A3/2 G#3/2 B3/4 REST/4 E4/2 C4/2 D4/2 B3/2 C4/4 E4/4 A4/2 G#4/2 REST/2"
-    full = "{part_a} {part_a} {part_b}"
-    -> synth.melody with
-        notes  = split full " "
-        bpm    = 148
-        wave   = "square"
-        volume = 18
-        repeat = "forever"
+to sys_toggles w keys cat bgm
+    cur = w
+    check (key_hit keys w.prev_keys "p") is "hit" and cur.status is not "over"
+        cur = cur with status = toggle cur.status "playing" "paused"
     end
-end
-
-to build_tetris_scene locked active ghost st
-    ox = 24
-    oy = 52
-    cell = 28
-    bw = 280
-    bh = 560
-
-    shapes = list as screen.shape
-    labels = list as screen.label
-
-    # Playfield backdrop & border
-    shapes = append shapes (screen.box with x = ox, y = oy, width = bw, height = bh, color = "#020617", style = "solid")
-    loop range 1 9
-        gx = ox + (it * cell)
-        shapes = append shapes (screen.line with x1 = gx, y1 = oy, x2 = gx, y2 = oy + bh, width = 1, color = "#1e293b")
+    check (key_hit keys w.prev_keys "m") is "hit"
+        cur = cur with audio = toggle cur.audio "on" "muted"
     end
+    check (key_hit keys w.prev_keys "r") is "hit"
+        cur = init_world cat cur.audio
+    end
+    check cur.status is not w.status or cur.audio is not w.audio or (key_hit keys w.prev_keys "r") is "hit"
+        check cur.status is "playing" and cur.audio is "on"
+            synth:play bgm
+        else
+            synth:stop
+        end
+    end
+    -> cur
+end
+to sys_input w keys sfx_rot
+    check w.status is not "playing" -> w
+    cur = w
+    dx = 0
+    check contains keys "left" or contains keys "a"
+        dx = -1
+    end
+    check contains keys "right" or contains keys "d"
+        dx = 1
+    end
+    falling = cur.blocks where it.state is "falling"
+    locked = cur.blocks where it.state is "locked"
+    check dx is 0
+        cur = cur with move_cd = 0
+    else
+        check cur.move_cd is 0 and (valid_pos (update falling with col = it.col + dx) locked) is "valid"
+            falling = update falling with col = it.col + dx
+            cur = cur with blocks = (append locked falling), cx = cur.cx + dx, move_cd = 7
+        else
+            cur = cur with move_cd = max 0 (cur.move_cd - 1)
+        end
+    end
+    check cur.spec.kind is "O" or ((key_hit keys cur.prev_keys "up") is "none" and (key_hit keys cur.prev_keys "w") is "none") -> cur
+    rot = update falling with col = cur.cx - (it.row - cur.cy), row = cur.cy + (it.col - cur.cx)
+    loop list 0, -1, 1, -2, 2
+        dx_k = it
+        cand = update rot with col = it.col + dx_k
+        check (valid_pos cand locked) is "valid"
+            check cur.audio is "on"
+                spawn synth:play sfx_rot
+            end
+            -> cur with blocks = (append locked cand), cx = cur.cx + dx_k
+        end
+    end
+    -> cur
+end
+to sys_physics w keys tick cat sfx_lock sfx_line sfx_tet sfx_over
+    check w.status is not "playing" -> w
+    falling = w.blocks where it.state is "falling"
+    locked = w.blocks where it.state is "locked"
+    bonus = 0
+    check (key_hit keys w.prev_keys "space") is "hit"
+        dropped = ghost_blocks w
+        bonus = (dropped.1.row - falling.1.row) * 2
+        falling = dropped
+    else
+        soft = 0
+        check (contains keys "down" or contains keys "s") and (tick % 2) is 0
+            soft = 1
+        else
+            check (w.grav_cd + 1) < (max 6 (48 - ((w.level - 1) * 4))) -> w with grav_cd = w.grav_cd + 1
+        end
+        check (valid_pos (update falling with row = it.row + 1) locked) is "valid" -> w with blocks = (append locked (update falling with row = it.row + 1)), cy = w.cy + 1, score = w.score + soft, grav_cd = 0
+    end
+    flipped = append locked (update falling with state = "locked")
+    after = clear_full_lines flipped
+    cleared = floor (((count flipped) - (count after)) / 10)
+    nl = w.lines + cleared
+    pts = bonus + ((list 0, 100, 300, 500, 800).(cleared + 1) * w.level)
+    check w.audio is "on"
+        spawn synth:play ((list sfx_lock, sfx_line, sfx_line, sfx_line, sfx_tet).(cleared + 1))
+    end
+    nxt = spawn_blocks w.next_spec
+    lvl = 1 + (floor (nl / 10))
+    check (valid_pos nxt after) is "blocked"
+        synth:stop
+        check w.audio is "on"
+            spawn synth:play sfx_over
+        end
+        -> w with blocks = (append after nxt), score = w.score + pts, lines = nl, level = lvl, status = "over"
+    end
+    -> w with blocks = (append after nxt), spec = w.next_spec, next_spec = random:pick cat, cx = w.next_spec.cx, cy = w.next_spec.cy, score = w.score + pts, lines = nl, level = lvl, grav_cd = 0
+end
+to draw_game win w
+    screen:clear win "#0f172a"
+    screen:draw win (list as screen.box with
+        x = 24, y = 52, width = 280, height = 560, color = "#020617"
+        x = 332, y = 52, width = 164, height = 132, color = "#1e293b"
+        x = 332, y = 52, width = 164, height = 132, color = "#334155", style = "outline", stroke = 2
+        x = 332, y = 200, width = 164, height = 176, color = "#1e293b"
+        x = 332, y = 200, width = 164, height = 176, color = "#334155", style = "outline", stroke = 2
+        x = 22, y = 50, width = 284, height = 564, color = "#334155", style = "outline", stroke = 2
+    end)
     loop range 1 19
-        gy = oy + (it * cell)
-        shapes = append shapes (screen.line with x1 = ox, y1 = gy, x2 = ox + bw, y2 = gy, width = 1, color = "#1e293b")
+        screen:draw win (screen.line with x1 = 24, y1 = 52 + (it * 28), x2 = 304, y2 = 52 + (it * 28), width = 1, color = "#1e293b")
+        check it <= 9
+            screen:draw win (screen.line with x1 = 24 + (it * 28), y1 = 52, x2 = 24 + (it * 28), y2 = 612, width = 1, color = "#1e293b")
+        end
     end
-    shapes = append shapes (screen.box with x = ox - 2, y = oy - 2, width = bw + 4, height = bh + 4, color = "#334155", style = "outline", stroke = 2)
-
-    # Ghost piece preview
-    check st.status is "playing"
-        loop ghost
+    check w.status is "playing"
+        loop ghost_blocks w
             check it.row >= 1
-                px = ox + ((it.col - 1) * cell) + 2
-                py = oy + ((it.row - 1) * cell) + 2
-                shapes = append shapes (screen.box with x = px, y = py, width = cell - 4, height = cell - 4, color = it.color, style = "outline", stroke = 2)
+                screen:draw win (screen.box with x = 24 + ((it.col - 1) * 28) + 2, y = 52 + ((it.row - 1) * 28) + 2, width = 24, height = 24, color = it.color, style = "outline", stroke = 2)
             end
         end
     end
-
-    # Locked cells
-    loop locked
+    loop w.blocks
         check it.row >= 1
-            px = ox + ((it.col - 1) * cell) + 1
-            py = oy + ((it.row - 1) * cell) + 1
-            shapes = append shapes (screen.box with x = px, y = py, width = cell - 2, height = cell - 2, color = it.color, style = "solid")
+            screen:draw win (screen.box with x = 24 + ((it.col - 1) * 28) + 1, y = 52 + ((it.row - 1) * 28) + 1, width = 26, height = 26, color = it.color)
         end
     end
-
-    # Active piece
-    loop active
-        check it.row >= 1
-            px = ox + ((it.col - 1) * cell) + 1
-            py = oy + ((it.row - 1) * cell) + 1
-            shapes = append shapes (screen.box with x = px, y = py, width = cell - 2, height = cell - 2, color = it.color, style = "solid")
+    loop spawn_blocks w.next_spec
+        screen:draw win (screen.box with x = 372 + ((it.col - 4) * 22), y = 98 + ((it.row - 1) * 22), width = 20, height = 20, color = it.color)
+    end
+    screen:draw win (list as screen.label with
+        x = 24, y = 16, content = "EASE TETRIS   60 FPS", size = 22, color = "#06b6d4"
+        x = 346, y = 64, content = "NEXT", size = 16, color = "#cbd5e1"
+        x = 346, y = 218, content = "SCORE  {w.score}", size = 18, color = "#facc15"
+        x = 346, y = 264, content = "LVL {w.level}   LINES {w.lines}", size = 16, color = "#10b981"
+        x = 332, y = 404, content = "Move: L/R   Rot: Up/W", size = 13, color = "#94a3b8"
+        x = 332, y = 428, content = "Drop: Dn/Space   Pause: P", size = 13, color = "#94a3b8"
+        x = 332, y = 452, content = "Audio({w.audio}): M  Reset: R  Esc", size = 13, color = "#94a3b8"
+    end)
+    check w.status is not "playing"
+        clr = "#eab308"
+        msg = "PAUSED - Press P"
+        check w.status is "over"
+            clr = "#ef4444"
+            msg = "GAME OVER - Press R"
         end
-    end
-
-    # Header & Sidebar
-    sx = 332
-    labels = append labels (screen.label with x = 24, y = 16, content = "EASE TETRIS", size = 24, color = "#06b6d4")
-    labels = append labels (screen.label with x = 212, y = 22, content = "60 FPS", size = 14, color = "#64748b")
-
-    shapes = append shapes (screen.box with x = sx, y = 52, width = 164, height = 132, color = "#1e293b", style = "solid")
-    shapes = append shapes (screen.box with x = sx, y = 52, width = 164, height = 132, color = "#334155", style = "outline", stroke = 2)
-    labels = append labels (screen.label with x = sx + 14, y = 64, content = "NEXT", size = 16, color = "#cbd5e1")
-    preview = spawn_blocks st.next_kind
-    loop preview
-        ppx = (sx + 40) + ((it.col - 4) * 22)
-        ppy = 98 + ((it.row - 1) * 22)
-        shapes = append shapes (screen.box with x = ppx, y = ppy, width = 20, height = 20, color = it.color, style = "solid")
-    end
-
-    shapes = append shapes (screen.box with x = sx, y = 200, width = 164, height = 176, color = "#1e293b", style = "solid")
-    shapes = append shapes (screen.box with x = sx, y = 200, width = 164, height = 176, color = "#334155", style = "outline", stroke = 2)
-    labels = append labels (screen.label with x = sx + 14, y = 214, content = "SCORE", size = 14, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx + 14, y = 234, content = "{st.score}", size = 22, color = "#facc15")
-    labels = append labels (screen.label with x = sx + 14, y = 272, content = "LEVEL", size = 14, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx + 14, y = 292, content = "{st.level}", size = 20, color = "#10b981")
-    labels = append labels (screen.label with x = sx + 14, y = 326, content = "LINES", size = 14, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx + 14, y = 346, content = "{st.lines}", size = 20, color = "#38bdf8")
-
-    # Controls & Audio indicator
-    labels = append labels (screen.label with x = sx, y = 400, content = "CONTROLS", size = 15, color = "#cbd5e1")
-    labels = append labels (screen.label with x = sx, y = 426, content = "Left/Right : Move", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 446, content = "Up / W     : Rotate", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 466, content = "Down / S   : Soft Drop", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 486, content = "Space      : Hard Drop", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 506, content = "P          : Pause", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 526, content = "M          : Audio ({st.audio})", size = 13, color = "#94a3b8")
-    labels = append labels (screen.label with x = sx, y = 546, content = "R / Esc    : Reset / Quit", size = 13, color = "#94a3b8")
-
-    # Overlays
-    check st.status is "paused"
-        shapes = append shapes (screen.box with x = 54, y = 260, width = 220, height = 96, color = "#020617", style = "solid")
-        shapes = append shapes (screen.box with x = 54, y = 260, width = 220, height = 96, color = "#eab308", style = "outline", stroke = 3)
-        labels = append labels (screen.label with x = 112, y = 282, content = "PAUSED", size = 24, color = "#eab308")
-        labels = append labels (screen.label with x = 82, y = 320, content = "Press P to Resume", size = 14, color = "#cbd5e1")
-    end
-
-    check st.status is "over"
-        shapes = append shapes (screen.box with x = 44, y = 250, width = 240, height = 112, color = "#020617", style = "solid")
-        shapes = append shapes (screen.box with x = 44, y = 250, width = 240, height = 112, color = "#ef4444", style = "outline", stroke = 3)
-        labels = append labels (screen.label with x = 90, y = 272, content = "GAME OVER", size = 24, color = "#ef4444")
-        labels = append labels (screen.label with x = 76, y = 314, content = "Press R to Restart", size = 15, color = "#fef3c7")
-    end
-
-    -> screen.scene with
-        background = "#0f172a"
-        shapes     = shapes
-        labels     = labels
+        screen:draw win (screen.box with x = 36, y = 260, width = 256, height = 84, color = "#020617")
+        screen:draw win (screen.box with x = 36, y = 260, width = 256, height = 84, color = clr, style = "outline", stroke = 3)
+        screen:draw win (screen.label with x = 56, y = 290, content = msg, size = 18, color = clr)
     end
 end
-
 to run_tetris
     win = screen.screen with width = 520, height = 660, title = "Ease Tetris", fps = 60
-    bgm = build_korobeiniki_bgm
-    sfx_rotate = synth.melody with notes = (list "E5/32"), bpm = 240, wave = "triangle", volume = 45
+    part_a = "E5/4 B4/8 C5/8 D5/4 C5/8 B4/8 A4/4 A4/8 C5/8 E5/4 D5/8 C5/8 B4/4 B4/8 C5/8 D5/4 E5/4 C5/4 A4/4 A4/2 REST/8 D5/4 F5/8 A5/4 G5/8 F5/8 E5/4 REST/8 C5/8 E5/4 D5/8 C5/8 B4/4 B4/8 C5/8 D5/4 E5/4 C5/4 A4/4 A4/2"
+    bgm = synth.melody with notes = split "{part_a} {part_a} E4/2 C4/2 D4/2 B3/2 C4/2 A3/2 G#3/2 B3/4 REST/4 E4/2 C4/2 D4/2 B3/2 C4/4 E4/4 A4/2 G#4/2 REST/2" " ", bpm = 148, wave = "square", volume = 18, repeat = "forever"
+    sfx_rot = synth.melody with notes = (list "E5/32"), bpm = 240, wave = "triangle", volume = 45
     sfx_lock = synth.melody with notes = (list "G3/32"), bpm = 240, wave = "triangle", volume = 60
     sfx_line = synth.melody with notes = (list "C5/16", "E5/16", "G5/16"), bpm = 200, wave = "triangle", volume = 65
-    sfx_tetris = synth.melody with notes = (list "C5/16", "E5/16", "G5/16", "C6/8"), bpm = 200, wave = "triangle", volume = 70
+    sfx_tet = synth.melody with notes = (list "C5/16", "E5/16", "G5/16", "C6/8"), bpm = 200, wave = "triangle", volume = 70
     sfx_over = synth.melody with notes = (list "G4/8", "E4/8", "C4/4"), bpm = 160, wave = "triangle", volume = 65
-
-    bag = shuffle_bag
-    first_kind = as_piece_kind bag.1
-    second_kind = as_piece_kind bag.2
-    bag = slice bag 3 (count bag)
-
-    locked = list as block
-    active = spawn_blocks first_kind
-    st = tetris_state with
-        kind      = first_kind
-        next_kind = second_kind
-        cx        = spawn_cx first_kind
-        cy        = spawn_cy first_kind
-    end
-    prev_keys = list as text
-
+    cat = piece_catalog
+    w = init_world cat "on"
     synth:play bgm
-
     loop
-        ghost = ghost_drop active locked
-        sc = build_tetris_scene locked active ghost st
-        raw_state = screen:present win sc
-        parsed = raw_state as json
-        frame = parsed as screen.frame_state
-        check frame is not screen.frame_state -> end
-        check frame.status is "closed" -> end
+        draw_game win w
+        frame = screen:show win
+        check frame.status is "closed" or contains frame.keys "escape" -> end
         keys = frame.keys
-        check contains keys "escape" -> end
-
-        # Edge-triggered Pause (P)
-        p_down = 0
-        check contains keys "p" and not (contains prev_keys "p")
-            p_down = 1
-        end
-        check p_down is 1 and st.status is "playing"
-            st = st with status = "paused"
-            synth:stop
-        else
-            check p_down is 1 and st.status is "paused"
-                st = st with status = "playing"
-                check st.audio is "on"
-                    synth:play bgm
-                end
-            end
-        end
-
-        # Edge-triggered Mute (M)
-        check contains keys "m" and not (contains prev_keys "m")
-            check st.audio is "on"
-                st = st with audio = "muted"
-                synth:stop
-            else
-                st = st with audio = "on"
-                check st.status is "playing"
-                    synth:play bgm
-                end
-            end
-        end
-
-        # Edge-triggered Restart (R)
-        check contains keys "r" and not (contains prev_keys "r")
-            bag = shuffle_bag
-            k1 = as_piece_kind bag.1
-            k2 = as_piece_kind bag.2
-            bag = slice bag 3 (count bag)
-            locked = list as block
-            active = spawn_blocks k1
-            st = tetris_state with
-                kind      = k1
-                next_kind = k2
-                cx        = spawn_cx k1
-                cy        = spawn_cy k1
-                audio     = st.audio
-            end
-            check st.audio is "on"
-                synth:play bgm
-            end
-        end
-
-        # Active gameplay step
-        check st.status is "playing"
-            # Horizontal DAS/ARR (10-frame initial delay, 3-frame repeat)
-            want_dir = 0
-            check contains keys "left" or contains keys "a"
-                want_dir = -1
-            end
-            check contains keys "right" or contains keys "d"
-                want_dir = 1
-            end
-
-            move_dx = 0
-            check want_dir is 0
-                st = st with das_dir = 0, das_timer = 0
-            else
-                check want_dir is not st.das_dir
-                    move_dx = want_dir
-                    st = st with das_dir = want_dir, das_timer = 0
-                else
-                    next_das = st.das_timer + 1
-                    check next_das is 10 or (next_das > 10 and ((next_das - 10) % 3) is 0)
-                        move_dx = want_dir
-                    end
-                    st = st with das_timer = next_das
-                end
-            end
-
-            check move_dx is not 0
-                cand_h = move_blocks active move_dx 0
-                check (is_valid_pos cand_h locked) is 1
-                    active = cand_h
-                    st = st with cx = st.cx + move_dx
-                end
-            end
-
-            # Rotate clockwise (Up / W) with wall-kick pivot update
-            rot_pressed = 0
-            check (contains keys "up" and not (contains prev_keys "up")) or (contains keys "w" and not (contains prev_keys "w"))
-                rot_pressed = 1
-            end
-            check rot_pressed is 1
-                rr = try_rotate st.kind active locked st.cx st.cy
-                active = rr.blocks
-                st = st with cx = rr.cx, cy = rr.cy
-                check rr.outcome is "rotated" and st.audio is "on"
-                    spawn synth:play sfx_rotate
-                end
-            end
-
-            # Hard Drop (Space) vs Soft Drop + Gravity
-            do_lock = 0
-            space_pressed = 0
-            check contains keys "space" and not (contains prev_keys "space")
-                space_pressed = 1
-            end
-
-            check space_pressed is 1
-                dropped = ghost_drop active locked
-                drop_rows = 0
-                check count active > 0 and count dropped > 0
-                    drop_rows = dropped.1.row - active.1.row
-                end
-                active = dropped
-                st = st with score = st.score + (drop_rows * 2)
-                do_lock = 1
-            else
-                # Soft drop (Down / S) every 2 frames
-                soft_held = 0
-                check contains keys "down" or contains keys "s"
-                    soft_held = 1
-                end
-                check soft_held is 1
-                    next_soft = st.soft_tick + 1
-                    st = st with soft_tick = next_soft
-                    check (next_soft % 2) is 0
-                        cand_s = move_blocks active 0 1
-                        check (is_valid_pos cand_s locked) is 1
-                            active = cand_s
-                            st = st with cy = st.cy + 1, score = st.score + 1, gravity_tick = 0
-                        else
-                            do_lock = 1
-                        end
-                    end
-                else
-                    st = st with soft_tick = 0
-                end
-
-                # Natural gravity
-                check do_lock is 0
-                    next_grav = st.gravity_tick + 1
-                    g_limit = gravity_frames st.level
-                    check next_grav >= g_limit
-                        st = st with gravity_tick = 0
-                        cand_g = move_blocks active 0 1
-                        check (is_valid_pos cand_g locked) is 1
-                            active = cand_g
-                            st = st with cy = st.cy + 1
-                        else
-                            do_lock = 1
-                        end
-                    else
-                        st = st with gravity_tick = next_grav
-                    end
-                end
-            end
-
-            # Lock piece, clear full lines, spawn next from 7-bag
-            check do_lock is 1
-                loop active
-                    locked = append locked it
-                end
-                cr = clear_full_lines locked
-                locked = cr.locked
-                new_lines = st.lines + cr.cleared
-                new_level = 1 + (floor (new_lines / 10))
-                pts = line_clear_points cr.cleared st.level
-
-                check st.audio is "on"
-                    check cr.cleared is 4
-                        spawn synth:play sfx_tetris
-                    else
-                        check cr.cleared > 0
-                            spawn synth:play sfx_line
-                        else
-                            spawn synth:play sfx_lock
-                        end
-                    end
-                end
-
-                # Pull next piece from 7-bag
-                check count bag is 0
-                    bag = shuffle_bag
-                end
-                cur_k = st.next_kind
-                nxt_k = as_piece_kind bag.1
-                bag = slice bag 2 (count bag)
-                next_active = spawn_blocks cur_k
-                next_cx = spawn_cx cur_k
-                next_cy = spawn_cy cur_k
-
-                check (is_valid_pos next_active locked) is 0
-                    active = next_active
-                    st = st with score = st.score + pts, lines = new_lines, level = new_level, status = "over"
-                    synth:stop
-                    check st.audio is "on"
-                        spawn synth:play sfx_over
-                    end
-                else
-                    active = next_active
-                    st = st with
-                        kind         = cur_k
-                        next_kind    = nxt_k
-                        cx           = next_cx
-                        cy           = next_cy
-                        score        = st.score + pts
-                        lines        = new_lines
-                        level        = new_level
-                        gravity_tick = 0
-                    end
-                end
-            end
-        end
-
-        prev_keys = keys
+        w = sys_toggles w keys cat bgm
+        w = sys_input w keys sfx_rot
+        w = sys_physics w keys it.index cat sfx_lock sfx_line sfx_tet sfx_over
+        w = w with prev_keys = keys
     end
-
     synth:stop
 end
-
-test "tetris piece spawning, rotation wall-kick, and multi-line clear"
-    # 1. Spawning & validity
-    empty = list as block
-    t_piece = spawn_blocks "T"
-    count t_piece is 4
-    is_valid_pos t_piece empty is 1
-
-    # 2. Clockwise rotation + left wall-kick updates pivot cx
-    t_at_wall = move_blocks t_piece -3 2
-    rr = try_rotate "T" t_at_wall empty 2 4
-    rr.outcome is "rotated"
-    count rr.blocks is 4
-    is_valid_pos rr.blocks empty is 1
-
-    # 3. Adjacent 2-line clear (rows 19 and 20) + gravity shift of row 18 -> 20
+test "tetris ECS systems: rotation wall-kick and multi-line clear"
+    cat = piece_catalog
+    t = cat.3
+    w = sys_input (tetris_world with blocks = (update (spawn_blocks t) with col = it.col - 3, row = it.row + 2), spec = t, next_spec = t, cx = 2, cy = 4, audio = "muted") (list "up") (synth.melody with notes = (list "E5/32"), bpm = 240, wave = "triangle", volume = 45)
+    count (w.blocks where it.state is "falling") is 4
+    w.cx >= 2
     board = list as block
     loop range 1 10
-        board = append board (block with col = it, row = 19, color = "#06b6d4")
-        board = append board (block with col = it, row = 20, color = "#eab308")
+        board = append board (list (block with col = it, row = 19, color = "#06b6d4", state = "locked"), (block with col = it, row = 20, color = "#eab308", state = "locked"))
     end
-    board = append board (block with col = 5, row = 18, color = "#a855f7")
-
-    cr = clear_full_lines board
-    cr.cleared is 2
-    count cr.locked is 1
-    cr.locked.1.col is 5
-    cr.locked.1.row is 20
-
-    # 4. Scene builds cleanly
-    st = tetris_state with kind = "T", next_kind = "I", score = 300, lines = 2
-    ghost = ghost_drop t_piece cr.locked
-    sc = build_tetris_scene cr.locked t_piece ghost st
-    count sc.labels > 10
+    after = clear_full_lines (append board (block with col = 5, row = 18, color = "#a855f7", state = "locked"))
+    count after is 1
+    after.1.col is 5
+    after.1.row is 20
+    count (ghost_blocks (w with blocks = (append after (w.blocks where it.state is "falling")))) is 4
 end
-
-run_tetris

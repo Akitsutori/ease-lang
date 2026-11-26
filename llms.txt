@@ -179,7 +179,11 @@ end
     screen.scene (background = "black", boxes = list as box, circles = list as circle, lines = list as line, triangles = list as triangle, labels = list as label, shapes = list as shape)
     screen.event (kind = "close" | "key" | "click" | "move", key = "", x = 0, y = 0)
     screen.frame_state (status = "open" | "closed", key = "", keys = list as text, mouse_x = 0, mouse_y = 0)
-    Window loop pattern:
+    Immediate-mode loop pattern (recommended):
+      screen:clear win "#0f172a"
+      screen:draw win item_or_list   # box/circle/line/triangle/label or list (void, Painter's Order)
+      frame = screen:show win        # flushes & returns typed screen.frame_state
+    Inbox window loop pattern:
       events = inbox as screen.event
       screen:open win events
       last_frame = screen:present win scene

@@ -97,6 +97,7 @@ type nodeWasmResult struct {
 	Steps    []int             `json:"steps"`
 	Prints   []string          `json:"prints"`
 	Scenes   []json.RawMessage `json:"scenes"`
+	Draws    []json.RawMessage `json:"draws"`
 	Melodies []nodeWasmMelody  `json:"melodies"`
 }
 
@@ -123,6 +124,7 @@ const maxSteps = parseInt(process.argv[4], 10);
   const bytes = fs.readFileSync(wasmPath);
   const prints = [];
   const scenes = [];
+  const draws = [];
   const melodies = [];
   let memory = null;
   let exports = null;
@@ -215,6 +217,13 @@ const maxSteps = parseInt(process.argv[4], 10);
       present_scene(ptr, len) {
         scenes.push(decodeScene(ptr, len));
       },
+      clear_screen(bgPtr, bgLen) {
+        draws.push({ clear: readStr(bgPtr, bgLen) });
+      },
+      draw_shape(ptr, len) {
+        const dv = new DataView(memory.buffer, ptr >>> 0, len >>> 0);
+        draws.push({ op: dv.getUint8(0) });
+      },
       poll_event(bufPtr) {
         if (evIdx >= events.length) return 0;
         const ev = events[evIdx++];
@@ -287,7 +296,7 @@ const maxSteps = parseInt(process.argv[4], 10);
       if (s === 0) break;
     }
   }
-  console.log(JSON.stringify({ initRet, steps, prints, scenes, melodies }));
+  console.log(JSON.stringify({ initRet, steps, prints, scenes, draws, melodies }));
 })().catch(err => {
   console.error(err);
   process.exit(1);
@@ -689,5 +698,53 @@ end
 	}
 	if !res.Melodies[2].Stopped {
 		t.Fatalf("expected stop_melody call, got %+v", res.Melodies[2])
+	}
+}
+
+func TestWasmImmediateScreenClearDrawShowInHelpers(t *testing.T) {
+	if nodePath, err := exec.LookPath("node"); err == nil {
+		hostFile := filepath.Join(t.TempDir(), "ease_host.js")
+		if err := os.WriteFile(hostFile, []byte(wasmHostJS), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(nodePath, "--check", hostFile).CombinedOutput(); err != nil {
+			t.Fatalf("wasmHostJS syntax check failed: %v\n%s", err, string(out))
+		}
+	}
+
+	src := `import screen
+
+to draw_helper win items
+    screen:draw win (screen.line with x1 = 0, y1 = 0, x2 = 50, y2 = 50, color = "#334155")
+    screen:draw win items
+    screen:draw win (screen.label with x = 10, y = 10, content = "HI", size = 14)
+end
+
+win = screen.screen with width = 320, height = 240, title = "Immediate", fps = 60
+boxes = list as screen.box with
+    x = 10, y = 10, width = 20, height = 20, color = "#06b6d4"
+    x = 40, y = 10, width = 20, height = 20, color = "#eab308"
+end
+
+loop
+    screen:clear win "#0f172a"
+    draw_helper win boxes
+    st = screen:show win
+    check st.status is "closed" -> end
+    say "{st.status}:{st.key}"
+    -> end
+end
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[{"kind":2,"key":"space"}]`, 2)
+	if len(res.Prints) != 1 || res.Prints[0] != "open:space" {
+		t.Fatalf("unexpected immediate WASM output: %+v", res.Prints)
+	}
+	// Expect: clear, line(3), box(2), box(2), label(5) = 5 draw calls
+	if len(res.Draws) != 5 {
+		t.Fatalf("expected 5 immediate draw calls (clear + line + 2 boxes + label), got %d: %s", len(res.Draws), string(res.Draws[0]))
 	}
 }

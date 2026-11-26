@@ -67,6 +67,7 @@ def label
 end
 
 def shape = circle | box | line | triangle | label
+def drawable = circle | box | line | triangle | label
 
 def scene
     background = "black"
@@ -95,3 +96,17 @@ end
 # Presents a scene to the window, renders 1 frame,
 # and returns the current frame_state serialized as JSON text.
 to present target current_scene -> screen_present target current_scene
+
+# Clears the window frame buffer with `bg_color` (opening the window lazily on first frame).
+to clear target bg_color
+    screen_clear target bg_color
+end
+
+# Draws a single drawable (`box`, `circle`, `line`, `triangle`, `label`, `shape`, `drawable`)
+# or a list of drawables onto the current frame buffer in Painter's Order.
+to draw target item_or_list
+    screen_draw target item_or_list
+end
+
+# Flushes the current frame buffer to the window and returns a typed `screen.frame_state`.
+to show target -> screen_show target

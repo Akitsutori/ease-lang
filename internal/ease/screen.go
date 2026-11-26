@@ -422,9 +422,6 @@ func (g *screenGame) Draw(img *ebiten.Image) {
 	for _, c := range sc.Circles {
 		drawCircle(img, c)
 	}
-	for _, lb := range sc.Labels {
-		drawLabel(img, lb)
-	}
 	for _, sh := range sc.Shapes {
 		switch sh.kind {
 		case "box":
@@ -438,6 +435,9 @@ func (g *screenGame) Draw(img *ebiten.Image) {
 		case "label":
 			drawLabel(img, sh.label)
 		}
+	}
+	for _, lb := range sc.Labels {
+		drawLabel(img, lb)
 	}
 }
 
@@ -885,4 +885,186 @@ func (ev *Evaluator) execScreenPresent(args []Value, line, col int) (Value, erro
 	ev.rt.screenMu.Unlock()
 
 	return sess.present(recordToScreenScene(sceneRec)), nil
+}
+
+func appendRecordToScene(sc *screenScene, sr *RecordValue, line, col int, src string) error {
+	if sr == nil {
+		return nil
+	}
+	switch sr.TypeName {
+	case "circle":
+		sc.Shapes = append(sc.Shapes, screenShape{kind: "circle", circle: recordToCircle(sr)})
+	case "box":
+		sc.Shapes = append(sc.Shapes, screenShape{kind: "box", box: recordToBox(sr)})
+	case "line":
+		sc.Shapes = append(sc.Shapes, screenShape{kind: "line", line: recordToLine(sr)})
+	case "triangle":
+		sc.Shapes = append(sc.Shapes, screenShape{kind: "triangle", triangle: recordToTriangle(sr)})
+	case "label":
+		sc.Shapes = append(sc.Shapes, screenShape{kind: "label", label: recordToLabel(sr)})
+	default:
+		return newError(
+			"RuntimeError",
+			line,
+			col,
+			src,
+			fmt.Sprintf("screen:draw cannot draw %s", sr.TypeName),
+			"Pass a screen.box, circle, line, triangle, label, or a list of them.",
+		)
+	}
+	return nil
+}
+
+func frameStateToRecordValue(st screenFrameState) *RecordValue {
+	keyElems := make([]Value, len(st.Keys))
+	for i, k := range st.Keys {
+		keyElems[i] = k
+	}
+	return &RecordValue{
+		TypeName: "frame_state",
+		Fields: map[string]Value{
+			"status":  st.Status,
+			"key":     st.Key,
+			"keys":    &ListValue{ElemType: "text", Elements: keyElems},
+			"mouse_x": float64(st.MouseX),
+			"mouse_y": float64(st.MouseY),
+		},
+		Order: []string{"status", "key", "keys", "mouse_x", "mouse_y"},
+		Allowed: map[string][]Value{
+			"status": {"open", "closed"},
+		},
+	}
+}
+
+func (ev *Evaluator) ensureScreenSession(winRec *RecordValue) *screenSession {
+	cfg := parseScreenConfig(winRec)
+	ev.rt.screenMu.Lock()
+	sess := ev.rt.activeScreen
+	if sess == nil {
+		sess = startScreenSession(cfg, ev.rt.screenEvents)
+		ev.rt.activeScreen = sess
+	}
+	ev.rt.screenMu.Unlock()
+	return sess
+}
+
+func (ev *Evaluator) execScreenClear(args []Value, line, col int) (Value, error) {
+	winRec, ok := args[0].(*RecordValue)
+	if !ok {
+		return nil, newError("RuntimeError", line, col, ev.source, "screen:clear requires a screen record as first argument", "")
+	}
+	bgColor, ok := args[1].(string)
+	if !ok {
+		return nil, newError("RuntimeError", line, col, ev.source, "screen:clear requires a text color as second argument", "")
+	}
+	if !ev.headlessScreen {
+		ev.ensureScreenSession(winRec)
+	}
+	ev.rt.screenMu.Lock()
+	ev.rt.pendingScene = screenScene{Background: bgColor}
+	ev.rt.hasPendingScene = true
+	ev.rt.screenMu.Unlock()
+	return nil, nil
+}
+
+func (ev *Evaluator) execScreenDraw(args []Value, line, col int) (Value, error) {
+	winRec, ok := args[0].(*RecordValue)
+	if !ok {
+		return nil, newError("RuntimeError", line, col, ev.source, "screen:draw requires a screen record as first argument", "")
+	}
+	if !ev.headlessScreen {
+		ev.ensureScreenSession(winRec)
+	}
+	ev.rt.screenMu.Lock()
+	if !ev.rt.hasPendingScene {
+		ev.rt.pendingScene = screenScene{Background: "#000000"}
+		ev.rt.hasPendingScene = true
+	}
+	switch item := args[1].(type) {
+	case *RecordValue:
+		if err := appendRecordToScene(&ev.rt.pendingScene, item, line, col, ev.source); err != nil {
+			ev.rt.screenMu.Unlock()
+			return nil, err
+		}
+	case *ListValue:
+		for _, el := range item.Elements {
+			sr, ok := el.(*RecordValue)
+			if !ok {
+				ev.rt.screenMu.Unlock()
+				return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("screen:draw list contains non-drawable %s", TypeName(el)), "")
+			}
+			if err := appendRecordToScene(&ev.rt.pendingScene, sr, line, col, ev.source); err != nil {
+				ev.rt.screenMu.Unlock()
+				return nil, err
+			}
+		}
+	default:
+		ev.rt.screenMu.Unlock()
+		return nil, newError("RuntimeError", line, col, ev.source, fmt.Sprintf("screen:draw requires a drawable record or list, got %s", TypeName(args[1])), "")
+	}
+	ev.rt.screenMu.Unlock()
+	return nil, nil
+}
+
+func (ev *Evaluator) execScreenShow(args []Value, line, col int) (Value, error) {
+	winRec, ok := args[0].(*RecordValue)
+	if !ok {
+		return nil, newError("RuntimeError", line, col, ev.source, "screen:show requires a screen record as argument", "")
+	}
+
+	if ev.headlessScreen {
+		ev.rt.screenMu.Lock()
+		ev.rt.screenFrameCount++
+		frame := ev.rt.screenFrameCount
+		events := ev.rt.screenEvents
+		ev.rt.pendingScene = screenScene{Background: "#000000"}
+		ev.rt.hasPendingScene = false
+		ev.rt.screenMu.Unlock()
+
+		if events != nil && (events.IsClosed() || ev.rt.isAborted()) {
+			return frameStateToRecordValue(screenFrameState{Status: "closed", Keys: []string{}}), nil
+		}
+		st := screenFrameState{Status: "open", Keys: []string{}}
+		switch frame {
+		case 1:
+			st.Key = "right"
+			st.Keys = []string{"right"}
+			if events != nil {
+				events.TryPut(newScreenEventRecord("key", "right", 0, 0))
+			}
+		case 2:
+			st.MouseX = 320
+			st.MouseY = 240
+			if events != nil {
+				events.TryPut(newScreenEventRecord("click", "left", 320, 240))
+			}
+		default:
+			st.Status = "closed"
+			if events != nil {
+				events.TryPut(newScreenEventRecord("close", "", 0, 0))
+				events.Close()
+			}
+		}
+		return frameStateToRecordValue(st), nil
+	}
+
+	sess := ev.ensureScreenSession(winRec)
+	ev.rt.screenMu.Lock()
+	sc := ev.rt.pendingScene
+	if !ev.rt.hasPendingScene {
+		sc = screenScene{Background: "#000000"}
+	}
+	ev.rt.pendingScene = screenScene{Background: "#000000"}
+	ev.rt.hasPendingScene = false
+	ev.rt.screenMu.Unlock()
+
+	raw := sess.present(sc)
+	var st screenFrameState
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		st = screenFrameState{Status: "open", Keys: []string{}}
+	}
+	if st.Keys == nil {
+		st.Keys = []string{}
+	}
+	return frameStateToRecordValue(st), nil
 }

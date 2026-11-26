@@ -483,6 +483,8 @@ bgm = synth.melody with
 end
 synth:play bgm
 synth:stop
+synth:play bgm
+synth:stop
 `
 	prog, err := ParseProgram(bgmSrc)
 	if err != nil {
@@ -502,8 +504,8 @@ synth:stop
 	mu.Lock()
 	count := len(players)
 	mu.Unlock()
-	if count == 0 {
-		t.Fatalf("expected at least 1 mock player created for repeat=\"forever\"")
+	if count < 2 {
+		t.Fatalf("expected at least 2 mock players created for play->stop->play->stop, got %d", count)
 	}
 
 	// 4. Headless --ci mode returns immediately on repeat = "forever"
