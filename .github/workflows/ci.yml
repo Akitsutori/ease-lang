@@ -131,9 +131,15 @@ jobs:
           path: ${{ matrix.bin }}
           if-no-files-found: error
 
-      - name: Package VS Code extension (.vsix)
+      - name: Validate & package VS Code extension (.vsix)
         if: runner.os == 'Linux'
-        run: go run ./editors/vscode
+        shell: bash
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            node --check editors/vscode/extension.js
+          fi
+          python3 -c 'import json; [json.load(open(p)) for p in ("editors/vscode/package.json", "editors/vscode/language-configuration.json", "editors/vscode/syntaxes/ease.tmLanguage.json")]'
+          go run ./editors/vscode
 
       - name: Upload VS Code extension artifact
         if: runner.os == 'Linux'

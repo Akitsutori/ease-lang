@@ -94,11 +94,17 @@ jobs:
             ./${{ steps.ver.outputs.asset_name }} test "$f"
           done
 
-      - name: Package VS Code extension (.vsix)
+      - name: Validate & package VS Code extension (.vsix)
         if: runner.os == 'Linux'
         env:
           EASE_VERSION: ${{ steps.ver.outputs.version }}
-        run: go run ./editors/vscode
+        shell: bash
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            node --check editors/vscode/extension.js
+          fi
+          python3 -c 'import json; [json.load(open(p)) for p in ("editors/vscode/package.json", "editors/vscode/language-configuration.json", "editors/vscode/syntaxes/ease.tmLanguage.json")]'
+          go run ./editors/vscode
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

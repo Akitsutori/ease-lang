@@ -1,149 +1,197 @@
-# Ease Language Reference (1-Page LLM Guide)
+EASE LANGUAGE REFERENCE (PLAIN TEXT GUIDE)
 
-Ease is a small, strict, bracket-free language implemented in Go.
-Every construct has **one canonical form** and **zero silent fallbacks**.
+Ease is a strict, bracket-free, immutable-by-default language.
+Every construct has one canonical form and zero silent fallbacks.
 
-## 1. Core Invariants
-- **No `bool`, no `true`/`false`, no truthiness, no flag pollution**: Conditions (`x > 0`, `a is b`, `contains txt_or_list item`, `and`, `or`, `not`) live only in `check`, `where`, and `test` (no `if`, no `check raw as number` -> use `n = raw as number or 0` + `check n > 0`). Conditions cannot be stored/printed/passed/returned (`TypeError`). Model outcomes/states as **domain properties** (`state = "free" | "occupied"`, `style = "solid" | "outline"`), never `0`/`1` flags or `"yes" | "no"` pseudo-booleans; exit `loop` directly via `-> end` instead of `running = 1`. Text boundaries (source, `ask`, `network:fetch`, `as json`) reject invalid UTF-8 and normalize to NFC.
-- **Two `check` forms, strict value discipline & arrow law (`->` = value return or `-> end`)**:
-  - `-> <expr>` returns a value from `to` or `swarm loop` (multi-line `to` without `->` is a non-empty `void` procedure, like `say`, `put`, `close`, `save`, `synth:play`, `screen:open`, `network:reply_*`, `network:tcp_send`; no implicit returns, no empty `void` procs). One-liner: `to add a b -> a + b`. Expression after `->` **must start on the same line** (`cond ->\n val` is `SyntaxError`). Statements/side effects after `->` and top-level `-> <value>` are forbidden (`-> end` only in `loop`/`take`). Standalone pure expressions, discarded non-`void` call returns, and unused locals in `to`/`swarm loop` are static `TypeError`s (`fail` is removed).
-  - 2 `check` forms only (bare `check\n` verdict table & `else ->` are removed): (1) `check <cond> -> <value | end>` (single-line exit guard); (2) `check <cond>\n  stmts...\n  [else\n  stmts...]\nend` (multi-line block; `-> end` or `-> <expr>` may sit on its own line inside). End non-union multi-guard returns with a final `-> <fallback>` line (`check it < 0 -> "neg"` / `check it is 0 -> "zero"` / `-> "pos"`).
-- **Pattern matching (`match ... end`)**: Matches full strings against `"..."` templates with `{...}` wildcards, `{name}` (`0+` runes, minimal left-to-right), `{name: N}` fixed rune widths (`N >= 1`), and `{name as number|<Union>}` typed captures (`'...'` raw literal; repeated `{tag}` enforces equality). Statement `match <text> ... end` supports value/exit arms (`"pat" -> <value | end>`), effect arms (`"pat"\n  stmts...`, no `->`), and `else -> ...` or `else\n  stmts...`. Expression `match` requires `else` on `text` (multi-line `else` must end with explicit `-> <expr>`); on `list<text>` (`it`, `it.index`) `else` is optional (sieve semantics; return via `-> match lines ... end`).
-- **1-based positions & unified `loop` / `swarm loop`**: All positional indexing (`xs.1`, `xs.(expr)`, `"abc".1`, CSV `row.1`, `xs with .1 = v`), `it.index`, and `slice` are **1-based (`1..N`)**. Literal `.0` (`xs.0`, `xs with .0 = v`) is a `SyntaxError`; dynamic `idx < 1` or `idx > len` is a `RuntimeError`. (`range start end` stays inclusive on any integers, e.g. `range 0 5` or `range -2 2`.)
-- **Scoping & shadowing**: Function parameters and locals **may** shadow global variables/constants (but **not** `to` functions, built-ins, or module aliases). Globals are read-only inside `to` functions ("Assigned-in-Function = Local"; reading a global *before* assigning a local of the same name fails with `Cannot modify global '...' inside a function...`). Parameters are immutable read-only inputs (reassigning a parameter is a static `TypeError`; bind a new local like `cur = x` instead). `loop` and `take` read/update enclosing locals (`total = total + it`), while newly created variables stay block-local. `loop ... end` is a statement (no `for`, `repeat`, `in`, `continue`): without an iterable it loops indefinitely (`it.index` `1, 2, ...`, requires `-> end` or early return); `loop <list|range> ... end` binds `it` and 1-based `it.index` (`def` fields cannot be named `index`, while `number`/`text`/`list` are valid field names like `seat.number`, `msg.text`).
-- **Data-parallel `swarm loop <iterable> ... end`**: Runs a bounded worker pool over `list` or `range start end`, returning a `1..N` ordered homogeneous `list` via `-> <expr>` (or `void` in statement position when no `->` is used). Outer locals are strictly read-only (`isWorkerRoot`), shared lists are frozen, `say` buffers flush in `1..N` order, `ask`, `spawn` (direct or transitive), and direct `-> end` are forbidden, and errors report the smallest failing `it.index`. Wrap `(swarm loop ... end)` in `(...)` as a call arg or before `where`.
-- **Background workers & typed inboxes (`spawn`, `inbox as <type>`, `put`, `take`, `close`)**: No `async`/`await` or shared mutable state. `ch = inbox as <type>` creates a buffered (64) channel (`text`, `number`, `def` record, or union; no `bool`/`csv`/`bytes`). `spawn fn arg1 arg2` (or `spawn mod:fn ...`) launches a worker with frozen args/outer state. `put ch val` blocks once 64 unread items are buffered (so >64 puts on the same thread without a `spawn` consumer deadlocks; putting to closed raises `RuntimeError`). `close ch` closes idempotently; `take ch ... end` consumes FIFO (`it`, `it.index`, exits when closed & drained or via `check <cond> -> end`). Root waits for workers on exit.
-- **Prefix calls & naming (`def` / `to`, no commas)**: `def` = noun blueprint (`def ErrorMessage`), `to` = English infinitive verb (`to process_response res`). No commas in signatures or calls (`to add a b`, `add 2 3`); commas are only for `list 10, 25, 40` and single-line `with`. Function/built-in names cannot collide across program, variables, params, or imported modules.
-- **Asymmetric `is` / `is not` (no `==`, `!=`, `is-not` in source)**: `"is-not"` appears only in `ease ast --json`. `<value> is <type>` checks membership; `<value> is <value>` checks equality. Types are forbidden on the left (`user is a` -> `TypeError`). Invalid union-literal comparisons (`d.answer is "yse"`) raise static `TypeError`. Nested `def` record defaults instantiate immediately.
-- **Top-down domain hierarchies & orthogonal unions (`def U = A | B | ...`)**:
-  - `def` records and unions can be declared in **any order** (top-down whole-to-part, e.g. `Hall` -> `rows = list as Row` -> `chairs = list as Chair` via `hall.rows.(r).chairs.(c)` — prefer domain records over flat `(r - 1) * width + c` arrays). `def` with `|` creates a union (no 1-variant unions); without `|`, `def X = val` is a constant. Model fallible operations with **outcome unions** (`def BookingOutcome = Hall | BookingRejected`), never `{status = "ok" | "err", data = ...}` wrapper structs.
-  - **4 building blocks**: literals (`"OK"`, `404`), `text`/`number`, `def` records, and named unions (flattened automatically; usable as field types and `list as <union>`). **3 guardrails**: no redundant literals with `text`/`number`, no duplicates, and records in the same union must differ in a mandatory field/type/disjoint constraint.
-  - **Narrowing & exhaustiveness**: `check res is ErrorMessage -> ...` narrows `res` inside the branch; exiting guards (Form 1 or exiting Form 2 without `else`) subtract handled variants sequentially (enabling rest-narrowing to the sole remaining record/scalar and completing exhaustive union functions without a dummy trailing `->`). Partial union checks without a final `-> ...` fail with `Non-exhaustive check`.
-  - **JSON, CSV & `as` contracts**: Two-step cast required: raw `text` **must** go through `m = raw as json` (`true`/`false` -> `"true"`/`"false"`) or `rows = raw as csv` (requires header row for `it as <def>`) into a local *before* `m as <def_or_union>` (raw `text as <def>` fails!). `<rec|list|map> as json` / `<flat_rec_or_map_list> as csv` serialize back. `as text` works only on `text`/`number`. Chained `as` (`x as A as B`, `x as A or y as B`) is forbidden. `<map_or_rec> as <def_or_union>` validates all mandatory fields (`TypeError` on `Missing field '...'`). Defaults live in `<def> with ...`.
-  - **Fallbacks (`<expr> as <type> or <fallback>`)**: Allowed for `number`, `text`, and scalar unions (`"404" as HttpCode or 200`). Evaluates `<fallback>` lazily (memoized in batch casts like `lines as number or 0`) and requires static AOT type match to `<type>`/`<union>`. Forbidden on `def` records, record unions, `json`, `csv`, `bytes`, and `load ... as ...`.
+1. STRICT RULES (DOs AND DONTs)
 
-## 2. Operators, Precedence, Escapes & Cheat Sheet
-- **Precedence (high -> low)**:
-  1. `()`, `.` field/index (`xs.1`, `xs.(expr)`), `:` module qualifier (`mod:fn`), `with`
-  2. Prefix calls (`fn a b`, `mod:fn a b` — args parse as `unary`; `say mod:fn a` needs no outer parens, wrap only compound call args: `add (1 + 2) 3`, `append lines (mod:fn a)`)
-  3. Postfix `where <cond>` and `as <type> [or <fallback>]` (bind to whole call result: `ask "Port?" as number or 8080`; `or` fallback parses as `unary`, so wrap compounds: `x as text or ("a" + "b")`), unary `-x` (`-2` no space = literal `f -2`; `a - 2` = subtraction)
-  4. `*`, `/` (float division: `7 / 2` is `3.5`), `%` (modulo on `number` & numeric lists, floats allowed, sign follows dividend: `-5 % 3` is `-2`)
-  5. `+` (strict `number + number`, `text + text`, or numeric lists — never mixes types; use `"{a}{b}"` or `as text`), `-`
-  6. `<`, `<=`, `>`, `>=`, `is`, `is not` (conditions only in `check` / `where` / `test`)
-  7. `not`, then `and`, then `or`
-- **String literals**: `"..."` interpolates atomic `text`/`number` via `{expr}` and supports **only** `\n`, `\r`, `\t`, `\"`, `\\`, `\{`, `\}` escapes (unknown escapes -> `SyntaxError`); `'...'` is raw 1:1 with zero interpolation or escapes.
+- Immutability: Records and lists cannot be mutated in place.
+  Write: rec = rec with hp = 50
+  Write: xs = xs with .1 = 99
+  Write: xs = xs with .(idx) = xs.(idx) + 1
 
-```ease
-import network
+- Updating record lists: Never use bare 'with' on a list of records.
+  Write: users = update users with role = "admin"
+  Write: users = update users where it.name is "Bram" with role = "admin"
 
-def pi = 3.14
-def status = "OK" | "FAILED"
-def ErrorMessage
-    code    = 500
-    message = "Unknown error"
-end
-def outcome = status | ErrorMessage
-def user
+- Single-line vs multi-line 'with':
+  Single-line uses commas and NO 'end': Box with x = 1, y = 2
+  Multi-line uses newlines, NO commas, and closes with 'end':
+    Box with
+        x = 1
+        y = 2
+    end
+
+- Arrow '->' rule: '->' ONLY returns a value on the same line or exits a loop ('-> end').
+  Never put assignments or statements after '->'.
+  Multi-line 'check' blocks NEVER have '->' on the header line and MUST close with 'end':
+    check x > 0
+        y = 1
+    end
+
+- Explicit returns: 'to' functions and 'swarm loop' have NO implicit return.
+  Prefix every returned expression with '->' (e.g. -> state).
+  If any branch in 'to' returns a value, ALL paths must return a value.
+
+- Block-local variables: Variables first assigned inside a 'check' or 'loop' block die at 'end'.
+  Initialize variables BEFORE 'check' or 'loop' if you read them afterwards!
+
+- No booleans or truthiness: Ease has NO bool, true, false, if, ==, or !=.
+  Conditions (<, <=, >, >=, is, is not, contains, and, or, not) live ONLY in 'check', 'where', and 'test'.
+  Model domain states as unions: def Drink = "coffee" | "none" (and reference as drink = Drink in 'def').
+
+- Random numbers vs integer sequences:
+  'range low high' creates a list of integers, NOT a random number!
+  For random integers, import random and call: random:roll low high
+
+- 1-based integer indexing: Positions start at 1 (1..N). '/' is float division!
+  Variable indices require parentheses and whole numbers:
+  slot_idx = (floor (sec / 1800)) + 1
+  val = slots.(slot_idx)
+
+- Pre-filled number lists: 'list as <Rec> with ... end' works ONLY for 'def' records.
+  For N zeros, write: slots = (range 1 23) * 0
+
+- Appending and loop index:
+  'append' is a prefix verb: xs = append xs item
+  '.index' exists ONLY directly on 'it' (it.index), never on copied variables.
+
+- Reserved built-in names (FORBIDDEN as variable, parameter, or 'to' function names):
+  ask, count, type, fields, abs, floor, round, min, max, range, append, slice,
+  split, join, trim, upper, lower, replace, contains, sum, avg, sort, load, save, put, close.
+  Use domain names instead (e.g. slot_total, order_kind, span, item_count).
+
+- Unused values and locals: Discarding non-void return values or leaving assigned locals unread inside 'to' is a static TypeError.
+
+2. CORE SYNTAX AND SEMANTICS
+
+- Calls and naming: 'def' defines data records/unions/constants; 'to' defines functions without commas:
+  to add a b -> a + b
+  res = add (1 + 2) 3
+  Parameters and globals are read-only inside 'to' (assigning a name creates a local; reading a global before assigning the same name fails). 'def' fields cannot be named 'index'.
+
+- Unions and 'def' contracts: Declare 'def' records and unions in any order.
+  def U = A | B combines 2+ variants (literals, text, number, 'def' records, or unions; no duplicates; records in one union must differ in a mandatory field/type/disjoint union).
+  In 'def' fields, reference the union name (prio = Priority), NOT a string literal (prio = "low" creates an unrestricted text field).
+  'check x is Variant -> ...' narrows x and subtracts handled variants.
+  '<val> is <type>' checks membership (types are forbidden on the left of 'is').
+
+- JSON, CSV, and 'as' casts: Two-step cast required:
+  m = raw as json
+  parsed = m as Ticket
+  '<expr> as <type> or <fallback>' works on number, text, and scalar unions only.
+
+- Pattern matching: 'match <txt_or_list> ... end' matches "..." templates with {...}, {name}, {name: N}, {name as number|<Union>}, or '...' raw literals. Expression 'match' on text requires 'else'.
+
+- Concurrency: 'swarm loop <list_or_range> ... end' runs parallel workers returning a 1..N list via '-> <expr>' (outer vars read-only).
+  Channels: ch = inbox as <type> (cap 64), spawn fn a b, put ch val (void), close ch (void), take ch ... end.
+
+- Precedence (high to low):
+  1. ()  .  :  with
+  2. prefix calls: fn a b (args parse as unary; wrap compound args in parens)
+  3. postfix: where, as, unary -x (-2 is literal, a - 2 is subtraction)
+  4. *  / (float)  %
+  5. + (strict number+number, text+text, or numeric lists; format mixed types via "{a}{b}")  -
+  6. <  <=  >  >=  is  is not
+  7. not, then and, then or
+  String escapes in "...": ONLY \n \r \t \" \\ \{ \}. '...' is raw without escapes.
+
+3. VERIFIED EXAMPLE
+
+import random
+
+def Priority = "urgent" | "routine" | "low"
+
+def Ticket
     id   = 0
     name = "Guest"
-    role = "guest" | "admin"
+    prio = Priority
 end
 
-to process_response res
-    check res is "OK"         -> "Processed successfully"
-    check res is "FAILED"     -> "Unknown failure"
-    check res is ErrorMessage -> "Error {res.code}: {res.message}"
-end
-
-to collect_even_mods xs
-    kept = list as number
-    loop xs
-        check it % 2 is 0
-            kept = append kept (floor (it / 2))
-        end
+to classify_roll limit
+    roll = random:roll 1 100
+    outcome = "miss"
+    check roll <= limit
+        outcome = "hit"
     end
-    -> kept
-end
-
-to parse_port raw
-    match raw
-        "PORT={p as number}"
-            check p < 1 or p > 65535 -> 0
-            -> p
-        else -> 0
-    end
+    -> outcome
 end
 
 to add a b -> a + b
 
-ada = user with id = 1, name = "Aria", role = "admin"
-nums = list 10, 20, 30
-idx = 2
-updated = nums with .1 = 99
-loop range 1 3
-    check it > 2 -> end
-    say "{it.index}: {add it 10}"
+slots = (range 1 4) * 0
+bumped = slots with .2 = slots.2 + 1
+tickets = list as Ticket with
+    id = 1, name = "Bram", prio = "low"
+    id = 2, name = "Aria", prio = "urgent"
 end
-users = list as user with
-    id = 1, name = "Aria"
-    id = 2, name = "Bram", role = "admin"
-end
-promoted = update users where it.role is "guest" with role = "admin"
-raw_map = '{"id": 7, "name": "Guest", "role": "admin"}' as json
-parsed = raw_map as user
-err_map = '{"code": 503, "message": "Unavailable"}' as json
-raw_err = err_map as outcome
+escalated = update tickets where it.name is "Bram" with prio = "routine"
+ordered = sort escalated by it.prio, it.id
 
 test "example"
     add 2 3 is 5
-    (15 % 7) is 1
-    nums.1 is 10
-    nums.(idx) is 20
-    updated is list 99, 20, 30
-    slice nums 1 2 is list 10, 20
-    promoted.1.role is "admin"
-    parsed.id is 7
-    collect_even_mods (list 3, 4, 7, 8) is list 2, 4
-    parse_port "PORT=8080" is 8080
-    parse_port "PORT=99999" is 0
+    bumped is list 0, 1, 0, 0
+    ordered.1.name is "Aria"
+    ordered.2.prio is "routine"
+    (classify_roll 100) is "hit"
     ("abc" as number or 0) is 0
-    ("WARN" as status or "OK") is "OK"
-    (swarm loop range 1 3
-        -> it * 10
-    end) is list 10, 20, 30
-    box = inbox as number
-    put box 7
-    close box
-    take box
-        it is 7
-    end
-    process_response "OK" is "Processed successfully"
-    process_response raw_err is "Error 503: Unavailable"
     "abc" as number is error
-    '{"id": 7, "name": "Guest", "role": "admin"}' as user is error
-    missing_name = '{"id": 7, "role": "admin"}' as json
-    missing_name as user ->
-        error.type is "TypeError"
-        error.message is "Missing field 'user.name'"
-    end
-    (ada with id = "bad") is error
-    (user is ada) is error
 end
-```
 
-## 3. Built-in Verbs, Modules & CLI
-- **I/O & Control**: `say val` *(void, appends `\n`)*, `ask prompt` *(returns `text`; `RuntimeError` on EOF, skipped on EOF in `ease test`/`--ci`)*, `type val` *(returns `text`)*, `fields rec_or_map` *(returns `list<text>`)* (`fail` removed)
-  - **Math**: `abs n`, `floor n`, `round n`, `min a b`, `max a b` (**no** `ceil` or `mod` verb — use `-floor (-x)` or `%`)
-  - **Text & Lists**: `count list_or_text` (runes for `text`), `range start end` (inclusive, empty if `start > end`), `append xs item_or_list` (returns new list), `slice list_or_text start end` (1-based, both bounds inclusive, runes for `text`, clamps bounds to `1..len`, empty if out of order), `split txt sep`, `join text_list sep`, `trim txt`, `upper txt`, `lower txt`, `replace txt old new` (`old` != `""`), `contains txt_or_list item` (condition on `text` or atomic `list`), `sum num_list`, `avg num_list` (errors if empty), `sort xs [by k1 [, k2 ...]]` (stable; `by` binds `it` & sorts closed literal union fields in declaration order)
-  - **Formats & Files**: `<val_or_txt> as json` / `as csv`, `load path [as text|json|csv|bytes]` (50 MB max; `csv` -> `list<map>` with `it.1` / `it.("Col")` / `it as <def>`; `bytes` -> `0..255` list), `save path data [as text|json|csv|bytes]` (`void` statement; `as <format>` required for non-`text`; `as bytes` valid only with `load`/`save`)
-  - **Inbox (void statements!)**: `put box val`, `close box` (like `synth:play`, pure statements with no return value — never assign or pass as values!)
-- **Lists, vectors, `where`, `with` & `update`**: Numeric lists support element-wise `+`, `-`, `*`, `/`, `%` and scalar broadcasting (`prices * 1.19 + shipping`). `<list> where <cond>` (single-line or `where ... end` block with union narrowing on `it`) filters; `<rec> with field = val` updates a record, `<list> with .1 = val` (or `.(expr)`) updates a 1-based list element, and `update <list> [where <cond>] with field = expr` immutably updates matching `def` records (`it`, `it.index` `1..N`; bare `<rec_list> with field = val` is rejected).
-- **Tests (`test "label" ... end`)**: Write assertions directly without `check` (`add 2 3 is 5`); every non-`void` expression line must be an assertion (assign `res = fn ...` to discard a return value, else `got <type> instead of condition`). Supports assignments, `loop`, `check <cond> ... end` for conditional setup/narrowing, `is` / `is not` (`res is MyRec` narrows `res`), `expr is error` / `expr is not error`, and `expr -> error.type is "..." / error.message is "..." end`.
-- **Limits**: `maxListSize = 1_000_000` (`range`, `append`, `split`), `maxHTTPBodyBytes = 10 MB`, `maxCallDepth = 256`, `defaultInboxCapacity = 64`, `load` max `50 MB`.
-- **File modules & Standard library (`import network`, `screen`, `random`, `synth`, `system`)**: `import "./file.ease" as mod` (relative paths only; `mod:verb`, `mod.def` / `mod.const`; module `test` blocks skipped). Internal `std/` primitives (`http_call`, `net_*`, `screen_open`, `screen_present`, `rand_*`, `synth_play`, `sys_*`) are private and rejected in user code:
-  - `network`: `network.network` (`url, timeout, token`), `network:fetch target path`, `network:send target path payload`, `inbox`-driven servers (`network.http_request` (`id, method, url, path, body, remote, token, timeout`), `network.tcp_client` (`id, remote, lines`), `network:serve_http port requests`, `void`: `network:reply_text req status body`, `network:reply_json req status data`, `network:serve_tcp port clients`, `void`: `network:tcp_send client msg`; `--ci` returns port `0`).
-  - `screen`: `screen.fps_mode` (`number | "unlimited"`), `screen.screen` (`title, width, height, fps`), `screen.scene` (`background, boxes, circles, lines, triangles, labels, shapes`), `screen.box` (`x, y, width, height, color`), `screen.label` (`x, y, content, size, color`), `screen.event` (`"close" | "key" | "click" | "move"`), `screen:open win events` (`void`), `screen:present win current_scene` (JSON `screen.frame_state`; headless emits `key`, `click`, `close` and closes `events` after 3 frames).
-  - `random`: `random:roll low high` (inclusive int), `random:pick items` (non-empty `list`), `random:shuffle items` (immutable copy).
-  - `synth`: `synth.wave_kind` (`"triangle" | "square" | "sine"`), `synth.melody` (`notes = list as text` like `"E4/8"`, `"C#5/4"`, `"Bb3/4"`, `"REST/8"`, `bpm = 120`, `wave = wave_kind`), `synth:play m` (void, synchronous; use `spawn synth:play ...` for polyphony/chords or non-blocking game SFX; headless validates & renders without audio device).
-  - `system`: `system.arguments` (1-based `list<text>` of CLI args after `<file>` / `--`; empty in `ease test` / `--ci`), `system.ok` (`0`), `system:exit reason` (`void`; `0..255` exit code or non-empty `text` error to `stderr` with exit `1`), `system.command` (`program`, `args`, `dir`, `timeout = 30`, `max_mb = 10` in `(0..512]` rolling RAM window), `system.process_report` (`code`, `stdout`, `stderr`), `system:run cmd` (direct exec without shell; non-zero exit returns `process_report`; OS/timeout errors raise `RuntimeError`).
-- **CLI**: `ease <file>` (shorthand for `run`), `ease run <file> [--json] [--ci] [--trace]` (`--ci` runs `test` blocks then headless program; `ask` exits cleanly on EOF), `ease serve <file> [--port <n>] [--watch] [--debug] [--debug-port <n>] [--json]`, `ease check <file> [--json]`, `ease test <file> [--json] [--verbose] [--trace]`, `ease build <file> [-o out]`, `ease ast <file> [--json]`, `ease tokens <file>`, `ease repl`, `ease lsp`, `ease version` (`--version`, `-v`)
+4. BUILT-IN VERBS AND STANDARD MODULES
+
+- Core verbs: say val (void), ask prompt (text), type val (text), fields rec_or_map (list of text)
+- Math: abs n, floor n, round n, min a b, max a b
+- Text and 1-based lists:
+  count xs_or_txt
+  range start end (inclusive int list; empty if start > end)
+  append xs item_or_list (returns new list)
+  slice xs_or_txt start end (1-based inclusive, clamps bounds)
+  split txt sep, join txt_list sep, trim txt, upper txt, lower txt, replace txt old new
+  contains txt_or_atomic_list item (condition)
+  sum num_list, avg num_list (non-empty)
+  sort xs
+  sort xs by key1, key2 (stable ascending; binds it and it.index; use -it.x for descending; closed literal union fields sort in declaration order)
+- Vector math and updates:
+  Numeric lists broadcast + - * / %
+  xs where <cond>
+  rec with field = val
+  xs with .1 = val  or  xs with .(idx) = val
+  update rec_list with field = expr
+  update rec_list where <cond> with field = expr
+- Files and inbox:
+  load path [as text | json | csv | bytes]
+  save path data [as text | json | csv | bytes] (void)
+  put box val (void), close box (void)
+
+- Standard library modules (import <name>, call via mod:verb, types via mod.type):
+  random:
+    random:roll low high (inclusive int)
+    random:pick non_empty_list
+    random:shuffle list (immutable copy)
+  screen:
+    screen.screen (width = 800, height = 600, title = "Ease", fps = 60 or "unlimited")
+    screen.box (x = 0, y = 0, width = 40, height = 40, color = "blue", style = "solid" | "outline", stroke = 2)
+    screen.circle (x = 0, y = 0, size = 20, color = "red", style = "solid" | "outline", stroke = 2)
+    screen.line (x1 = 0, y1 = 0, x2 = 100, y2 = 100, width = 2, color = "white")
+    screen.triangle (x1, y1, x2, y2, x3, y3, color, style = "solid" | "outline", stroke = 2)
+    screen.label (x = 0, y = 0, content = "", size = 16, color = "white")
+    screen.scene (background = "black", boxes = list as box, circles = list as circle, lines = list as line, triangles = list as triangle, labels = list as label, shapes = list as shape)
+    screen.event (kind = "close" | "key" | "click" | "move", key = "", x = 0, y = 0)
+    Window loop pattern:
+      events = inbox as screen.event
+      screen:open win events
+      last_frame = screen:present win scene
+      take events
+          check it.kind is "close" -> end
+          last_frame = screen:present win scene
+      end
+      say last_frame
+  network:
+    network.network (url, timeout, token), network:fetch net path, network:send net path payload
+    network:serve_http port req_inbox, network:reply_text req status body (void), network:reply_json req status data (void)
+    network:serve_tcp port client_inbox, network:tcp_send client msg (void)
+  synth:
+    synth.melody (notes = list as text e.g. "E4/8", bpm = 120, wave = "triangle" | "square" | "sine"), synth:play mel (void)
+  system:
+    system.arguments, system.ok (0), system:exit code_or_msg (void), system.command (program, args, dir, timeout, max_mb), system:run cmd -> system.process_report (code, stdout, stderr)

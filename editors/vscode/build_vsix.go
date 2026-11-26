@@ -81,7 +81,7 @@ func main() {
     <Identity Language="en-US" Id="%s" Version="%s" Publisher="%s"/>
     <DisplayName>%s</DisplayName>
     <Description xml:space="preserve">%s</Description>
-    <Categories>Programming Languages</Categories>
+    <Categories>Programming Languages,Debuggers</Categories>
     <Icon>extension/images/icon.png</Icon>
   </Metadata>
   <Installation>
@@ -126,7 +126,44 @@ func main() {
 	if err := zw.Close(); err != nil {
 		fatalf("close zip: %v", err)
 	}
+	if err := verifyVSIX(outPath); err != nil {
+		fatalf("verify %s: %v", outPath, err)
+	}
 	fmt.Printf("Created %s\n", outPath)
+}
+
+func verifyVSIX(vsixPath string) error {
+	zr, err := zip.OpenReader(vsixPath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	present := make(map[string]uint64, len(zr.File))
+	for _, f := range zr.File {
+		present[f.Name] = f.UncompressedSize64
+	}
+	required := []string{
+		"[Content_Types].xml",
+		"extension.vsixmanifest",
+		"extension/package.json",
+		"extension/extension.js",
+		"extension/language-configuration.json",
+		"extension/syntaxes/ease.tmLanguage.json",
+		"extension/images/icon.png",
+		"extension/images/icon.svg",
+		"extension/icons/ease-icon-theme.json",
+	}
+	for _, name := range required {
+		sz, ok := present[name]
+		if !ok {
+			return fmt.Errorf("missing required archive entry %q", name)
+		}
+		if sz == 0 {
+			return fmt.Errorf("archive entry %q is empty", name)
+		}
+	}
+	return nil
 }
 
 func writeZipBytes(zw *zip.Writer, name string, data []byte) error {

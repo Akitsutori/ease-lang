@@ -138,47 +138,154 @@ class EaseLspClient {
   }
 }
 
-function resolveExecutable() {
-  const cfg = vscode.workspace.getConfiguration("ease");
-  const configured = cfg.get("executablePath", "");
-  if (configured && configured !== "ease") {
-    return configured;
+function isExecutableFile(p) {
+  try {
+    return fs.existsSync(p) && fs.statSync(p).isFile();
+  } catch (_) {
+    return false;
   }
-  const serverPath = cfg.get("serverPath", "");
-  if (serverPath && serverPath !== "ease") {
-    return serverPath;
-  }
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (root) {
-    const exeName = process.platform === "win32" ? "ease.exe" : "ease";
-    const localBin = path.join(root, exeName);
-    if (fs.existsSync(localBin)) {
-      return localBin;
-    }
-  }
-  return "ease";
 }
 
-async function runEaseSubcommand(subcommand, targetPath) {
-  let filePath = targetPath;
+function findOnPath(binName) {
+  const pathEnv = process.env.PATH || "";
+  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  const candidates = [binName];
+  if (process.platform === "win32" && !path.extname(binName)) {
+    candidates.unshift(`${binName}.exe`);
+  }
+  for (const dir of dirs) {
+    for (const name of candidates) {
+      const full = path.join(dir, name);
+      if (isExecutableFile(full)) {
+        return full;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveExecutable(filePath) {
+  const cfg = vscode.workspace.getConfiguration("ease");
+  const searched = [];
+  const exeName = process.platform === "win32" ? "ease.exe" : "ease";
+
+  const checkConfigured = (raw, label) => {
+    const val = (raw || "").trim();
+    if (!val || val === "ease" || val === "ease.exe") return null;
+    if (val.includes("/") || val.includes("\\")) {
+      const bases = path.isAbsolute(val)
+        ? [""]
+        : [
+            ...(filePath ? [path.dirname(filePath)] : []),
+            ...(vscode.workspace.workspaceFolders || []).map((wf) => wf.uri.fsPath),
+          ];
+      for (const base of bases) {
+        const candidate = base ? path.resolve(base, val) : val;
+        searched.push(`${label}: ${candidate}`);
+        if (isExecutableFile(candidate)) return candidate;
+        if (process.platform === "win32" && !candidate.toLowerCase().endsWith(".exe")) {
+          const withExe = `${candidate}.exe`;
+          if (isExecutableFile(withExe)) return withExe;
+        }
+        try {
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+            const inDir = path.join(candidate, exeName);
+            searched.push(`${label}: ${inDir}`);
+            if (isExecutableFile(inDir)) return inDir;
+          }
+        } catch (_) {}
+      }
+      return null;
+    }
+    const found = findOnPath(val);
+    searched.push(`${label}: ${val} on PATH`);
+    return found;
+  };
+
+  const fromExecCfg = checkConfigured(cfg.get("executablePath", ""), "ease.executablePath");
+  if (fromExecCfg) return { exe: fromExecCfg, searched };
+
+  const fromServerCfg = checkConfigured(cfg.get("serverPath", ""), "ease.serverPath");
+  if (fromServerCfg) return { exe: fromServerCfg, searched };
+
+  if (filePath) {
+    const fileDirBin = path.join(path.dirname(filePath), exeName);
+    searched.push(fileDirBin);
+    if (fs.existsSync(fileDirBin)) {
+      return { exe: fileDirBin, searched };
+    }
+  }
+
+  for (const wf of vscode.workspace.workspaceFolders || []) {
+    const wsBin = path.join(wf.uri.fsPath, exeName);
+    searched.push(wsBin);
+    if (fs.existsSync(wsBin)) {
+      return { exe: wsBin, searched };
+    }
+  }
+
+  const onPath = findOnPath(exeName);
+  searched.push(`${exeName} on PATH`);
+  if (onPath) {
+    return { exe: onPath, searched };
+  }
+
+  return { exe: null, searched };
+}
+
+function formatTerminalCommand(exe, subcommand, filePath) {
+  const shell = (vscode.env.shell || "").toLowerCase();
+  const isPowerShell =
+    shell.includes("powershell") ||
+    shell.includes("pwsh") ||
+    (process.platform === "win32" && !shell.includes("cmd") && !shell.includes("bash") && !shell.includes("sh"));
+  if (isPowerShell) {
+    return `& "${exe}" ${subcommand} "${filePath}"`;
+  }
+  return `"${exe}" ${subcommand} "${filePath}"`;
+}
+
+async function runEaseSubcommand(subcommand, targetArg) {
+  let filePath =
+    typeof targetArg === "string"
+      ? targetArg
+      : targetArg && typeof targetArg.fsPath === "string"
+      ? targetArg.fsPath
+      : undefined;
+
   const activeEditor = vscode.window.activeTextEditor;
   if (!filePath && activeEditor && activeEditor.document.languageId === "ease") {
+    if (activeEditor.document.isUntitled) {
+      vscode.window.showWarningMessage("Save the .ease file before running it.");
+      return;
+    }
     if (activeEditor.document.isDirty) {
       await activeEditor.document.save();
     }
     filePath = activeEditor.document.uri.fsPath;
+  } else if (filePath && activeEditor && activeEditor.document.uri.fsPath === filePath && activeEditor.document.isDirty) {
+    await activeEditor.document.save();
   }
+
   if (!filePath) {
     vscode.window.showWarningMessage("No active .ease file to run.");
     return;
   }
 
-  const exe = resolveExecutable();
+  const { exe, searched } = resolveExecutable(filePath);
+  if (!exe) {
+    vscode.window.showErrorMessage(
+      `Could not find 'ease' executable. Looked in: ${searched.join(", ")}. Set "ease.executablePath" in VS Code settings or add ease to PATH.`
+    );
+    return;
+  }
+
+  const cwd = path.dirname(filePath);
   const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
-  const exec = new vscode.ShellExecution(exe, [subcommand, filePath]);
+  const exec = new vscode.ProcessExecution(exe, [subcommand, filePath], { cwd });
   const task = new vscode.Task(
     { type: "ease", subcommand },
-    folder || vscode.TaskScope.Workspace,
+    folder || vscode.TaskScope.Global,
     `${subcommand} ${path.basename(filePath)}`,
     "ease",
     exec
@@ -189,13 +296,21 @@ async function runEaseSubcommand(subcommand, targetPath) {
     clear: true,
     focus: true,
   };
-  await vscode.tasks.executeTask(task);
+  try {
+    await vscode.tasks.executeTask(task);
+  } catch (_) {
+    const terminal = vscode.window.createTerminal({ name: "Ease", cwd });
+    terminal.show(false);
+    terminal.sendText(formatTerminalCommand(exe, subcommand, filePath));
+  }
 }
 
 async function activate(context) {
   const output = vscode.window.createOutputChannel("Ease Language");
   const diagnostics = vscode.languages.createDiagnosticCollection("ease");
-  const client = new EaseLspClient(resolveExecutable(), output, diagnostics);
+  const initialFile = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+  const { exe: initialExe, searched: initialSearched } = resolveExecutable(initialFile);
+  const client = initialExe ? new EaseLspClient(initialExe, output, diagnostics) : null;
 
   const debugProvider = {
     provideDebugConfigurations() {
@@ -245,12 +360,18 @@ async function activate(context) {
   context.subscriptions.push(
     output,
     diagnostics,
-    { dispose: () => client.stop() },
-    vscode.commands.registerCommand("ease.runFile", () => runEaseSubcommand("run")),
-    vscode.commands.registerCommand("ease.testFile", () => runEaseSubcommand("test")),
+    { dispose: () => client && client.stop() },
+    vscode.commands.registerCommand("ease.runFile", (uri) => runEaseSubcommand("run", uri)),
+    vscode.commands.registerCommand("ease.testFile", (uri) => runEaseSubcommand("test", uri)),
     vscode.debug.registerDebugAdapterDescriptorFactory("ease", {
-      createDebugAdapterDescriptor() {
-        return new vscode.DebugAdapterExecutable(resolveExecutable(), ["dap"]);
+      createDebugAdapterDescriptor(session) {
+        const targetFile =
+          session?.configuration?.program || vscode.window.activeTextEditor?.document?.uri?.fsPath;
+        const { exe, searched } = resolveExecutable(targetFile);
+        if (!exe) {
+          throw new Error(`Could not find 'ease' executable. Looked in: ${searched.join(", ")}.`);
+        }
+        return new vscode.DebugAdapterExecutable(exe, ["dap"]);
       },
     }),
     vscode.debug.registerDebugConfigurationProvider(
@@ -264,6 +385,11 @@ async function activate(context) {
       vscode.DebugConfigurationProviderTriggerKind.Dynamic
     )
   );
+
+  if (!client) {
+    output.appendLine(`[ease-lsp] 'ease' executable not found. Looked in: ${initialSearched.join(", ")}`);
+    return;
+  }
 
   try {
     await client.start();
