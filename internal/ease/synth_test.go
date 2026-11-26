@@ -142,8 +142,9 @@ func TestRenderMelodyPCMWaveformsAndAntiClickEnvelope(t *testing.T) {
 	waves := []string{"triangle", "square", "sine"}
 	for _, wave := range waves {
 		mel := &synthMelody{
-			BPM:  120,
-			Wave: wave,
+			BPM:    120,
+			Wave:   wave,
+			Volume: 100,
 			Notes: []synthNote{
 				{IsRest: false, Freq: 440.0, Length: 8}, // 0.25s = 11025 samples
 				{IsRest: true, Freq: 0, Length: 8},      // 0.25s = 11025 samples
@@ -409,5 +410,105 @@ synth:play m
 	evC.Close()
 	if errC == nil || !strings.Contains(errC.Error(), "audio device initialization failed") {
 		t.Fatalf("expected audio init RuntimeError, got: %v", errC)
+	}
+}
+
+func TestSynthVolumeRepeatAndStop(t *testing.T) {
+	// 1. Validation of volume (0..100) and repeat ("once" | "forever")
+	for _, badSrc := range []string{
+		"import synth\nm = synth.melody with\n  notes = list \"A4/4\"\n  volume = -1\nend\nsynth:play m\n",
+		"import synth\nm = synth.melody with\n  notes = list \"A4/4\"\n  volume = 101\nend\nsynth:play m\n",
+		"import synth\nm = synth.melody with\n  notes = list \"A4/4\"\n  repeat = \"twice\"\nend\nsynth:play m\n",
+	} {
+		var out bytes.Buffer
+		_, err := ParseProgram(badSrc)
+		if err == nil {
+			_, err = EvalProgramHeadlessWithTrace(badSrc, strings.NewReader(""), &out, nil)
+		}
+		if err == nil {
+			t.Fatalf("expected error for %q, got nil", badSrc)
+		}
+	}
+
+	// 2. Volume scaling: volume=0 produces all-zero PCM, volume=100 > volume=25
+	m0 := &synthMelody{Notes: []synthNote{{Freq: 440, Length: 16}}, BPM: 120, Wave: "square", Volume: 0}
+	pcm0 := renderMelodyPCM(m0)
+	for i := 0; i < len(pcm0); i++ {
+		if pcm0[i] != 0 {
+			t.Fatalf("expected zero PCM for volume=0, got %d at byte %d", pcm0[i], i)
+		}
+	}
+	m25 := &synthMelody{Notes: []synthNote{{Freq: 440, Length: 16}}, BPM: 120, Wave: "square", Volume: 25}
+	m100 := &synthMelody{Notes: []synthNote{{Freq: 440, Length: 16}}, BPM: 120, Wave: "square", Volume: 100}
+	pcm25 := renderMelodyPCM(m25)
+	pcm100 := renderMelodyPCM(m100)
+	peak := func(b []byte) int16 {
+		var mx int16
+		for i := 0; i+1 < len(b); i += 2 {
+			v := int16(binary.LittleEndian.Uint16(b[i : i+2]))
+			if v < 0 {
+				v = -v
+			}
+			if v > mx {
+				mx = v
+			}
+		}
+		return mx
+	}
+	if peak(pcm100) <= peak(pcm25) || peak(pcm25) == 0 {
+		t.Fatalf("expected peak(vol=100) > peak(vol=25) > 0, got %d vs %d", peak(pcm100), peak(pcm25))
+	}
+
+	// 3. repeat = "forever" returns immediately (non-blocking) and synth:stop cancels it cleanly
+	orig := newSynthPlayerFn
+	defer func() { newSynthPlayerFn = orig }()
+
+	var mu sync.Mutex
+	var players []*mockSynthPlayer
+	newSynthPlayerFn = func(pcm []byte) (synthPlayer, error) {
+		m := &mockSynthPlayer{pcm: pcm}
+		mu.Lock()
+		players = append(players, m)
+		mu.Unlock()
+		return m, nil
+	}
+
+	bgmSrc := `import synth
+bgm = synth.melody with
+    notes  = list "E4/8", "B3/8"
+    bpm    = 140
+    wave   = "square"
+    volume = 20
+    repeat = "forever"
+end
+synth:play bgm
+synth:stop
+`
+	prog, err := ParseProgram(bgmSrc)
+	if err != nil {
+		t.Fatalf("ParseProgram failed: %v", err)
+	}
+	ev := NewEvaluator(bgmSrc, prog, &bytes.Buffer{})
+	ev.SetHeadlessAudio(false)
+	start := time.Now()
+	_, err = ev.ExecStatements(prog.Body, ev.global)
+	ev.Close()
+	if err != nil {
+		t.Fatalf("bgm ExecStatements failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected non-blocking repeat=\"forever\" + synth:stop, took %v", time.Since(start))
+	}
+	mu.Lock()
+	count := len(players)
+	mu.Unlock()
+	if count == 0 {
+		t.Fatalf("expected at least 1 mock player created for repeat=\"forever\"")
+	}
+
+	// 4. Headless --ci mode returns immediately on repeat = "forever"
+	var ciOut bytes.Buffer
+	if _, err := EvalProgramHeadlessWithTrace(bgmSrc, strings.NewReader(""), &ciOut, nil); err != nil {
+		t.Fatalf("headless bgm failed: %v", err)
 	}
 }

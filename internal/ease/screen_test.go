@@ -185,3 +185,24 @@ func TestScreenLegacyExample06HeadlessStillWorks(t *testing.T) {
 		t.Fatalf("expected legacy close message, got %q", out.String())
 	}
 }
+
+func TestScreenFrameStateKeysSerialization(t *testing.T) {
+	src := `import screen
+
+win = screen.screen with fps = "unlimited"
+events = inbox as screen.event
+screen:open win events
+
+raw = screen:present win (screen.scene)
+decoded = raw as json
+st = decoded as screen.frame_state
+say "{st.status}:{st.key}:{count st.keys}:{st.keys.1}"
+`
+	var out bytes.Buffer
+	if _, err := EvalProgramHeadlessWithTrace(src, strings.NewReader(""), &out, nil); err != nil {
+		t.Fatalf("headless frame_state keys failed: %v", err)
+	}
+	if strings.TrimSpace(out.String()) != "open:right:1:right" {
+		t.Fatalf("expected 'open:right:1:right', got %q", out.String())
+	}
+}

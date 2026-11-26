@@ -2,6 +2,7 @@ package ease
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ type synthMelody struct {
 	Notes    []synthNote
 	BPM      float64
 	Wave     string
+	Volume   float64
+	Repeat   string
 	TotalSec float64
 }
 
@@ -198,6 +201,38 @@ func parseMelodyRecord(val Value, line, col int, src string) (*synthMelody, erro
 		)
 	}
 
+	volVal := 50.0
+	if rawVol, hasVol := rec.Fields["volume"]; hasVol && rawVol != nil {
+		v, ok := rawVol.(float64)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 100 {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				src,
+				fmt.Sprintf("synth:play requires volume in 0..100, got %v", rawVol),
+				"Set 'volume' on synth.melody to a number between 0 and 100.",
+			)
+		}
+		volVal = v
+	}
+
+	repeatVal := "once"
+	if rawRep, hasRep := rec.Fields["repeat"]; hasRep && rawRep != nil {
+		r, ok := rawRep.(string)
+		if !ok || (r != "once" && r != "forever") {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				src,
+				fmt.Sprintf("synth:play requires repeat \"once\" or \"forever\", got %v", rawRep),
+				"Set 'repeat' on synth.melody to \"once\" or \"forever\".",
+			)
+		}
+		repeatVal = r
+	}
+
 	notesList, ok := rec.Fields["notes"].(*ListValue)
 	if !ok {
 		return nil, newError(
@@ -253,6 +288,8 @@ func parseMelodyRecord(val Value, line, col int, src string) (*synthMelody, erro
 		Notes:    notes,
 		BPM:      bpmVal,
 		Wave:     waveVal,
+		Volume:   volVal,
+		Repeat:   repeatVal,
 		TotalSec: totalSec,
 	}, nil
 }
@@ -330,7 +367,8 @@ func renderMelodyPCM(m *synthMelody) []byte {
 				}
 			}
 
-			sample := int16(math.Round(w * env * synthAmplitude * 32767.0))
+			amp := synthAmplitude * (m.Volume / 100.0)
+			sample := int16(math.Round(w * env * amp * 32767.0))
 			u := uint16(sample)
 			binary.LittleEndian.PutUint16(pcm[cursor:cursor+2], u)
 			binary.LittleEndian.PutUint16(pcm[cursor+2:cursor+4], u)
@@ -367,6 +405,59 @@ func (ev *Evaluator) execSynthPlay(args []Value, line, col int) (Value, error) {
 		return nil, nil
 	}
 
+	if melody.Repeat == "forever" {
+		ev.rt.stopBGM()
+		player, err := newSynthPlayerFn(pcm)
+		if err != nil {
+			return nil, newError(
+				"RuntimeError",
+				line,
+				col,
+				ev.source,
+				fmt.Sprintf("synth:play audio device initialization failed: %v", err),
+				"Check audio output device availability or run headless with '--ci'.",
+			)
+		}
+		bgmCtx, bgmCancel := context.WithCancel(ev.ctx())
+		ev.rt.setBGMCancel(bgmCancel)
+		ev.rt.wg.Add(1)
+		go func(first synthPlayer) {
+			defer ev.rt.wg.Done()
+			p := first
+			for {
+				p.Play()
+				ticker := time.NewTicker(10 * time.Millisecond)
+				stopped := false
+				for {
+					if !p.IsPlaying() {
+						break
+					}
+					select {
+					case <-bgmCtx.Done():
+						p.Pause()
+						stopped = true
+					case <-ticker.C:
+					}
+					if stopped {
+						break
+					}
+				}
+				ticker.Stop()
+				_ = p.Close()
+				runtime.KeepAlive(p)
+				if stopped || bgmCtx.Err() != nil {
+					return
+				}
+				nextP, nErr := newSynthPlayerFn(pcm)
+				if nErr != nil {
+					return
+				}
+				p = nextP
+			}
+		}(player)
+		return nil, nil
+	}
+
 	player, err := newSynthPlayerFn(pcm)
 	if err != nil {
 		return nil, newError(
@@ -400,4 +491,11 @@ func (ev *Evaluator) execSynthPlay(args []Value, line, col int) (Value, error) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (ev *Evaluator) execSynthStop(line, col int) (Value, error) {
+	if ev.rt != nil {
+		ev.rt.stopBGM()
+	}
+	return nil, nil
 }

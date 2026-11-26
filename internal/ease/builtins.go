@@ -58,6 +58,7 @@ var builtinArities = map[string]int{
 	"rand_pick":      1,
 	"rand_shuffle":   1,
 	"synth_play":     1,
+	"synth_stop":     0,
 	"sys_args":       0,
 	"sys_exit":       1,
 	"sys_run":        1,
@@ -736,6 +737,10 @@ func (ev *Evaluator) callBuiltin(name string, args []Value, line, col int) (Valu
 
 	case "synth_play":
 		v, err := ev.execSynthPlay(args, line, col)
+		return v, true, err
+
+	case "synth_stop":
+		v, err := ev.execSynthStop(line, col)
 		return v, true, err
 
 	case "sys_run":

@@ -99,10 +99,11 @@ type screenScene struct {
 }
 
 type screenFrameState struct {
-	Status string `json:"status"`
-	Key    string `json:"key"`
-	MouseX int    `json:"mouse_x"`
-	MouseY int    `json:"mouse_y"`
+	Status string   `json:"status"`
+	Key    string   `json:"key"`
+	Keys   []string `json:"keys"`
+	MouseX int      `json:"mouse_x"`
+	MouseY int      `json:"mouse_y"`
 }
 
 func newScreenEventRecord(kind, key string, x, y int) *RecordValue {
@@ -202,6 +203,41 @@ func ebitenKeyName(k ebiten.Key) string {
 	return ""
 }
 
+func ebitenPressedKeys() []string {
+	keys := []string{}
+	fixed := []ebiten.Key{
+		ebiten.KeyArrowRight,
+		ebiten.KeyArrowLeft,
+		ebiten.KeyArrowUp,
+		ebiten.KeyArrowDown,
+		ebiten.KeySpace,
+		ebiten.KeyEnter,
+		ebiten.KeyNumpadEnter,
+		ebiten.KeyEscape,
+		ebiten.KeyTab,
+		ebiten.KeyBackspace,
+	}
+	seen := make(map[string]bool, 8)
+	addKey := func(k ebiten.Key) {
+		if ebiten.IsKeyPressed(k) {
+			if name := ebitenKeyName(k); name != "" && !seen[name] {
+				seen[name] = true
+				keys = append(keys, name)
+			}
+		}
+	}
+	for _, k := range fixed {
+		addKey(k)
+	}
+	for k := ebiten.KeyA; k <= ebiten.KeyZ; k++ {
+		addKey(k)
+	}
+	for k := ebiten.Key0; k <= ebiten.Key9; k++ {
+		addKey(k)
+	}
+	return keys
+}
+
 func (g *screenGame) Update() error {
 	if ebiten.IsWindowBeingClosed() || (g.events != nil && g.events.IsClosed()) {
 		mx, my := ebiten.CursorPosition()
@@ -221,6 +257,7 @@ func (g *screenGame) Update() error {
 			b, _ := json.Marshal(screenFrameState{
 				Status: "closed",
 				Key:    "",
+				Keys:   []string{},
 				MouseX: mx,
 				MouseY: my,
 			})
@@ -273,21 +310,16 @@ func (g *screenGame) Update() error {
 		g.current = sc
 		g.mu.Unlock()
 
+		heldKeys := ebitenPressedKeys()
 		key := ""
-		switch {
-		case ebiten.IsKeyPressed(ebiten.KeyArrowRight):
-			key = "right"
-		case ebiten.IsKeyPressed(ebiten.KeyArrowLeft):
-			key = "left"
-		case ebiten.IsKeyPressed(ebiten.KeyArrowUp):
-			key = "up"
-		case ebiten.IsKeyPressed(ebiten.KeyArrowDown):
-			key = "down"
+		if len(heldKeys) > 0 {
+			key = heldKeys[0]
 		}
 		mx, my := ebiten.CursorPosition()
 		b, _ := json.Marshal(screenFrameState{
 			Status: "open",
 			Key:    key,
+			Keys:   heldKeys,
 			MouseX: mx,
 			MouseY: my,
 		})
@@ -808,9 +840,10 @@ func (ev *Evaluator) execScreenPresent(args []Value, line, col int) (Value, erro
 
 		if events == nil {
 			// Legacy headless simulation for scenes without an event inbox.
-			st := screenFrameState{Status: "open"}
+			st := screenFrameState{Status: "open", Keys: []string{}}
 			if frame == 1 {
 				st.Key = "right"
+				st.Keys = []string{"right"}
 			} else {
 				st.Status = "closed"
 			}
@@ -819,14 +852,15 @@ func (ev *Evaluator) execScreenPresent(args []Value, line, col int) (Value, erro
 		}
 
 		if events.IsClosed() || ev.rt.isAborted() {
-			b, _ := json.Marshal(screenFrameState{Status: "closed"})
+			b, _ := json.Marshal(screenFrameState{Status: "closed", Keys: []string{}})
 			return string(b), nil
 		}
 
-		st := screenFrameState{Status: "open"}
+		st := screenFrameState{Status: "open", Keys: []string{}}
 		switch frame {
 		case 1:
 			st.Key = "right"
+			st.Keys = []string{"right"}
 			events.TryPut(newScreenEventRecord("key", "right", 0, 0))
 		case 2:
 			st.MouseX = 320

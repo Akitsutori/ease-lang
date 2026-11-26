@@ -357,6 +357,7 @@ var internalStdlibBuiltins = map[string]string{
 	"rand_pick":      "random:pick",
 	"rand_shuffle":   "random:shuffle",
 	"synth_play":     "synth:play",
+	"synth_stop":     "synth:stop",
 	"sys_args":       "system.arguments",
 	"sys_exit":       "system:exit",
 	"sys_run":        "system:run",
@@ -379,6 +380,8 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 			return ce.Callee, true
 		case "synth_play":
 			return "synth:play", true
+		case "synth_stop":
+			return "synth:stop", true
 		case "screen_open":
 			return "screen:open", true
 		case "net_reply_text":
@@ -399,8 +402,8 @@ func (v *typeValidator) voidBuiltinCallName(e Expr) (string, bool) {
 	if mod, ok := v.modules[ce.Module]; ok {
 		switch mod.origName {
 		case "synth":
-			if ce.Callee == "play" {
-				return "synth:play", true
+			if ce.Callee == "play" || ce.Callee == "stop" {
+				return "synth:" + ce.Callee, true
 			}
 		case "screen":
 			if ce.Callee == "open" {

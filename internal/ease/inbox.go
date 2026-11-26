@@ -278,6 +278,8 @@ type runtimeLifecycle struct {
 	activeScreen     *screenSession
 	screenEvents     *InboxValue
 	screenFrameCount int
+	bgmMu            sync.Mutex
+	bgmCancel        context.CancelFunc
 }
 
 func newRuntimeLifecycle() *runtimeLifecycle {
@@ -487,10 +489,40 @@ func (rt *runtimeLifecycle) closeConn(id string) {
 	}
 }
 
+func (rt *runtimeLifecycle) setBGMCancel(cancel context.CancelFunc) {
+	if rt == nil {
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	rt.bgmMu.Lock()
+	old := rt.bgmCancel
+	rt.bgmCancel = cancel
+	rt.bgmMu.Unlock()
+	if old != nil {
+		old()
+	}
+}
+
+func (rt *runtimeLifecycle) stopBGM() {
+	if rt == nil {
+		return
+	}
+	rt.bgmMu.Lock()
+	old := rt.bgmCancel
+	rt.bgmCancel = nil
+	rt.bgmMu.Unlock()
+	if old != nil {
+		old()
+	}
+}
+
 func (rt *runtimeLifecycle) abort() {
 	if rt == nil {
 		return
 	}
+	rt.stopBGM()
 	rt.mu.Lock()
 	rt.closed = true
 	inboxes := make([]*InboxValue, len(rt.inboxes))

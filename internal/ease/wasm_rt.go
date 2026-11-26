@@ -16,8 +16,10 @@ type wasmRuntime struct {
 	impOpenScreen   uint32
 	impPresentScene uint32
 	impPollEvent    uint32
+	impPollKeys     uint32
 	impRandomInt    uint32
 	impPlayMelody   uint32
+	impStopMelody   uint32
 
 	// Runtime functions
 	fnAlloc            uint32
@@ -60,8 +62,10 @@ func newWasmRuntime(mod *wasmModule) *wasmRuntime {
 	rt.impOpenScreen = mod.addImportFunc("env", "open_screen", []byte{wasmF64, wasmF64, wasmI32, wasmI32, wasmF64}, nil)
 	rt.impPresentScene = mod.addImportFunc("env", "present_scene", []byte{wasmI32, wasmI32}, nil)
 	rt.impPollEvent = mod.addImportFunc("env", "poll_event", []byte{wasmI32}, []byte{wasmI32})
+	rt.impPollKeys = mod.addImportFunc("env", "poll_keys", []byte{wasmI32, wasmI32}, []byte{wasmI32})
 	rt.impRandomInt = mod.addImportFunc("env", "random_int", []byte{wasmI64, wasmI64}, []byte{wasmI64})
-	rt.impPlayMelody = mod.addImportFunc("env", "play_melody", []byte{wasmI32, wasmI32}, nil)
+	rt.impPlayMelody = mod.addImportFunc("env", "play_melody", []byte{wasmI32, wasmF64, wasmI32, wasmI32, wasmF64, wasmI32}, nil)
+	rt.impStopMelody = mod.addImportFunc("env", "stop_melody", nil, nil)
 
 	// Globals (heapPtr initialized after static data is finalized).
 	rt.heapPtrGlobal = mod.addGlobal(wasmI32, true, opI32Const, 0)

@@ -84,11 +84,20 @@ end`
 	}
 }
 
+type nodeWasmMelody struct {
+	BPM       float64 `json:"bpm"`
+	Wave      string  `json:"wave"`
+	Volume    float64 `json:"volume"`
+	IsForever bool    `json:"isForever"`
+	Stopped   bool    `json:"stopped"`
+}
+
 type nodeWasmResult struct {
-	InitRet int               `json:"initRet"`
-	Steps   []int             `json:"steps"`
-	Prints  []string          `json:"prints"`
-	Scenes  []json.RawMessage `json:"scenes"`
+	InitRet  int               `json:"initRet"`
+	Steps    []int             `json:"steps"`
+	Prints   []string          `json:"prints"`
+	Scenes   []json.RawMessage `json:"scenes"`
+	Melodies []nodeWasmMelody  `json:"melodies"`
 }
 
 func runWasmInNode(t *testing.T, wasmBytes []byte, eventsJSON string, maxSteps int) nodeWasmResult {
@@ -114,6 +123,7 @@ const maxSteps = parseInt(process.argv[4], 10);
   const bytes = fs.readFileSync(wasmPath);
   const prints = [];
   const scenes = [];
+  const melodies = [];
   let memory = null;
   let exports = null;
 
@@ -224,12 +234,39 @@ const maxSteps = parseInt(process.argv[4], 10);
         view.setUint32(28, kLen, true);
         return 1;
       },
+      poll_keys(outPtr, maxKeys) {
+        if (!memory || !exports.ease_alloc) return 0;
+        const held = globalThis.__easeHeldKeys || [];
+        const dv = new DataView(memory.buffer);
+        let count = 0;
+        for (const k of held) {
+          if (count >= maxKeys) break;
+          const kb = enc.encode(k);
+          const kPtr = exports.ease_alloc(kb.length);
+          new Uint8Array(memory.buffer, kPtr >>> 0, kb.length).set(kb);
+          const base = (outPtr >>> 0) + count * 8;
+          dv.setUint32(base, kPtr, true);
+          dv.setUint32(base + 4, kb.length, true);
+          count++;
+        }
+        return count;
+      },
       random_int(min, max) {
         const lo = Number(min), hi = Number(max);
         const val = Math.floor((lo + hi) / 2);
         return typeof min === "bigint" ? BigInt(val) : val;
       },
-      play_melody(w, nPtr, nLen, bpm) {},
+      play_melody(notesListPtr, bpm, wavePtr, waveLen, volume, isForever) {
+        melodies.push({
+          bpm,
+          wave: readStr(wavePtr, waveLen),
+          volume,
+          isForever: Boolean(isForever),
+        });
+      },
+      stop_melody() {
+        melodies.push({ stopped: true });
+      },
       sin(x) { return Math.sin(x); },
       cos(x) { return Math.cos(x); },
       sqrt(x) { return Math.sqrt(x); },
@@ -250,7 +287,7 @@ const maxSteps = parseInt(process.argv[4], 10);
       if (s === 0) break;
     }
   }
-  console.log(JSON.stringify({ initRet, steps, prints, scenes }));
+  console.log(JSON.stringify({ initRet, steps, prints, scenes, melodies }));
 })().catch(err => {
   console.error(err);
   process.exit(1);
@@ -579,5 +616,78 @@ say "{words.1},{words.2},{words.3}|{ordered.1.name},{ordered.2.name},{ordered.3.
 	res := runWasmInNode(t, wasmBytes, "[]", 1)
 	if len(res.Prints) != 1 || res.Prints[0] != "a,aa,b|Bob,Ada,Max,Zoe" {
 		t.Fatalf("unexpected WASM sort output: %+v", res.Prints)
+	}
+}
+
+func TestWasmSynthPlayStopAndScreenFrameStateKeys(t *testing.T) {
+	// 1. Verify embedded wasmHostJS passes `node --check`
+	if nodePath, err := exec.LookPath("node"); err == nil {
+		hostFile := filepath.Join(t.TempDir(), "ease_host.js")
+		if err := os.WriteFile(hostFile, []byte(wasmHostJS), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(nodePath, "--check", hostFile).CombinedOutput(); err != nil {
+			t.Fatalf("wasmHostJS syntax check failed: %v\n%s", err, string(out))
+		}
+	}
+
+	// 2. Compile and run synth:play (forever) + spawn synth:play (sfx) + synth:stop + screen.frame_state.keys
+	src := `import screen
+import synth
+
+bgm = synth.melody with
+    notes  = list "E4/8", "B3/8"
+    bpm    = 140
+    wave   = "square"
+    volume = 20
+    repeat = "forever"
+end
+
+sfx = synth.melody with
+    notes  = list "C5/16"
+    bpm    = 180
+    wave   = "triangle"
+    volume = 75
+    repeat = "once"
+end
+
+win = screen.screen with width = 320, height = 240, title = "Tetris", fps = 60
+synth:play bgm
+
+loop
+    sc = screen.scene with background = "#0f172a"
+    raw = screen:present win sc
+    parsed = raw as json
+    st = parsed as screen.frame_state
+    check st.status is "closed" -> end
+    spawn synth:play sfx
+    has_left = "no"
+    check contains st.keys "left"
+        has_left = "yes"
+    end
+    say "{st.status}:{st.key}:{count st.keys}:{has_left}"
+    synth:stop
+    -> end
+end
+`
+	wasmBytes, err := CompileProgramToWasm(src, "")
+	if err != nil {
+		t.Fatalf("CompileProgramToWasm failed: %v", err)
+	}
+	res := runWasmInNode(t, wasmBytes, `[{"kind":2,"key":"left"}]`, 2)
+	if len(res.Prints) != 1 || res.Prints[0] != "open:left:0:no" {
+		t.Fatalf("unexpected WASM frame_state output: %+v", res.Prints)
+	}
+	if len(res.Melodies) != 3 {
+		t.Fatalf("expected 3 synth host calls (bgm, sfx, stop), got %+v", res.Melodies)
+	}
+	if !res.Melodies[0].IsForever || res.Melodies[0].Volume != 20 || res.Melodies[0].Wave != "square" {
+		t.Fatalf("unexpected bgm call: %+v", res.Melodies[0])
+	}
+	if res.Melodies[1].IsForever || res.Melodies[1].Volume != 75 || res.Melodies[1].Wave != "triangle" {
+		t.Fatalf("unexpected sfx call: %+v", res.Melodies[1])
+	}
+	if !res.Melodies[2].Stopped {
+		t.Fatalf("expected stop_melody call, got %+v", res.Melodies[2])
 	}
 }

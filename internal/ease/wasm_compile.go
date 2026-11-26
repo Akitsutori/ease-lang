@@ -240,7 +240,7 @@ func (wc *wasmCompiler) collectDecls() {
 				wc.registerUnion(alias+"."+u.Name, u, alias+".")
 			}
 			for _, fn := range imp.ModuleProg.Functions {
-				if fn.Name == "open" || fn.Name == "present" || fn.Name == "roll" || fn.Name == "pick" || fn.Name == "shuffle" || fn.Name == "play" {
+				if fn.Name == "open" || fn.Name == "present" || fn.Name == "roll" || fn.Name == "pick" || fn.Name == "shuffle" || fn.Name == "play" || fn.Name == "stop" {
 					if !imp.IsFileImport {
 						continue
 					}
@@ -720,7 +720,7 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 			if ex.Module == "screen" && ex.Callee == "present" {
 				return wasmTypeInfo{kind: wkText}
 			}
-			if ex.Module == "synth" && ex.Callee == "play" {
+			if ex.Module == "synth" && (ex.Callee == "play" || ex.Callee == "stop") {
 				return wasmTypeInfo{kind: wkVoid}
 			}
 			if ex.Module == "random" {

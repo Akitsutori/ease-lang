@@ -164,7 +164,7 @@ func (wc *wasmCompiler) tryCompileScreenApp(initFn, stepFn uint32) (bool, error)
 		for idx, st := range stmts {
 			switch s := st.(type) {
 			case *SpawnStmt:
-				if s.Call != nil {
+				if s.Call != nil && s.Call.Module == "" {
 					if fi := wc.funcs[s.Call.Callee]; fi != nil {
 						renderFn = fi.decl
 					}
@@ -459,6 +459,12 @@ func (wc *wasmCompiler) emitSpawnTakeScreenApp(initFn, stepFn uint32, preOpenStm
 }
 
 func (wc *wasmCompiler) emitStepStmt(c *wasmCodeBuf, st Stmt) error {
+	if _, isEnd := st.(*LoopEndStmt); isEnd {
+		c.i32Const(0)
+		c.globalSet(wc.activeGlobal)
+		c.br(0)
+		return nil
+	}
 	if cg, ok := st.(*CheckGuardStmt); ok && len(cg.Rules) == 1 {
 		if cg.Rules[0].Action != nil {
 			_, isEnd := cg.Rules[0].Action.(*LoopEndStmt)
@@ -577,21 +583,108 @@ func (wc *wasmCompiler) emitBuildFrameStateFromBuf(c *wasmCodeBuf) {
 	c.op(opEnd)
 	c.memOp(opI64Store, 3, lay.byName["status"].offset)
 
-	// key
+	// Poll currently held keys into `keys` (list<text>) and fall back to keys[0] for `key`.
+	const maxHeldKeys = 16
+	keysBuf := wc.allocLocal(wasmI32)
+	c.i32Const(maxHeldKeys * 8)
+	c.call(wc.rt.fnAlloc)
+	c.localTee(keysBuf)
+	c.i32Const(maxHeldKeys)
+	c.call(wc.rt.impPollKeys)
+	keyCount := wc.allocLocal(wasmI32)
+	c.localSet(keyCount)
+
+	keysList := wc.allocLocal(wasmI32)
+	c.i32Const(maxHeldKeys)
+	c.call(wc.rt.fnListNew)
+	c.localSet(keysList)
+
+	ki := wc.allocLocal(wasmI32)
+	c.i32Const(0)
+	c.localSet(ki)
+	c.block(wasmBlockVoid)
+	c.loop(wasmBlockVoid)
+	c.localGet(ki)
+	c.localGet(keyCount)
+	c.op(opI32GeS)
+	c.brIf(1)
+	c.localGet(keysList)
+	c.localGet(keysBuf)
+	c.localGet(ki)
+	c.i32Const(8)
+	c.op(opI32Mul)
+	c.op(opI32Add)
+	c.memOp(opI32Load, 2, 0)
+	c.op(opI64ExtendI32U)
+	c.i64Const(32)
+	c.op(opI64Shl)
+	c.localGet(keysBuf)
+	c.localGet(ki)
+	c.i32Const(8)
+	c.op(opI32Mul)
+	c.op(opI32Add)
+	c.memOp(opI32Load, 2, 4)
+	c.op(opI64ExtendI32U)
+	c.op(opI64Or)
+	c.call(wc.rt.fnListPush)
+	c.localSet(keysList)
+	c.localGet(ki)
+	c.i32Const(1)
+	c.op(opI32Add)
+	c.localSet(ki)
+	c.br(0)
+	c.op(opEnd)
+	c.op(opEnd)
+
 	c.localGet(recTmp)
+	c.localGet(keysList)
+	c.memOp(opI32Store, 2, lay.byName["keys"].offset)
+
+	// key: event key if present and non-empty, else first held key (if not closed), else ""
+	evKeyLen := wc.allocLocal(wasmI32)
 	c.localGet(hasEv)
+	c.ifOp(wasmI32)
+	c.i32Const(int32(wasmEventBufAddr))
+	c.memOp(opI32Load, 2, 28)
+	c.op(opElse)
+	c.i32Const(0)
+	c.op(opEnd)
+	c.localSet(evKeyLen)
+
+	c.localGet(recTmp)
+	c.localGet(evKeyLen)
+	c.i32Const(0)
+	c.op(opI32GtS)
 	c.ifOp(wasmI64)
 	c.i32Const(int32(wasmEventBufAddr))
 	c.memOp(opI32Load, 2, 24)
 	c.op(opI64ExtendI32U)
 	c.i64Const(32)
 	c.op(opI64Shl)
-	c.i32Const(int32(wasmEventBufAddr))
-	c.memOp(opI32Load, 2, 28)
+	c.localGet(evKeyLen)
+	c.op(opI64ExtendI32U)
+	c.op(opI64Or)
+	c.op(opElse)
+	c.localGet(evKind)
+	c.i32Const(1)
+	c.op(opI32Ne)
+	c.localGet(keyCount)
+	c.i32Const(0)
+	c.op(opI32GtS)
+	c.op(opI32And)
+	c.ifOp(wasmI64)
+	c.localGet(keysBuf)
+	c.memOp(opI32Load, 2, 0)
+	c.op(opI64ExtendI32U)
+	c.i64Const(32)
+	c.op(opI64Shl)
+	c.localGet(keysBuf)
+	c.memOp(opI32Load, 2, 4)
 	c.op(opI64ExtendI32U)
 	c.op(opI64Or)
 	c.op(opElse)
 	c.i64Const(int64(wc.mod.internString("")))
+	c.op(opEnd)
 	c.op(opEnd)
 	c.memOp(opI64Store, 3, lay.byName["key"].offset)
 
@@ -754,6 +847,12 @@ func (wc *wasmCompiler) emitStmt(c *wasmCodeBuf, st Stmt) error {
 
 	case *LoopStmt:
 		return wc.emitLoopStmt(c, s)
+
+	case *SpawnStmt:
+		if s.Call != nil && s.Call.Module == "synth" && s.Call.Callee == "play" {
+			return wc.emitCallExpr(c, s.Call)
+		}
+		return nil
 	}
 	return nil
 }
@@ -2108,8 +2207,49 @@ func (wc *wasmCompiler) emitCallExpr(c *wasmCodeBuf, ex *CallExpr) error {
 			return wc.emitExpr(c, ex.Args[0], lt)
 		}
 	}
-	if ex.Module == "synth" && ex.Callee == "play" {
-		return nil
+	if ex.Module == "synth" {
+		switch ex.Callee {
+		case "stop":
+			c.call(wc.rt.impStopMelody)
+			return nil
+		case "play":
+			if len(ex.Args) >= 1 {
+				lay := wc.records["synth.melody"]
+				if lay == nil {
+					return nil
+				}
+				melTmp := wc.allocLocal(wasmI32)
+				if err := wc.emitExpr(c, ex.Args[0], wasmTypeInfo{kind: wkRec, name: "synth.melody"}); err != nil {
+					return err
+				}
+				c.localSet(melTmp)
+
+				// notes listPtr (i32)
+				c.localGet(melTmp)
+				c.memOp(opI32Load, 2, lay.byName["notes"].offset)
+				// bpm (f64)
+				c.localGet(melTmp)
+				c.memOp(opF64Load, 3, lay.byName["bpm"].offset)
+				// wave ptr (i32), wave len (i32)
+				waveTmp := wc.allocLocal(wasmI64)
+				c.localGet(melTmp)
+				c.memOp(opI64Load, 3, lay.byName["wave"].offset)
+				c.localTee(waveTmp)
+				emitUnpackPtr(c)
+				c.localGet(waveTmp)
+				emitUnpackLen(c)
+				// volume (f64)
+				c.localGet(melTmp)
+				c.memOp(opF64Load, 3, lay.byName["volume"].offset)
+				// isForever (i32)
+				c.localGet(melTmp)
+				c.memOp(opI64Load, 3, lay.byName["repeat"].offset)
+				c.i64Const(int64(wc.mod.internString("forever")))
+				c.call(wc.rt.fnStrEq)
+				c.call(wc.rt.impPlayMelody)
+			}
+			return nil
+		}
 	}
 
 	if ex.Module == "" {

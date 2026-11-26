@@ -2974,6 +2974,16 @@ end
 			src:      "sort = 1\n",
 			wantSubs: []string{"TypeError", "built-in function"},
 		},
+		{
+			name:     "private synth_stop intrinsic rejected in user code",
+			src:      "synth_stop\n",
+			wantSubs: []string{"TypeError", "synth:stop"},
+		},
+		{
+			name:     "synth:stop cannot be assigned as a value",
+			src:      "import synth\nx = synth:stop\n",
+			wantSubs: []string{"TypeError", "synth:stop"},
+		},
 	}
 
 	for _, tc := range negCases {

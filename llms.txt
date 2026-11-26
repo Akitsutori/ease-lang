@@ -178,6 +178,7 @@ end
     screen.label (x = 0, y = 0, content = "", size = 16, color = "white")
     screen.scene (background = "black", boxes = list as box, circles = list as circle, lines = list as line, triangles = list as triangle, labels = list as label, shapes = list as shape)
     screen.event (kind = "close" | "key" | "click" | "move", key = "", x = 0, y = 0)
+    screen.frame_state (status = "open" | "closed", key = "", keys = list as text, mouse_x = 0, mouse_y = 0)
     Window loop pattern:
       events = inbox as screen.event
       screen:open win events
@@ -192,6 +193,6 @@ end
     network:serve_http port req_inbox, network:reply_text req status body (void), network:reply_json req status data (void)
     network:serve_tcp port client_inbox, network:tcp_send client msg (void)
   synth:
-    synth.melody (notes = list as text e.g. "E4/8", bpm = 120, wave = "triangle" | "square" | "sine"), synth:play mel (void)
+    synth.melody (notes = list as text e.g. "E4/8", bpm = 120, wave = "triangle" | "square" | "sine", volume = 50, repeat = "once" | "forever"), synth:play mel (void), synth:stop (void)
   system:
     system.arguments, system.ok (0), system:exit code_or_msg (void), system.command (program, args, dir, timeout, max_mb), system:run cmd -> system.process_report (code, stdout, stderr)

@@ -81,6 +81,7 @@ end
 def frame_state
     status  = "open" | "closed"
     key     = ""
+    keys    = list as text
     mouse_x = 0
     mouse_y = 0
 end

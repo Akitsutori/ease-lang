@@ -46,6 +46,11 @@ const wasmHostJS = `(function () {
   let targetFps = 60;
   let lastTickMs = 0;
   const eventQueue = [];
+  const heldKeys = new Set();
+  let audioCtx = null;
+  let activeBGM = null;
+  let bgmTimer = null;
+  let bgmNodes = [];
 
   function readStr(ptr, len) {
     if (!wasmMemory || len <= 0) return "";
@@ -62,11 +67,48 @@ const wasmHostJS = `(function () {
     return k.toLowerCase();
   }
 
+  function ensureAudioCtx() {
+    if (audioCtx) return audioCtx;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    audioCtx = new AudioCtx();
+    return audioCtx;
+  }
+
+  function unlockAudio() {
+    const actx = ensureAudioCtx();
+    if (!actx) return;
+    if (actx.state === "suspended") {
+      actx.resume().then(() => {
+        if (activeBGM && !bgmTimer && !stopped) {
+          startBGMLoop(activeBGM);
+        }
+      }).catch(() => {});
+    } else if (activeBGM && !bgmTimer && !stopped) {
+      startBGMLoop(activeBGM);
+    }
+  }
+
   window.addEventListener("keydown", (e) => {
-    eventQueue.push({ kind: 2, key: mapKey(e.key), x: 0, y: 0 });
+    if (canvas && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === " ")) {
+      e.preventDefault();
+    }
+    const mapped = mapKey(e.key);
+    if (mapped) heldKeys.add(mapped);
+    eventQueue.push({ kind: 2, key: mapped, x: 0, y: 0 });
+    unlockAudio();
   });
+  window.addEventListener("keyup", (e) => {
+    const mapped = mapKey(e.key);
+    if (mapped) heldKeys.delete(mapped);
+  });
+  window.addEventListener("blur", () => {
+    heldKeys.clear();
+  });
+  window.addEventListener("pointerdown", unlockAudio);
   if (canvas) {
     canvas.addEventListener("mousedown", (e) => {
+      unlockAudio();
       const r = canvas.getBoundingClientRect();
       eventQueue.push({ kind: 3, key: "", x: e.clientX - r.left, y: e.clientY - r.top });
     });
@@ -76,16 +118,105 @@ const wasmHostJS = `(function () {
     });
   }
   window.addEventListener("beforeunload", () => {
+    stopBGM();
     eventQueue.push({ kind: 1, key: "", x: 0, y: 0 });
   });
 
   function resolveColor(c) {
     const table = {
-      slate: "#1e293b", midnight: "#0f172a", amber: "#f59e0b", emerald: "#10b981",
-      crimson: "#dc2626", silver: "#cbd5e1", cream: "#fef3c7", indigo: "#4f46e5",
-      gold: "#eab308", orange: "#f97316", yellow: "#facc15", black: "#000000", white: "#ffffff"
+      slate: "#1e293b", midnight: "#0f172a", navy: "#0f172a", amber: "#f59e0b",
+      emerald: "#10b981", crimson: "#ef4444", red: "#ef4444", blue: "#3b82f6",
+      green: "#22c55e", cyan: "#06b6d4", purple: "#a855f7", violet: "#a855f7",
+      silver: "#cbd5e1", gray: "#6b7280", grey: "#6b7280", cream: "#fef3c7",
+      indigo: "#312e81", gold: "#f59e0b", orange: "#f97316", yellow: "#eab308",
+      black: "#000000", white: "#ffffff"
     };
-    return table[c] || c || "#ffffff";
+    return table[(c || "").toLowerCase()] || c || "#ffffff";
+  }
+
+  const NOTE_SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+  function parseNoteToken(tok) {
+    const slash = tok.indexOf("/");
+    if (slash <= 0 || slash >= tok.length - 1) return null;
+    const pitch = tok.slice(0, slash);
+    const len = parseFloat(tok.slice(slash + 1));
+    if (!Number.isFinite(len) || len <= 0) return null;
+    if (pitch === "REST") return { rest: true, freq: 0, len };
+    if (pitch.length !== 2 && pitch.length !== 3) return null;
+    const base = NOTE_SEMITONES[pitch[0]];
+    if (base === undefined) return null;
+    let acc = 0;
+    let octCh = pitch[1];
+    if (pitch.length === 3) {
+      if (pitch[1] === "#") acc = 1;
+      else if (pitch[1] === "b") acc = -1;
+      else return null;
+      octCh = pitch[2];
+    }
+    const oct = octCh.charCodeAt(0) - 48;
+    if (oct < 0 || oct > 8) return null;
+    const midi = (oct + 1) * 12 + base + acc;
+    const freq = 440 * Math.pow(2, (midi - 69) / 12);
+    return { rest: false, freq, len };
+  }
+
+  function scheduleMelody(actx, spec, startTime, trackBgm) {
+    const gainVal = Math.max(0, Math.min(100, spec.volume)) / 100 * 0.25;
+    let t = startTime;
+    const beatSec = 60 / (spec.bpm > 0 ? spec.bpm : 120);
+    for (const n of spec.notes) {
+      const dur = beatSec * (4 / n.len);
+      if (!n.rest && gainVal > 0) {
+        const osc = actx.createOscillator();
+        const gain = actx.createGain();
+        osc.type = spec.wave || "triangle";
+        osc.frequency.setValueAtTime(n.freq, t);
+        const fade = Math.min(0.008, dur * 0.4);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(gainVal, t + fade);
+        gain.gain.setValueAtTime(gainVal, Math.max(t + fade, t + dur - fade));
+        gain.gain.linearRampToValueAtTime(0.0001, t + dur);
+        osc.connect(gain);
+        gain.connect(actx.destination);
+        osc.start(t);
+        osc.stop(t + dur + 0.01);
+        if (trackBgm) bgmNodes.push(osc);
+      }
+      t += dur;
+    }
+    return t - startTime;
+  }
+
+  function stopBGM() {
+    activeBGM = null;
+    if (bgmTimer !== null) {
+      clearTimeout(bgmTimer);
+      bgmTimer = null;
+    }
+    for (const osc of bgmNodes) {
+      try { osc.stop(); } catch (_) {}
+      try { osc.disconnect(); } catch (_) {}
+    }
+    bgmNodes = [];
+  }
+
+  function startBGMLoop(spec) {
+    const actx = ensureAudioCtx();
+    if (!actx || actx.state === "suspended" || stopped) return;
+    if (bgmTimer !== null) {
+      clearTimeout(bgmTimer);
+      bgmTimer = null;
+    }
+    const scheduleCycle = (startAt) => {
+      if (activeBGM !== spec || stopped) return;
+      bgmNodes = bgmNodes.filter((n) => n.playbackState !== "finished");
+      const totalDur = scheduleMelody(actx, spec, startAt, true);
+      if (totalDur <= 0) return;
+      const delayMs = Math.max(20, (startAt + totalDur - actx.currentTime - 0.05) * 1000);
+      bgmTimer = setTimeout(() => scheduleCycle(startAt + totalDur), delayMs);
+    };
+    scheduleCycle(actx.currentTime + 0.02);
   }
 
   const env = {
@@ -222,32 +353,63 @@ const wasmHostJS = `(function () {
       }
       return 1;
     },
+    poll_keys(outPtr, maxKeys) {
+      if (!wasmMemory || !wasmExports || !wasmExports.ease_alloc) return 0;
+      const dv = new DataView(wasmMemory.buffer);
+      let count = 0;
+      for (const k of heldKeys) {
+        if (count >= maxKeys) break;
+        const bytes = encoder.encode(k);
+        const kPtr = wasmExports.ease_alloc(bytes.length);
+        new Uint8Array(wasmMemory.buffer, kPtr >>> 0, bytes.length).set(bytes);
+        const base = (outPtr >>> 0) + count * 8;
+        dv.setUint32(base, kPtr, true);
+        dv.setUint32(base + 4, bytes.length, true);
+        count++;
+      }
+      return count;
+    },
     random_int(low, high) {
       const lo = Number(low);
       const hi = Number(high);
       return BigInt(Math.floor(Math.random() * (hi - lo + 1)) + lo);
     },
-    play_melody(ptr, len) {
+    play_melody(notesListPtr, bpm, wavePtr, waveLen, volume, isForever) {
       try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) return;
-        const spec = JSON.parse(readStr(ptr, len));
-        const actx = new AudioCtx();
-        let t = actx.currentTime;
-        const beat = 60 / (spec.bpm || 120);
-        for (const n of (spec.notes || [])) {
-          const dur = beat * 0.5;
-          if (!n.startsWith("REST")) {
-            const osc = actx.createOscillator();
-            osc.type = spec.wave || "triangle";
-            osc.frequency.value = 440;
-            osc.connect(actx.destination);
-            osc.start(t);
-            osc.stop(t + dur * 0.9);
+        if (!wasmMemory || !notesListPtr) return;
+        const dv = new DataView(wasmMemory.buffer);
+        const dataPtr = dv.getUint32(notesListPtr >>> 0, true);
+        const nLen = dv.getUint32((notesListPtr >>> 0) + 4, true);
+        const notes = [];
+        for (let i = 0; i < nLen; i++) {
+          const elOff = (dataPtr >>> 0) + i * 8;
+          const strLen = dv.getUint32(elOff, true);
+          const strPtr = dv.getUint32(elOff + 4, true);
+          const tok = parseNoteToken(readStr(strPtr, strLen));
+          if (tok) notes.push(tok);
+        }
+        if (notes.length === 0) return;
+        const wave = readStr(wavePtr, waveLen) || "triangle";
+        const spec = { notes, bpm, wave, volume };
+        const actx = ensureAudioCtx();
+        if (!actx) return;
+        if (isForever) {
+          stopBGM();
+          activeBGM = spec;
+          if (actx.state !== "suspended") {
+            startBGMLoop(spec);
           }
-          t += dur;
+          return;
+        }
+        if (actx.state === "suspended") {
+          actx.resume().then(() => scheduleMelody(actx, spec, actx.currentTime + 0.01, false)).catch(() => {});
+        } else {
+          scheduleMelody(actx, spec, actx.currentTime + 0.01, false);
         }
       } catch (_) {}
+    },
+    stop_melody() {
+      stopBGM();
     }
   };
 

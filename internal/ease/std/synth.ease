@@ -2,13 +2,20 @@
 # Minimal waveform synthesizer for melodies, games, and concurrent voices.
 
 def wave_kind = "triangle" | "square" | "sine"
+def repeat_mode = "once" | "forever"
 
 def melody
-    notes = list as text
-    bpm   = 120
-    wave  = wave_kind
+    notes  = list as text
+    bpm    = 120
+    wave   = wave_kind
+    volume = 50
+    repeat = repeat_mode
 end
 
 to play m
     synth_play m
+end
+
+to stop
+    synth_stop
 end
