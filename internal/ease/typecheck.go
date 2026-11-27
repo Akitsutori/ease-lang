@@ -41,6 +41,7 @@ type varTypeState struct {
 	exactNonRecord       bool
 	exactBaseType        string
 	listElemType         string
+	listElemVariants     []resolvedUnionVariant
 	inboxElemType        string
 	isParam              bool
 	fromParam            bool
@@ -65,6 +66,9 @@ func (s varTypeState) clone() varTypeState {
 	}
 	if len(s.knownVariants) > 0 {
 		out.knownVariants = append([]resolvedUnionVariant(nil), s.knownVariants...)
+	}
+	if len(s.listElemVariants) > 0 {
+		out.listElemVariants = append([]resolvedUnionVariant(nil), s.listElemVariants...)
 	}
 	return out
 }
@@ -3488,6 +3492,9 @@ func (v *typeValidator) checkReturnValueConforms(fn *FuncDecl, valExpr Expr, lin
 						}
 					}
 				}
+				if len(valSt.listElemVariants) > 0 && unionVariantsSubset(valSt.listElemVariants, variants) {
+					return nil
+				}
 			}
 			return newError(
 				"TypeError",
@@ -3623,6 +3630,26 @@ func (v *typeValidator) checkNonLiteralMatchesUnion(valExpr Expr, valSt varTypeS
 	}
 	if valSt.exactRecord != "" {
 		return nil
+	}
+	if valSt.listElemType != "" {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Value of type list is not statically guaranteed to belong to union '%s'", unionName),
+			fmt.Sprintf("Use 'as %s' or return a concrete %s variant.", unionName, unionName),
+		)
+	}
+	if valSt.inboxElemType != "" {
+		return newError(
+			"TypeError",
+			line,
+			col,
+			v.source,
+			fmt.Sprintf("Value of type inbox is not statically guaranteed to belong to union '%s'", unionName),
+			fmt.Sprintf("Use 'as %s' or return a concrete %s variant.", unionName, unionName),
+		)
 	}
 	if len(valSt.knownVariants) > 0 {
 		if unionVariantsSubset(valSt.knownVariants, variants) {

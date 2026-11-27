@@ -443,6 +443,16 @@ func (v *typeValidator) checkStmt(s Stmt, inFunction bool) error {
 		return nil
 
 	case *VoidReturnStmt:
+		if v.swarmDepth > 0 {
+			return newError(
+				"TypeError",
+				st.Line,
+				st.Col,
+				v.source,
+				"'-> return' cannot be used inside 'swarm loop'",
+				"Use 'check <cond> -> <value>' to return early from a 'swarm loop' iteration.",
+			)
+		}
 		if !inFunction {
 			return newError(
 				"TypeError",

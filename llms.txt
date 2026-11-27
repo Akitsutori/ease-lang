@@ -1,211 +1,155 @@
-EASE LANGUAGE REFERENCE (PLAIN TEXT GUIDE)
+# Ease — Strict Rules, Annotated Reference & Execution Semantics
 
-Ease is a strict, bracket-free, immutable-by-default language.
-Every construct has one canonical form and zero silent fallbacks.
+Ease is a bracket-free, immutable-by-default language. Every construct has one canonical syntax and zero silent fallbacks.
 
-1. STRICT RULES (DOs AND DONTs)
+## 1. Critical Compiler & Semantics Laws
 
-- Immutability: Records and lists cannot be mutated in place.
-  Write: rec = rec with hp = 50
-  Write: xs = xs with .1 = 99
-  Write: xs = xs with .(idx) = xs.(idx) + 1
+| Rule | Forbidden | Required Form |
+|---|---|---|
+| **Max 1 `->` per line** | `-> loop xs -> expr`, `-> swarm loop xs -> expr` | `res = swarm loop xs -> expr` then newline `-> res` |
+| **Record vs List `with`** | `a with .field = v` or `xs with 2 = v` | Record: `a with field = v` (NO dot) \| List: `xs with .2 = v` (dot for `1..N` index only!) |
+| **Single Rec vs List** | `list as Rec with a = 1 end` for 1 rec; bare `with` on list | 1 rec: `Rec with a = 1, b = 2` \| list: `list as Rec with ... end` \| `update xs [where c] with f = v` |
+| **Void Loops** | `loop items -> put ch it`, `-> say x`, `to f x -> y` | Multi-line `loop items` + newline `put ch it` + `end`; `def`/`to`/`test` close with `end` |
+| **Exhaustive Return** | Value `to` ending with `check ... end` and no final `->` | Always end `to` with an unconditional `-> fallback` (or bind `res` before `check` and `-> res`) |
+| **No `else check`** | `else check cond` on one line; multi-line `check cond ->` | Sequential `check` blocks, or `else` + newline + indented `check` + `end` |
+| **Block Scoping** | Reading vars first assigned inside `check`/`loop` after `end` | Initialize `acc = 0` BEFORE `check`/`loop`; params & globals are read-only inside `to` |
+| **No Booleans** | `bool`, `true`, `false`, `if`, `==`, `!=` | `is`, `is not`, `contains`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not` only in `check`/`where`/`test`; unions for states |
+| **`where` Re-Indexing** | Assuming `it.index` keeps original positions after `where` | `where` creates a NEW `1..M` list FIRST! In `loop ((list 10, 30, 5) where it > 10) -> it.index`, `it.index` is **`1`**, NOT `2`! |
+| **Short-Circuit Predicates** | Storing `any`/`none` in a var or evaluating all items eagerly | `any`/`none` live ONLY in conditions (`check`/`test`), never in vars (`x = any ...` is `TypeError`); `any` stops on the **first match** (later items never run!). |
+| **Union `sort by` Order** | Sorting closed literal unions alphabetically | Closed literal unions (`def P = "urgent" \| "routine" \| "low"`) ALWAYS sort in **declaration order** (`"urgent"` first!) |
 
-- Updating record lists: Never use bare 'with' on a list of records.
-  Write: users = update users with role = "admin"
-  Write: users = update users where it.name is "Bram" with role = "admin"
+Reserved names (FORBIDDEN as vars/params/`to` names): `ask`, `count`, `type`, `fields`, `abs`, `floor`, `round`, `min`, `max`, `range`, `append`, `slice`, `split`, `join`, `trim`, `upper`, `lower`, `replace`, `contains`, `sum`, `avg`, `sort`, `load`, `save`, `put`, `close`, `of`, `it` (`def` fields cannot be `index`). Unused locals or discarded non-void returns are static TypeErrors.
 
-- Single-line vs multi-line 'with':
-  Single-line uses commas and NO 'end': Box with x = 1, y = 2
-  Multi-line uses newlines, NO commas, and closes with 'end':
-    Box with
-        x = 1
-        y = 2
-    end
+## 2. VERIFIED EXAMPLE
 
-- Arrow '->' rule:
-  Declarations ('def', 'to', 'test') ALWAYS open a block and close with 'end' (NEVER write 'to fn x -> expr' on one line).
-  '->' ONLY returns a value ('-> expr'), exits a loop ('-> stop'), exits a void 'to' ('-> return'), ends a single-line 'check <cond> -> ...', 'match' arm, 'loop <list> -> <expr>', or 'swarm loop <list> -> <expr>'.
-  Max ONE '->' per line (never nest 'loop ... ->' or 'swarm loop ... ->' after another '->'; bind intermediate variables first).
-  Multi-line 'check' blocks NEVER have '->' on the header line and MUST close with 'end':
-    check x > 0
-        y = 1
-    end
-
-- Explicit returns: 'to' functions and 'swarm loop' have NO implicit return.
-  Prefix every returned expression with '->' (e.g. -> state); '-> stop' exits a loop and '-> return' exits a void 'to' procedure early.
-  If any branch in 'to' returns a value, ALL paths must return a value.
-
-- Block-local variables: Variables first assigned inside a 'check' or 'loop' block die at 'end'.
-  Initialize variables BEFORE 'check' or 'loop' if you read them afterwards!
-
-- No booleans or truthiness: Ease has NO bool, true, false, if, ==, or !=.
-  Conditions (<, <=, >, >=, is, is not, contains, and, or, not) live ONLY in 'check', 'where', and 'test'.
-  Model domain states as unions: def Drink = "coffee" | "none" (and reference as drink = Drink in 'def').
-
-- Random numbers vs integer sequences:
-  'range low high' creates a list of integers, NOT a random number!
-  For random integers, import random and call: random:roll low high
-
-- 1-based integer indexing: Positions start at 1 (1..N). '/' is float division!
-  Variable indices require parentheses and whole numbers:
-  slot_idx = (floor (sec / 1800)) + 1
-  val = slots.(slot_idx)
-
-- Pre-filled number lists: 'list as <Rec> with ... end' works ONLY for 'def' records.
-  For N zeros, write: slots = (range 1 23) * 0
-
-- Appending and loop index:
-  'append' is a prefix verb: xs = append xs item
-  '.index' exists ONLY directly on 'it' (it.index), never on copied variables.
-
-- Reserved built-in names (FORBIDDEN as variable, parameter, or 'to' function names):
-  ask, count, type, fields, abs, floor, round, min, max, range, append, slice,
-  split, join, trim, upper, lower, replace, contains, sum, avg, sort, load, save, put, close.
-  Use domain names instead (e.g. slot_total, order_kind, span, item_count).
-
-- Unused values and locals: Discarding non-void return values or leaving assigned locals unread inside 'to' is a static TypeError.
-
-2. CORE SYNTAX AND SEMANTICS
-
-- Calls and naming: 'def' defines data records/unions/constants; 'def <name> = <pure_expr>' defines order-independent, immutable domain constants readable inside any 'to' function. 'to' defines functions without commas and always closes with 'end':
-  to add a b as number
-      -> a + b
-  end
-  Optional 'as <type>' (number, text, <Def>, <mod>.<Def>, list of <type>) enforces static and runtime return contracts; 'of' is a reserved keyword.
-  res = add (1 + 2) 3
-  Parameters and globals are read-only inside 'to' (assigning a name creates a local; reading a global before assigning the same name fails). 'def' fields cannot be named 'index'.
-
-- Unions and 'def' contracts: Declare 'def' records and unions in any order.
-  def U = A | B combines 2+ variants (literals, text, number, 'def' records, or unions; no duplicates; records in one union must differ in a mandatory field/type/disjoint union).
-  In 'def' fields, reference the union name (prio = Priority), NOT a string literal (prio = "low" creates an unrestricted text field).
-  'check x is Variant -> ...' narrows x and subtracts handled variants.
-  '<val> is <type>' checks membership (types are forbidden on the left of 'is').
-
-- JSON, CSV, and 'as' casts: Two-step cast required:
-  m = raw as json
-  parsed = m as Ticket
-  '<expr> as <type> or <fallback>' works on number, text, and scalar unions only.
-
-- Pattern matching: 'match <txt_or_list> ... end' matches "..." templates with {...}, {name}, {name: N}, {name as number|<Union>}, or '...' raw literals. Expression 'match' on text requires 'else'.
-
-- Concurrency: 'swarm loop <list_or_range> ... end' runs parallel workers returning a 1..N list via '-> <expr>' (outer vars read-only), or single-line 'swarm loop <list_or_range> -> <expr>' (no 'end').
-  Channels: ch = inbox as <type> (cap 64), spawn fn a b, put ch val (void), close ch (void), take ch ... end.
-
-- List projection & predicates: 'loop <list_or_range> -> <expr>' (no 'end') maps each element ('it', 1-based 'it.index') to a new list (e.g. names = loop users -> it.name; 'where' creates a fresh 1-indexed list before 'loop ... ->' runs). 'any <list> where <cond>' and 'none <list> where <cond>' are short-circuit conditions (usable in 'check', 'and'/'or'/'not', and 'test'; never stored).
-
-- Precedence (high to low):
-  1. ()  .  :  with
-  2. prefix calls: fn a b (args parse as unary; wrap compound args in parens)
-  3. postfix: where, as, unary -x (-2 is literal, a - 2 is subtraction)
-  4. *  / (float)  %
-  5. + (strict number+number, text+text, or numeric lists; format mixed types via "{a}{b}")  -
-  6. <  <=  >  >=  is  is not
-  7. not, then and, then or
-  String escapes in "...": ONLY \n \r \t \" \\ \{ \}. '...' is raw without escapes.
-
-3. VERIFIED EXAMPLE
-
+```ease
 import random
 
+# Closed literal union: declaration order ("urgent" < "routine" < "low"), NOT alphabetical
 def Priority = "urgent" | "routine" | "low"
 
 def Ticket
     id   = 0
     name = "Guest"
-    prio = Priority
+    prio = Priority    # Reference union name, NOT "low"
 end
 
-to classify_roll limit
-    roll = random:roll 1 100
-    outcome = "miss"
-    check roll <= limit
-        outcome = "hit"
+def Summary
+    id    = 0
+    label = ""
+end
+
+def base_score = 10    # Order-independent immutable constant
+
+to classify_ticket t as text
+    check t.prio is "urgent"
+        -> "fast"
     end
-    -> outcome
+    check t.prio is "routine"
+        -> "normal"
+    end
+    -> "backlog"       # Mandatory unconditional fallback
 end
 
-to add a b
-    -> a + b
+to summarize_urgent items as list of Summary
+    kept = items where it.prio is "urgent"
+    ordered = sort kept by it.prio, it.id
+    res = loop ordered -> Summary with id = it.id, label = "{it.index}:{it.name}"
+    -> res
+end
+
+to relay_worker src dst
+    take src
+        check it < 0
+            close dst
+            -> return
+        end
+        check it is 0
+            -> stop
+        end
+        put dst (it * 2)
+    end
+    close dst
+end
+
+to run_relay nums as list of number
+    src = inbox as number
+    dst = inbox as number
+    spawn relay_worker src dst
+    loop nums
+        put src it
+    end
+    close src
+    out = list as number
+    take dst
+        out = append out it
+    end
+    -> out
+end
+
+to parse_line line as text
+    match line
+        "{lvl as Priority} [{code as number}] {msg}" -> "{lvl}:{code}:{msg}"
+        else -> "invalid"
+    end
+end
+
+to batch_scores nums as list of number
+    scaled = swarm loop nums -> it * base_score
+    -> scaled
 end
 
 slots = (range 1 4) * 0
-bumped = slots with .2 = slots.2 + 1
+bumped = slots with .2 = slots.2 + 1       # List index uses .2
 tickets = list as Ticket with
     id = 1, name = "Bram", prio = "low"
     id = 2, name = "Aria", prio = "urgent"
 end
 escalated = update tickets where it.name is "Bram" with prio = "routine"
 ordered = sort escalated by it.prio, it.id
+renamed = ordered.1 with name = "Aria!"     # Record field has NO dot
+rolled = random:roll 1 1
 
-test "example"
-    add 2 3 is 5
+raw_json = '{"id": 9, "label": "ok"}'
+m = raw_json as json
+parsed_summary = m as Summary
+
+test "sandwich_reference"
     bumped is list 0, 1, 0, 0
     ordered.1.name is "Aria"
+    renamed.name is "Aria!"
     ordered.2.prio is "routine"
-    (classify_roll 100) is "hit"
+    (classify_ticket ordered.1) is "fast"
+    (classify_ticket ordered.2) is "normal"
+    summaries = summarize_urgent ordered
+    summaries.1.label is "1:Aria"
+    (batch_scores (range 1 3)) is list 10, 20, 30
+    (run_relay (list 3, 0, 4)) is list 6
+    (parse_line "urgent [42] down") is "urgent:42:down"
+    parsed_summary.id is 9
+    rolled is 1
     ("abc" as number or 0) is 0
     "abc" as number is error
 end
+```
 
-4. BUILT-IN VERBS AND STANDARD MODULES
+## 3. Grammar, Precedence & Built-ins
 
-- Core verbs: say val (void), ask prompt (text), type val (text), fields rec_or_map (list of text)
-- Math: abs n, floor n, round n, min a b, max a b
-- Text and 1-based lists:
-  count xs_or_txt
-  range start end (inclusive int list; empty if start > end)
-  append xs item_or_list (returns new list)
-  slice xs_or_txt start end (1-based inclusive, clamps bounds)
-  split txt sep, join txt_list sep, trim txt, upper txt, lower txt, replace txt old new
-  contains txt_or_atomic_list item (condition)
-  sum num_list, avg num_list (non-empty)
-  sort xs
-  sort xs by key1, key2 (stable ascending; binds it and it.index; use -it.x for descending; closed literal union fields sort in declaration order)
-- Vector math and updates:
-  Numeric lists broadcast + - * / %
-  xs where <cond>
-  rec with field = val
-  xs with .1 = val  or  xs with .(idx) = val
-  update rec_list with field = expr
-  update rec_list where <cond> with field = expr
-- Files and inbox:
-  load path [as text | json | csv | bytes]
-  save path data [as text | json | csv | bytes] (void)
-  put box val (void), close box (void)
+- **Contracts & narrowing**: `to fn p as <type>` (`number`, `text`, `<Def>`, `<mod>.<Def>`, `list of <type>`). `def U = A | B` (2+ unique variants; union records differ in mandatory field/type/disjoint union). `check x is Variant` narrows `x`; `<val> is <type>` checks membership (no type on left of `is`). `any xs where cond` / `none xs where cond` are short-circuit conditions only (never storable).
+- **Casts & `match`**: Two-step JSON cast: `m = raw as json` then `m as User`. `<expr> as <type> or <fallback>` works on `number`, `text`, scalar unions (without `or`, invalid casts yield `error`). `match <txt_or_list> ... end` supports `{...}`, `{name}`, `{name: N}`, `{name as number|Union}`, `'raw'`; text expression `match` requires `else`.
+- **Concurrency & Precedence**: `swarm loop xs ... end` runs parallel workers (outer read-only; yield via `-> val`; `-> stop` halts `loop`/`take`; `-> return` exits void `to`). `inbox` cap 64; `put`/`close` are void. Precedence (high->low): `1: () . : with` | `2: prefix fn (a + b) c` | `3: where, as, -x` | `4: * / %` | `5: + -` (strict `num+num`, `txt+txt`, numeric list; mix via `"{a}{b}"`) | `6: < <= > >= is is not` | `7: not, and, or`. `"..."` escapes: `\n \r \t \" \\ \{ \}`; `'...'` is raw.
+- **Built-ins**: `say val` (void), `ask prompt`, `type val`, `fields rec_or_map`, `abs n`, `floor n`, `round n`, `min a b`, `max a b`, `count`, `range low high` (int list `low..high`, NOT random!), `append`, `slice`, `split`, `join`, `trim`, `upper`, `lower`, `replace`, `contains` (cond), `sum`, `avg`, `sort [by k1, -k2]` (stable asc, `-it.x` desc, union declaration order), vector `+ - * / %`, `load`/`save path [as text | json | csv | bytes]`.
+- **Modules (`import mod; mod:verb; mod.type`)**:
+  - `random`: `random:roll low high`, `random:pick non_empty_list`, `random:shuffle list`.
+  - `screen`: `screen.screen` (`width`, `height`, `title`, `fps`), `screen.box`, `screen.circle`, `screen.line`, `screen.triangle`, `screen.label`, `screen.scene`, `screen.event`, `screen.frame_state`; `screen:clear`, `screen:draw`, `screen:show`, `screen:open`, `screen:present`.
+  - `network`: `network.network`, `network:fetch`, `network:send`, `network:serve_http`, `network:reply_text`, `network:reply_json`, `network:serve_tcp`, `network:tcp_send`.
+  - `synth`: `synth.melody` (`notes`, `bpm`, `wave`, `volume`, `repeat`), `synth:play`, `synth:stop`.
+  - `system`: `system.arguments`, `system.ok`, `system:exit`, `system.command`, `system:run` -> `system.process_report`.
 
-- Standard library modules (import <name>, call via mod:verb, types via mod.type):
-  random:
-    random:roll low high (inclusive int)
-    random:pick non_empty_list
-    random:shuffle list (immutable copy)
-  screen:
-    screen.screen (width = 800, height = 600, title = "Ease", fps = 60 or "unlimited")
-    screen.box (x = 0, y = 0, width = 40, height = 40, color = "blue", style = "solid" | "outline", stroke = 2)
-    screen.circle (x = 0, y = 0, size = 20, color = "red", style = "solid" | "outline", stroke = 2)
-    screen.line (x1 = 0, y1 = 0, x2 = 100, y2 = 100, width = 2, color = "white")
-    screen.triangle (x1, y1, x2, y2, x3, y3, color, style = "solid" | "outline", stroke = 2)
-    screen.label (x = 0, y = 0, content = "", size = 16, color = "white")
-    screen.scene (background = "black", boxes = list as box, circles = list as circle, lines = list as line, triangles = list as triangle, labels = list as label, shapes = list as shape)
-    screen.event (kind = "close" | "key" | "click" | "move", key = "", x = 0, y = 0)
-    screen.frame_state (status = "open" | "closed", key = "", keys = list as text, mouse_x = 0, mouse_y = 0)
-    Immediate-mode loop pattern (recommended):
-      screen:clear win "#0f172a"
-      screen:draw win item_or_list   # box/circle/line/triangle/label or list (void, Painter's Order)
-      frame = screen:show win        # flushes & returns typed screen.frame_state
-    Inbox window loop pattern:
-      events = inbox as screen.event
-      screen:open win events
-      last_frame = screen:present win scene
-      take events
-          check it.kind is "close" -> stop
-          last_frame = screen:present win scene
-      end
-      say last_frame
-  network:
-    network.network (url, timeout, token), network:fetch net path, network:send net path payload
-    network:serve_http port req_inbox, network:reply_text req status body (void), network:reply_json req status data (void)
-    network:serve_tcp port client_inbox, network:tcp_send client msg (void)
-  synth:
-    synth.melody (notes = list as text e.g. "E4/8", bpm = 120, wave = "triangle" | "square" | "sine", volume = 50, repeat = "once" | "forever"), synth:play mel (void), synth:stop (void)
-  system:
-    system.arguments, system.ok (0), system:exit code_or_msg (void), system.command (program, args, dir, timeout, max_mb), system:run cmd -> system.process_report (code, stdout, stderr)
+## 4. Execution & Trace Quick-Check
+
+- **`where` re-indexes to `1..M` in two steps**: Step 1: `xs where cond` creates a brand-new list `[v1, v2, ...]` of length `M` (original indices are discarded!). Step 2: `loop (xs where cond) -> expr` assigns `it.index = 1` to `v1`, `it.index = 2` to `v2`, ..., `it.index = M` to `vM` (`.index` exists ONLY directly on `it`). Example: `xs = list 10, 30, 50, 5` -> `xs where it > 10` is `list 30, 50`; `loop (xs where it > 10) -> it * 10 + it.index` produces `list (30*10+1), (50*10+2)` = `list 301, 502` (sum = `803`), NOT original indices `2, 3`!
+- **Short-circuit `any` / `none` (and static ban on storing)**: `any xs where cond` stops IMMEDIATELY as soon as the first element satisfies `cond` — remaining elements are NEVER evaluated (so a later element that would divide by zero never executes and NO `runtime_error` occurs!). Likewise `none` stops on the first matching element. Storing `x = any ...` or `x = none ...` in a variable is a static `type_error`.
+- **Closed literal unions sort in declaration order**: `sort xs by it.prio` for `def Prio = "critical" | "high" | "low"` puts `"critical"` before `"high"` before `"low"` — NEVER alphabetical!
+- **Record vs List `with`**: Record fields have NO dot (`r with retries = r.retries + 1`); 1-based list elements require a dot (`xs with .2 = 99`, `xs with .(idx) = v`). `/` always divides as float; wrap computed indices (`xs.((floor (s / 60)) + 1)`).
+- **Static errors vs runtime errors**: Assigning a condition (`any`/`none`), mutating a param/global wrongly, or type mismatching is a `type_error`; invalid unguarded casts like `"abc" as number` or `n / 0` evaluated at runtime fail with `runtime_error` / `error`.

@@ -255,12 +255,14 @@ func (v *typeValidator) checkSwarmLoopExpr(ex *SwarmLoopExpr) error {
 	prevDirectInSwarm := v.directInSwarm
 	prevWorkerAssigned := v.workerAssigned
 	prevWorkerOuterScope := v.workerOuterScope
+	prevReturnFunc := v.currentReturnFunc
 
 	v.loopDepth++
 	v.swarmDepth++
 	v.directInSwarm = true
 	v.workerAssigned = collectAssignedNames(ex.Body)
 	v.workerOuterScope = outerScope
+	v.currentReturnFunc = nil
 
 	defer func() {
 		v.loopDepth = prevLoopDepth
@@ -268,6 +270,7 @@ func (v *typeValidator) checkSwarmLoopExpr(ex *SwarmLoopExpr) error {
 		v.directInSwarm = prevDirectInSwarm
 		v.workerAssigned = prevWorkerAssigned
 		v.workerOuterScope = prevWorkerOuterScope
+		v.currentReturnFunc = prevReturnFunc
 		v.popScope()
 	}()
 
@@ -385,7 +388,7 @@ func (v *typeValidator) inferSwarmLoopTypeState(ex *SwarmLoopExpr) varTypeState 
 	case unified.unionName != "":
 		return varTypeState{listElemType: unified.unionName}
 	case unified.exactBaseType != "":
-		return varTypeState{listElemType: unified.exactBaseType}
+		return varTypeState{listElemType: unified.exactBaseType, listElemVariants: unified.knownVariants}
 	default:
 		return varTypeState{listElemType: "any"}
 	}

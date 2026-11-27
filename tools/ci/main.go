@@ -251,11 +251,15 @@ func trackedEaseFiles(dir string) []string {
 }
 
 func verifyLlmsTxt() {
+	const maxLlmsChars = 16000
 	llmsBytes, err := os.ReadFile("llms.txt")
 	if err != nil {
 		fatalf("read llms.txt: %v", err)
 	}
 	llmsText := string(llmsBytes)
+	if len(llmsText) >= maxLlmsChars {
+		fatalf("llms.txt exceeds character budget: %d chars (must be < %d)", len(llmsText), maxLlmsChars)
+	}
 
 	words := make(map[string]bool)
 	reWord := regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
@@ -292,18 +296,10 @@ func verifyLlmsTxt() {
 		fatalf("llms.txt missing keywords/builtins: %s", strings.Join(missing, ", "))
 	}
 
-	const marker = "3. VERIFIED EXAMPLE\n"
-	const endMarker = "\n4. BUILT-IN VERBS"
-	idx := strings.Index(llmsText, marker)
-	if idx < 0 {
-		fatalf("llms.txt missing %q section", strings.TrimSpace(marker))
+	exampleSrc, err := extractVerifiedExample(llmsText)
+	if err != nil {
+		fatalf("llms.txt %v", err)
 	}
-	rest := llmsText[idx+len(marker):]
-	endIdx := strings.Index(rest, endMarker)
-	if endIdx < 0 {
-		fatalf("llms.txt missing %q section", strings.TrimSpace(endMarker))
-	}
-	exampleSrc := strings.TrimSpace(rest[:endIdx])
 	rep, err := ease.RunChecks(exampleSrc)
 	if err != nil {
 		fatalf("llms.txt VERIFIED EXAMPLE failed: %v", err)
@@ -311,8 +307,58 @@ func verifyLlmsTxt() {
 	if rep.Failed > 0 {
 		fatalf("llms.txt VERIFIED EXAMPLE had %d failed checks", rep.Failed)
 	}
-	fmt.Printf("  %d/%d keywords/builtins covered; VERIFIED EXAMPLE passed (%d assertions)\n",
-		len(required), len(required), rep.Passed)
+	fmt.Printf("  %d/%d chars (< %d); %d/%d keywords/builtins covered; VERIFIED EXAMPLE passed (%d assertions)\n",
+		len(llmsText), maxLlmsChars, maxLlmsChars, len(required), len(required), rep.Passed)
+}
+
+func extractVerifiedExample(llmsText string) (string, error) {
+	lines := strings.Split(strings.ReplaceAll(llmsText, "\r\n", "\n"), "\n")
+	reSectionHdr := regexp.MustCompile(`^(#{1,4}\s|[0-9]+\.\s+[A-Z]|\[[A-Z][A-Z0-9 _&/-]+\]|===\s)`)
+	startIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(strings.ToUpper(trimmed), "VERIFIED EXAMPLE") &&
+			(strings.EqualFold(trimmed, "VERIFIED EXAMPLE") || reSectionHdr.MatchString(trimmed)) {
+			startIdx = i + 1
+			break
+		}
+	}
+	if startIdx < 0 {
+		return "", fmt.Errorf("missing VERIFIED EXAMPLE section")
+	}
+	for startIdx < len(lines) && strings.TrimSpace(lines[startIdx]) == "" {
+		startIdx++
+	}
+	if startIdx >= len(lines) {
+		return "", fmt.Errorf("empty VERIFIED EXAMPLE section")
+	}
+	var collected []string
+	if strings.HasPrefix(strings.TrimSpace(lines[startIdx]), "```") {
+		closed := false
+		for i := startIdx + 1; i < len(lines); i++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+				closed = true
+				break
+			}
+			collected = append(collected, lines[i])
+		}
+		if !closed {
+			return "", fmt.Errorf("unclosed code fence in VERIFIED EXAMPLE section")
+		}
+	} else {
+		for i := startIdx; i < len(lines); i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if reSectionHdr.MatchString(trimmed) {
+				break
+			}
+			collected = append(collected, lines[i])
+		}
+	}
+	src := strings.TrimSpace(strings.Join(collected, "\n"))
+	if src == "" {
+		return "", fmt.Errorf("empty VERIFIED EXAMPLE section")
+	}
+	return src, nil
 }
 
 func extractMapStringKeys(goFile, varName string) []string {

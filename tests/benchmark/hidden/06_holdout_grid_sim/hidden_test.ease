@@ -1,0 +1,24 @@
+test "arena 06 hidden verification"
+    grid = list as cell with
+        x = 1, y = 1, state = "dead"
+        x = 2, y = 1, state = "alive"
+        x = 1, y = 2, state = "dead"
+        x = 2, y = 2, state = "alive"
+    end
+    c = cell_at grid 2 2 1
+    c.x is 2
+    c.y is 1
+    c.state is "alive"
+    c2 = cell_at grid 2 1 2
+    c2.x is 1
+    c2.y is 2
+    c2.state is "dead"
+    ranks = alive_ranks grid
+    count ranks is 2
+    ranks.1.x is 2
+    ranks.1.rank is 21
+    ranks.2.x is 2
+    ranks.2.rank is 22
+    (has_safe_ratio (list 4, 0)) is "found"
+    (has_safe_ratio (list 2, 5)) is "missing"
+end

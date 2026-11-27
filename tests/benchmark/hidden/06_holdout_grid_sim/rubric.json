@@ -1,0 +1,7 @@
+{
+  "name": "06_holdout_grid_sim",
+  "require_return_contracts": true,
+  "max_nesting": 2,
+  "forbid_loop_append": true,
+  "required_constructs": ["union", "where", "quantifier", "return_type"]
+}

@@ -3619,3 +3619,281 @@ end
 		})
 	}
 }
+
+func TestSwarmLoopInsideTypedReturnFunction(t *testing.T) {
+	posCases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "inline swarm loop inside list of number return function",
+			src: `to double_all nums as list of number
+    res = swarm loop nums -> it * 2
+    -> res
+end
+
+test "inline swarm return contract"
+    (double_all (list 1, 2, 3)) is list 2, 4, 6
+end
+`,
+		},
+		{
+			name: "multiline swarm loop inside list of text return function",
+			src: `to tag_all nums as list of text
+    res = swarm loop nums
+        check it > 1
+            -> "hi:{it}"
+        end
+        -> "lo:{it}"
+    end
+    -> res
+end
+
+test "multiline swarm return contract"
+    (tag_all (list 1, 2)) is list "lo:1", "hi:2"
+end
+`,
+		},
+		{
+			name: "swarm loop inside list of Record return function",
+			src: `def Item
+    val = 0
+end
+
+to make_items nums as list of Item
+    res = swarm loop nums -> Item with val = it * 10
+    -> res
+end
+
+test "list of Record return contract"
+    got = make_items (list 1, 2)
+    got.1.val is 10
+    got.2.val is 20
+end
+`,
+		},
+		{
+			name: "multiline swarm loop inside list of Union return function",
+			src: `def Status = "high" | "low"
+
+to classify_all nums as list of Status
+    res = swarm loop nums
+        check it >= 10
+            -> "high"
+        end
+        -> "low"
+    end
+    -> res
+end
+
+test "list of Union return contract"
+    (classify_all (list 5, 12)) is list "low", "high"
+end
+`,
+		},
+		{
+			name: "swarm loop yielding numbers inside scalar number return function",
+			src: `to sum_doubled nums as number
+    vals = swarm loop nums -> it * 2
+    -> sum vals
+end
+
+test "scalar number return contract"
+    (sum_doubled (list 4, 5, 6)) is 30
+end
+`,
+		},
+		{
+			name: "swarm loop yielding text inside scalar text return function",
+			src: `to join_tags nums as text
+    labels = swarm loop nums -> "v{it}"
+    -> join labels ","
+end
+
+test "scalar text return contract"
+    (join_tags (list 1, 2)) is "v1,v2"
+end
+`,
+		},
+		{
+			name: "swarm loop yielding numbers inside Record return function",
+			src: `def Report
+    total = 0
+end
+
+to build_report nums as Report
+    vals = swarm loop nums -> it * 3
+    -> Report with total = sum vals
+end
+
+test "Record return contract"
+    r = build_report (list 1, 2, 3)
+    r.total is 18
+end
+`,
+		},
+		{
+			name: "swarm loop yielding numbers inside Union return function",
+			src: `def Status = "high" | "low"
+
+to overall_status nums as Status
+    vals = swarm loop nums -> it * 2
+    check (sum vals) >= 10
+        -> "high"
+    end
+    -> "low"
+end
+
+test "Union return contract"
+    (overall_status (list 2, 4)) is "high"
+    (overall_status (list 1, 2)) is "low"
+end
+`,
+		},
+	}
+
+	for _, tc := range posCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep, err := RunChecks(tc.src)
+			if err != nil {
+				t.Fatalf("expected valid program, got error:\n%v", err)
+			}
+			if rep.Failed > 0 || rep.Passed == 0 {
+				t.Fatalf("expected all assertions to pass, got passed=%d failed=%d", rep.Passed, rep.Failed)
+			}
+		})
+	}
+
+	negCases := []struct {
+		name     string
+		src      string
+		wantSubs []string
+	}{
+		{
+			name: "swarm loop returning numbers fails list of text return contract",
+			src: `to bad_tags nums as list of text
+    res = swarm loop nums -> it * 2
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'list of text'"},
+		},
+		{
+			name: "swarm loop returning wrong record fails list of Item return contract",
+			src: `def Item
+    val = 0
+end
+
+def Other
+    val = 0
+end
+
+to bad_items nums as list of Item
+    res = swarm loop nums -> Other with val = it
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'list of Item'"},
+		},
+		{
+			name: "swarm loop with invalid union literal fails list of Status return contract",
+			src: `def Status = "high" | "low"
+
+to bad_statuses nums as list of Status
+    res = swarm loop nums
+        check it > 5
+            -> "high"
+        end
+        -> "unknown"
+    end
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError"},
+		},
+		{
+			name: "returning swarm loop list directly fails scalar number return contract",
+			src: `to bad_num nums as number
+    res = swarm loop nums -> it * 2
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'number'"},
+		},
+		{
+			name: "returning swarm loop list directly fails scalar text return contract",
+			src: `to bad_text nums as text
+    res = swarm loop nums -> "x:{it}"
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'text'"},
+		},
+		{
+			name: "returning swarm loop list directly fails Record return contract",
+			src: `def Report
+    total = 0
+end
+
+to bad_report nums as Report
+    res = swarm loop nums -> Report with total = it
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'Report'"},
+		},
+		{
+			name: "returning swarm loop list directly fails Union return contract",
+			src: `def Status = "high" | "low"
+
+to bad_status nums as Status
+    res = swarm loop nums -> "high"
+    -> res
+end
+`,
+			wantSubs: []string{"TypeError", "Status"},
+		},
+		{
+			name: "outer return contract still enforced after swarm loop completes",
+			src: `to bad_after_swarm nums as number
+    vals = swarm loop nums -> it * 2
+    total = sum vals
+    check total < 0
+        -> total
+    end
+    -> "not_a_number"
+end
+`,
+			wantSubs: []string{"TypeError", "declares return type 'number', got text"},
+		},
+		{
+			name: "void return inside swarm loop rejected",
+			src: `to walk_bad nums
+    out = swarm loop nums
+        check it < 0
+            -> return
+        end
+        -> it
+    end
+    say out
+end
+`,
+			wantSubs: []string{"TypeError", "'-> return' cannot be used inside 'swarm loop'"},
+		},
+	}
+
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseProgram(tc.src)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			full := err.Error()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(full, sub) {
+					t.Fatalf("expected error to contain %q, got:\n%s", sub, full)
+				}
+			}
+		})
+	}
+}
