@@ -713,6 +713,9 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 			return fi.retType
 		}
 	case *FieldExpr:
+		if id, ok := ex.Target.(*IdentExpr); ok && id.Name == "it" && ex.Field == "index" {
+			return wasmTypeInfo{kind: wkNum}
+		}
 		if id, ok := ex.Target.(*IdentExpr); ok {
 			if wc.modules[id.Name] != nil {
 				qual := id.Name + "." + ex.Field
@@ -767,9 +770,13 @@ func (wc *wasmCompiler) inferExprTypeWithEnv(e Expr, env map[string]wasmTypeInfo
 		switch ex.Op {
 		case ">", "<", ">=", "<=", "is", "is not", "is-not", "and", "or":
 			return wasmTypeInfo{kind: wkCond}
-		case "+":
+		case "+", "-", "*", "/", "%":
 			lt := wc.inferExprTypeWithEnv(ex.Left, env, modPrefix)
-			if lt.kind == wkText {
+			rt := wc.inferExprTypeWithEnv(ex.Right, env, modPrefix)
+			if lt.kind == wkList || rt.kind == wkList {
+				return wasmTypeInfo{kind: wkList, name: "number", elemKind: wkNum}
+			}
+			if ex.Op == "+" && lt.kind == wkText {
 				return wasmTypeInfo{kind: wkText}
 			}
 			return wasmTypeInfo{kind: wkNum}

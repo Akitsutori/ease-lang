@@ -1,0 +1,5 @@
+# expect: TypeError: Cannot reassign function parameter
+to bump x as number
+    x = x + 1
+    -> x
+end

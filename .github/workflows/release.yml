@@ -19,9 +19,11 @@ jobs:
           - os: ubuntu-latest
             asset_suffix: linux-amd64
             race_flag: -race
+            vscode_flag: -vscode
           - os: windows-latest
             asset_suffix: windows-amd64.exe
             race_flag: ""
+            vscode_flag: ""
 
     steps:
       - name: Checkout repository
@@ -47,6 +49,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Node.js (for WASM parity & JS checks)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Determine release version & artifact name
         id: ver
         shell: bash
@@ -55,62 +62,15 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "asset_name=ease-${VERSION}-${{ matrix.asset_suffix }}" >> "$GITHUB_OUTPUT"
 
-      - name: Static analysis (go vet)
-        run: go vet ./...
-
-      - name: Run Go unit tests
-        run: go test ${{ matrix.race_flag }} ./...
-
-      - name: Build binary
-        run: go build -ldflags "-s -w -X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ steps.ver.outputs.asset_name }} ./cmd/ease
-
-      - name: Verify embedded version
-        shell: bash
-        run: ./${{ steps.ver.outputs.asset_name }} version
-
-      - name: Run Ease language feature tests
-        shell: bash
-        run: |
-          for f in tests/*.ease; do
-            echo "==> ease test $f"
-            ./${{ steps.ver.outputs.asset_name }} test "$f"
-          done
-
-      - name: Verify offline Ease examples
-        shell: bash
-        run: |
-          for f in \
-            examples/00_hello_world.ease \
-            examples/01_entry_check.ease \
-            examples/02_guard.ease \
-            examples/03_player.ease \
-            examples/04_particles.ease \
-            examples/05_network.ease \
-            examples/06_window.ease \
-            examples/fibonacci.ease \
-            examples/showcase.ease \
-            examples/syntax_spec.ease; do
-            echo "==> ease test $f"
-            ./${{ steps.ver.outputs.asset_name }} test "$f"
-          done
-
-      - name: Validate & package VS Code extension (.vsix)
-        if: runner.os == 'Linux'
-        env:
-          EASE_VERSION: ${{ steps.ver.outputs.version }}
-        shell: bash
-        run: |
-          if command -v node >/dev/null 2>&1; then
-            node --check editors/vscode/extension.js
-          fi
-          python3 -c 'import json; [json.load(open(p)) for p in ("editors/vscode/package.json", "editors/vscode/language-configuration.json", "editors/vscode/syntaxes/ease.tmLanguage.json")]'
-          go run ./editors/vscode
+      - name: Run unified CI & release build pipeline
+        run: go run ./tools/ci ${{ matrix.race_flag }} ${{ matrix.vscode_flag }} -version "${{ steps.ver.outputs.version }}" -out "${{ steps.ver.outputs.asset_name }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.ver.outputs.asset_name }}
           path: ${{ steps.ver.outputs.asset_name }}
+          if-no-files-found: error
 
       - name: Upload VS Code extension artifact
         if: runner.os == 'Linux'

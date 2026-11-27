@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -21,13 +25,13 @@ jobs:
           - name: Linux (ubuntu-latest)
             os: ubuntu-latest
             bin: ease
-            hello_bin: hello
             race_flag: -race
+            vscode_flag: -vscode
           - name: Windows (windows-latest)
             os: windows-latest
             bin: ease.exe
-            hello_bin: hello.exe
             race_flag: ""
+            vscode_flag: ""
 
     steps:
       - name: Checkout repository
@@ -53,76 +57,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Static analysis (go vet)
-        run: go vet ./...
-
-      - name: Run Go unit tests
-        run: go test ${{ matrix.race_flag }} -v ./...
+      - name: Setup Node.js (for WASM parity & JS checks)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - name: Determine dev build version
         id: ver
         shell: bash
         run: echo "version=dev-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-      - name: Build ease CLI
-        run: go build -ldflags "-X ease-lang/internal/ease.Version=${{ steps.ver.outputs.version }}" -o ${{ matrix.bin }} ./cmd/ease
-
-      - name: Run Ease language feature tests
-        shell: bash
-        run: |
-          for f in tests/*.ease; do
-            echo "==> ease test $f"
-            ./${{ matrix.bin }} test "$f"
-          done
-
-      - name: Verify offline Ease examples
-        shell: bash
-        run: |
-          for f in \
-            examples/00_hello_world.ease \
-            examples/01_entry_check.ease \
-            examples/02_guard.ease \
-            examples/03_player.ease \
-            examples/04_particles.ease \
-            examples/05_network.ease \
-            examples/06_window.ease \
-            examples/07_http_server.ease \
-            examples/08_haunted_hotel.ease \
-            examples/09_clinic_simulation.ease \
-            examples/10_game_server.ease \
-            examples/11_chords_and_melodies.ease \
-            examples/fibonacci.ease \
-            examples/showcase.ease; do
-            echo "==> ease test $f"
-            ./${{ matrix.bin }} test "$f"
-          done
-
-          echo "==> ease ast examples/051_network.ease"
-          ./${{ matrix.bin }} ast examples/051_network.ease
-
-          echo "==> ease run --ci (headless)"
-          ./${{ matrix.bin }} run examples/00_hello_world.ease --ci
-          ./${{ matrix.bin }} run examples/06_window.ease --ci
-          ./${{ matrix.bin }} run examples/07_http_server.ease --ci
-          ./${{ matrix.bin }} run examples/08_haunted_hotel.ease --ci
-          ./${{ matrix.bin }} run examples/09_clinic_simulation.ease --ci
-          ./${{ matrix.bin }} run examples/10_game_server.ease --ci
-          ./${{ matrix.bin }} run examples/11_chords_and_melodies.ease --ci
-          ./${{ matrix.bin }} run examples/fibonacci.ease --ci
-          ./${{ matrix.bin }} run examples/showcase.ease --ci
-
-      - name: Verify standalone executable bundling (ease build)
-        shell: bash
-        run: |
-          ./${{ matrix.bin }} build examples/00_hello_world.ease -o ${{ matrix.hello_bin }}
-          ./${{ matrix.hello_bin }}
-
-          mkdir -p tmp_bundle/sub
-          printf 'to greet name -> "Hi {name}"\n' > tmp_bundle/sub/mod.ease
-          printf 'import "./mod.ease" as mod\nsay mod:greet "Ease"\n' > tmp_bundle/sub/main.ease
-          ./${{ matrix.bin }} build tmp_bundle/sub/main.ease -o tmp_bundle/${{ matrix.hello_bin }}
-          ./tmp_bundle/${{ matrix.hello_bin }}
-          rm -rf tmp_bundle
+      - name: Run unified CI pipeline
+        run: go run ./tools/ci ${{ matrix.race_flag }} ${{ matrix.vscode_flag }} -version "${{ steps.ver.outputs.version }}" -out "${{ matrix.bin }}"
 
       - name: Upload built ease binary
         uses: actions/upload-artifact@v4
@@ -130,16 +76,6 @@ jobs:
           name: ease-${{ runner.os }}
           path: ${{ matrix.bin }}
           if-no-files-found: error
-
-      - name: Validate & package VS Code extension (.vsix)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          if command -v node >/dev/null 2>&1; then
-            node --check editors/vscode/extension.js
-          fi
-          python3 -c 'import json; [json.load(open(p)) for p in ("editors/vscode/package.json", "editors/vscode/language-configuration.json", "editors/vscode/syntaxes/ease.tmLanguage.json")]'
-          go run ./editors/vscode
 
       - name: Upload VS Code extension artifact
         if: runner.os == 'Linux'

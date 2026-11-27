@@ -1,0 +1,39 @@
+# wasm-parity
+# Conformance 04: check forms (single-line, block, else), logical ops, contains, scoping
+
+def tier_flag = "vip" | "std"
+
+to grade score vip as text
+    check score >= 90 and vip is "vip" -> "gold"
+    check score < 0 or score > 100 -> "invalid"
+    check not (score >= 50) -> "fail"
+    res = "pass"
+    check score >= 80
+        res = "silver"
+    else
+        res = "bronze"
+    end
+    -> res
+end
+
+words = list "alpha", "beta", "gamma"
+phrase = "ease language rocks"
+has_beta = "no"
+check contains words "beta" and contains phrase "rocks"
+    has_beta = "yes"
+end
+
+test "check forms, and/or/not, contains, and scoping"
+    grade 95 "vip" is "gold"
+    grade 101 "std" is "invalid"
+    grade 30 "std" is "fail"
+    grade 82 "std" is "silver"
+    grade 60 "std" is "bronze"
+    has_beta is "yes"
+    contains words "alpha"
+    not (contains words "delta")
+end
+
+g1 = grade 82 "std"
+g2 = grade 30 "std"
+say "{g1}|{g2}|{has_beta}"

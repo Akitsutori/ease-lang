@@ -1,0 +1,44 @@
+# wasm-parity
+# Conformance 03: records, single/multi-line with, scalar & record unions, narrowing
+
+def circle_shape
+    radius = 5
+end
+
+def box_shape
+    width = 10
+    height = 4
+end
+
+def shape_val = circle_shape | box_shape
+def mode_kind = "fast" | "safe"
+
+to describe_shape s as text
+    check s is circle_shape -> "circle:{s.radius}"
+    check s is box_shape -> "box:{s.width}x{s.height}"
+    -> "other"
+end
+
+c = circle_shape with radius = 9
+b = box_shape with
+    width = 12
+    height = 3
+end
+b_orig = box_shape
+c_union = c as shape_val
+b_union = b as shape_val
+mode = "safe" as mode_kind
+
+test "records, with forms, unions, and narrowing"
+    b_orig.width is 10
+    b.width is 12
+    b.height is 3
+    b is not circle_shape
+    b is box_shape
+    describe_shape c_union is "circle:9"
+    describe_shape b_union is "box:12x3"
+    mode is mode_kind
+    mode is not "fast"
+end
+
+say "{describe_shape c_union}|{describe_shape b_union}|{mode}|{b_orig.width}"

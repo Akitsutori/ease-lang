@@ -1,0 +1,3 @@
+# expect: TypeError: Cannot name variable
+count = 5
+say count

@@ -16,7 +16,7 @@ This folder measures whether `llms.txt` alone is sufficient for a small LLM (`fl
 
 1. Build the compiler:
    ```powershell
-   go build -o ease.exe ./cmd/ease
+   go build -trimpath -ldflags="-s -w" -o ease.exe ./cmd/ease
    ```
 2. For each prompt in `tests/benchmark/prompts/*.md`:
    - Give the target LLM **only** `llms.txt` + the prompt file (no tools, no repo access).

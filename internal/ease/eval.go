@@ -418,6 +418,18 @@ func (ev *Evaluator) RegisterDeclarations(prog *Program) error {
 			}, false)
 		}
 	}
+	if orderedConsts, err := toposortConsts(prog.Body, ev.source); err == nil {
+		for _, cs := range orderedConsts {
+			val, err := ev.EvalExpr(cs.Value, ev.global)
+			if err != nil {
+				return err
+			}
+			if err := ev.checkNotConditionValue(val, cs.Line, cs.Col); err != nil {
+				return err
+			}
+			ev.global.Define(cs.Name, val, false)
+		}
+	}
 	return nil
 }
 
@@ -679,6 +691,11 @@ func (ev *Evaluator) execStmt(stmt Stmt, env *Env) (Value, *reportSignal, error)
 	}
 	switch s := stmt.(type) {
 	case *ConstDeclStmt:
+		if env == ev.global {
+			if val, ok := env.Lookup(s.Name); ok {
+				return val, nil, nil
+			}
+		}
 		val, err := ev.EvalExpr(s.Value, env)
 		if err != nil {
 			return nil, nil, err

@@ -35,8 +35,8 @@ end`,
 		{
 			name: "load_file",
 			src: `to main
-  def data = load "foo.txt" or ""
-  print data
+  data = load "foo.txt"
+  say data
 end`,
 			want: "load",
 		},

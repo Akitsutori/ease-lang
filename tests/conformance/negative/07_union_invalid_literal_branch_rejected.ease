@@ -1,0 +1,10 @@
+# expect: TypeError: not statically guaranteed to belong to union
+def act = "allow" | "deny"
+
+to decide n as act
+    res = "allow"
+    check n < 0
+        res = "typo"
+    end
+    -> res
+end

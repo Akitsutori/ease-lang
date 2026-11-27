@@ -1,0 +1,73 @@
+# wasm-parity
+# Conformance 02: functions, return contracts, recursion, void -> return, union literal tracking
+
+def sev_kind = "critical" | "high" | "low"
+def act_kind = "page" | "ticket" | "log"
+
+def alert
+    id = 0
+    sev = sev_kind
+    retries = 0
+end
+
+to zero_arg as number
+    -> 42
+end
+
+to route_alert a as act_kind
+    res = "log"
+    check a.sev is "critical"
+        res = "page"
+    end
+    check a.sev is "high"
+        check a.retries >= 3
+            res = "page"
+        else
+            res = "ticket"
+        end
+    end
+    -> res
+end
+
+to make_alerts n as list of alert
+    items = loop range 1 n -> alert with id = it, sev = "low", retries = 0
+    -> items
+end
+
+to fact n as number
+    check n <= 1 -> 1
+    -> n * (fact (n - 1))
+end
+
+to emit_positive xs
+    loop xs
+        check it < 0 -> return
+        say "emit:{it}"
+    end
+end
+
+to label_ok a as text
+    -> "#{a.id}:{a.sev}"
+end
+
+a1 = alert with id = 1, sev = "critical", retries = 0
+a2 = alert with id = 2, sev = "high", retries = 1
+a3 = alert with id = 3, sev = "high", retries = 3
+a4 = alert with id = 4, sev = "low", retries = 0
+built = make_alerts 2
+
+emit_positive (list 7, -1, 9)
+
+test "functions, return contracts, void early return, and recursion"
+    zero_arg is 42
+    route_alert a1 is "page"
+    route_alert a2 is "ticket"
+    route_alert a3 is "page"
+    route_alert a4 is "log"
+    count built is 2
+    built.2.id is 2
+    fact 5 is 120
+    label_ok a2 is "#2:high"
+end
+
+say "{zero_arg}|{route_alert a2}|{fact 5}|{count built}|{label_ok a1}"

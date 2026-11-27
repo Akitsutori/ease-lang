@@ -1,0 +1,29 @@
+# Conformance 09: file module imports (record, const, func) and text/reflection builtins
+
+import "./modules/math_helper.ease" as mh
+
+p = mh.pair with left = 4, right = 6
+raw = "  alpha, beta, alpha  "
+trimmed = trim raw
+parts = split trimmed ", "
+joined = join parts "-"
+replaced = replace joined "ALPHA" "x"
+uppered = upper replaced
+lowered = lower uppered
+
+p_type = type p
+p_fields = fields p
+
+test "file imports and text/reflection builtins"
+    mh.scale_factor is 3
+    mh:scaled_sum p is 30
+    trimmed is "alpha, beta, alpha"
+    count parts is 3
+    joined is "alpha-beta-alpha"
+    uppered is "ALPHA-BETA-ALPHA"
+    lowered is "alpha-beta-alpha"
+    p_type is "pair"
+    count p_fields is 2
+end
+
+say "{mh:scaled_sum p}|{lowered}|{p_type}"

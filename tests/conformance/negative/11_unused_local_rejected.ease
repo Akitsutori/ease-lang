@@ -1,0 +1,5 @@
+# expect: TypeError: is assigned but never used
+to work x as number
+    scratch = x + 1
+    -> x * 2
+end

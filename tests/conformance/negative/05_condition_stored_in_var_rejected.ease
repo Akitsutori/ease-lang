@@ -1,0 +1,2 @@
+# expect: TypeError: Conditions cannot be
+ok = 5 > 3

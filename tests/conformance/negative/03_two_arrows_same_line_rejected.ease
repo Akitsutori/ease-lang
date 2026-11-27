@@ -1,0 +1,2 @@
+# expect: SyntaxError: Only one '->' is allowed per line
+check 1 is 1 -> swarm loop range 1 3 -> it * 2

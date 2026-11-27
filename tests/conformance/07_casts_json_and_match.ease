@@ -1,0 +1,57 @@
+# Conformance 07: as casts, or fallbacks, two-step JSON, match statements & expressions
+
+def log_level = "INFO" | "WARN" | "ERROR"
+
+def log_entry
+    level = log_level
+    code = 0
+    msg = ""
+end
+
+to parse_log line as log_entry
+    -> match line
+        "{lvl as log_level} [{code as number}] {msg}" -> log_entry with level = lvl, code = code, msg = msg
+        else -> log_entry with level = "ERROR", code = 0, msg = "bad"
+    end
+end
+
+to classify_code raw as text
+    kind = "unknown"
+    match raw
+        "PIN:{pin: 4}:{...}"
+            kind = "pin:{pin}"
+        'RAW:\{ok\}' -> "literal"
+        "{n as number}={n}"
+            kind = "eq:{n}"
+        else
+            kind = "miss"
+    end
+    check kind is "unknown" -> "literal"
+    -> kind
+end
+
+entries = match (list "INFO [200] up", "skip me", "WARN [503] slow")
+    "{lvl as log_level} [{code as number}] {msg}" -> log_entry with level = lvl, code = code, msg = msg
+end
+
+port = "not_num" as number or 8080
+parsed_lvl = "BAD" as log_level or "WARN"
+json_map = '{"level": "INFO", "code": 201, "msg": "created"}' as json
+json_entry = json_map as log_entry
+
+test "casts, fallback or, json two-step, and match forms"
+    parse_log "INFO [42] ok" is (log_entry with level = "INFO", code = 42, msg = "ok")
+    parse_log "broken" is (log_entry with level = "ERROR", code = 0, msg = "bad")
+    classify_code "PIN:1234:rest" is "pin:1234"
+    classify_code 'RAW:\{ok\}' is "literal"
+    classify_code "7=7" is "eq:7"
+    classify_code "7=8" is "miss"
+    count entries is 2
+    entries.2.code is 503
+    port is 8080
+    parsed_lvl is "WARN"
+    json_entry.code is 201
+    "nope" as number is error
+end
+
+say "{port}|{parsed_lvl}|{count entries}|{json_entry.code}"

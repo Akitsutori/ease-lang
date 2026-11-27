@@ -237,7 +237,7 @@ Notice how nothing new had to be invented for graphics:
 Build the CLI with Go (version in [`go.mod`](go.mod)) and run the full animated Midnight Hotel example:
 
 ```bash
-go build -o ease ./cmd/ease
+go build -trimpath -ldflags="-s -w" -o ease ./cmd/ease
 ./ease test examples/08_haunted_hotel.ease
 ./ease run examples/08_haunted_hotel.ease
 ./ease serve examples/10_game_server.ease --watch --debug

@@ -1,0 +1,10 @@
+def scale_factor = 3
+
+def pair
+    left = 0
+    right = 0
+end
+
+to scaled_sum p as number
+    -> (p.left + p.right) * scale_factor
+end

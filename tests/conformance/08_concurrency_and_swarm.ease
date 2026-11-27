@@ -1,0 +1,48 @@
+# Conformance 08: swarm loop (inline & multi-line), inbox, spawn, take, put, close, stop/return
+
+def work_item
+    val = 0
+end
+
+to worker in_ch out_ch
+    take in_ch
+        check it.val < 0
+            close out_ch
+            -> return
+        end
+        check it.val is 0 -> stop
+        put out_ch (it with val = it.val * 10)
+    end
+    close out_ch
+end
+
+inline_swarm = swarm loop range 1 4 -> it * 3
+
+block_swarm = swarm loop range 1 4
+    check it is 2 -> 20
+    -> it
+end
+
+jobs = inbox as work_item
+results = inbox as work_item
+spawn worker jobs results
+put jobs (work_item with val = 2)
+put jobs (work_item with val = 3)
+put jobs (work_item with val = 0)
+put jobs (work_item with val = 99)
+close jobs
+
+collected = list as work_item
+take results
+    collected = append collected it
+end
+
+test "swarm loop inline/block and inbox/spawn/take/stop"
+    inline_swarm is list 3, 6, 9, 12
+    block_swarm is list 1, 20, 3, 4
+    count collected is 2
+    collected.1.val is 20
+    collected.2.val is 30
+end
+
+say "{sum inline_swarm}|{sum block_swarm}|{collected.2.val}"

@@ -1,0 +1,32 @@
+# wasm-parity
+# Conformance 01: literals, operators, precedence, escapes, and order-independent def constants
+
+def first_val = second_val + 5
+def second_val = 10
+
+to eval_constants offset as number
+    -> first_val + second_val + offset
+end
+
+neg_num = -7
+sub_res = 20 - 7
+mod_res = 17 % 5
+div_res = 9 / 2
+math_sum = (abs neg_num) + (floor 3.9) + (round 2.6) + (min 4 9) + (max 4 9)
+
+raw_txt = 'raw\n\{stay\}'
+esc_txt = "line1\t\"ok\"\\\{1\}"
+interp_txt = "v={first_val}:{mod_res}"
+
+test "literals, constants, ops, and strings"
+    eval_constants 3 is 28
+    neg_num + sub_res is 6
+    mod_res is 2
+    div_res is 4.5
+    math_sum is 26
+    raw_txt is 'raw\n\{stay\}'
+    contains esc_txt "ok"
+    interp_txt is "v=15:2"
+end
+
+say "{eval_constants 3}|{math_sum}|{interp_txt}"

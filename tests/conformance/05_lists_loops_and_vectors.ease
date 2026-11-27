@@ -1,0 +1,48 @@
+# wasm-parity
+# Conformance 05: lists, typed record lists, 1-based indexing, with .idx, vectors, loop forms
+
+def item
+    id = 0
+    val = 0
+end
+
+nums = list 10, 20, 30
+idx = 2
+bumped = nums with .1 = 99
+dyn_bumped = bumped with .(idx) = bumped.(idx) + 5
+zeros = (range 1 3) * 0
+vec = (range 1 3) + 10
+sliced = slice vec 2 3
+appended = append (list 1, 2) 3
+
+items = list as item with
+    id = 1, val = 5
+    id = 2, val = 8
+end
+empty_items = list as item
+
+sum_idx = 0
+loop items
+    sum_idx = sum_idx + it.index + it.val
+end
+
+counter = 0
+loop
+    counter = counter + 1
+    check counter is 4 -> stop
+end
+
+test "lists, 1-based indexing, vectors, and loops"
+    dyn_bumped is list 99, 25, 30
+    zeros is list 0, 0, 0
+    vec is list 11, 12, 13
+    sliced is list 12, 13
+    appended is list 1, 2, 3
+    sum vec is 36
+    avg vec is 12
+    count empty_items is 0
+    sum_idx is 16
+    counter is 4
+end
+
+say "{dyn_bumped.2}|{sum vec}|{avg vec}|{sum_idx}|{counter}"

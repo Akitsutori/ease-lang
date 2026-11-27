@@ -1,0 +1,5 @@
+# expect: TypeError: Cannot use '-> return' inside value-returning function
+to calc x as number
+    check x < 0 -> return
+    -> x
+end

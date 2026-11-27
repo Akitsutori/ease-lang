@@ -876,13 +876,38 @@ func (wc *wasmCompiler) emitStmt(c *wasmCodeBuf, st Stmt) error {
 		return nil
 
 	case *CheckGuardStmt:
+		emitBranchBody := func(cond Expr, emit func() error) error {
+			if varName, recName, ok := wc.extractUnionRecordNarrow(cond); ok {
+				origSlot, hasSlot := wc.resolveVar(varName)
+				if hasSlot {
+					narrowPtr := wc.allocLocal(wasmI32)
+					wc.emitGetVar(c, origSlot)
+					c.memOp(opI32Load, 2, 8)
+					c.localSet(narrowPtr)
+					scopeMap := wc.globals
+					if wc.locals != nil {
+						scopeMap = wc.locals
+					}
+					prev, hadPrev := scopeMap[varName]
+					scopeMap[varName] = wasmVarSlot{isGlobal: false, idx: narrowPtr, typ: wasmTypeInfo{kind: wkRec, name: recName}}
+					err := emit()
+					if hadPrev {
+						scopeMap[varName] = prev
+					} else {
+						delete(scopeMap, varName)
+					}
+					return err
+				}
+			}
+			return emit()
+		}
 		if s.IsEffectBlock {
 			if err := wc.emitExpr(c, s.Cond, wasmTypeInfo{kind: wkCond}); err != nil {
 				return err
 			}
 			c.ifOp(wasmBlockVoid)
 			wc.breakDepth++
-			if err := wc.emitStmts(c, s.Body); err != nil {
+			if err := emitBranchBody(s.Cond, func() error { return wc.emitStmts(c, s.Body) }); err != nil {
 				return err
 			}
 			if len(s.ElseBody) > 0 {
@@ -902,7 +927,7 @@ func (wc *wasmCompiler) emitStmt(c *wasmCodeBuf, st Stmt) error {
 			c.ifOp(wasmBlockVoid)
 			wc.breakDepth++
 			if r.Action != nil {
-				if err := wc.emitStmt(c, r.Action); err != nil {
+				if err := emitBranchBody(r.Cond, func() error { return wc.emitStmt(c, r.Action) }); err != nil {
 					return err
 				}
 			}
@@ -2034,6 +2059,17 @@ func (wc *wasmCompiler) emitExpr(c *wasmCodeBuf, e Expr, targetType wasmTypeInfo
 		if err := wc.emitExpr(c, ex.Target, vt); err != nil {
 			return err
 		}
+		if vt.kind == wkUnion && ex.TypeName != vt.name {
+			if tag, ok := wc.unionVariantTag(vt.name, ex.TypeName, wkVoid); ok {
+				c.memOp(opI32Load, 2, 0)
+				c.i32Const(tag)
+				c.op(opI32Eq)
+				if ex.Negated {
+					c.op(opI32Eqz)
+				}
+				return nil
+			}
+		}
 		match := false
 		switch ex.TypeName {
 		case "number":
@@ -2174,6 +2210,17 @@ func (wc *wasmCompiler) emitBinaryExpr(c *wasmCodeBuf, ex *BinaryExpr) error {
 			if err := wc.emitExpr(c, ex.Left, lt); err != nil {
 				return err
 			}
+			if lt.kind == wkUnion && typeName != lt.name {
+				if tag, ok := wc.unionVariantTag(lt.name, typeName, wkVoid); ok {
+					c.memOp(opI32Load, 2, 0)
+					c.i32Const(tag)
+					c.op(opI32Eq)
+					if ex.Op != "is" {
+						c.op(opI32Eqz)
+					}
+					return nil
+				}
+			}
 			match := lt.name == typeName
 			if lt.wasmStorageType() == wasmI32 && match {
 				c.i32Const(0)
@@ -2224,6 +2271,10 @@ func (wc *wasmCompiler) emitBinaryExpr(c *wasmCodeBuf, ex *BinaryExpr) error {
 	}
 
 	lt := wc.inferExprTypeWithEnv(ex.Left, wc.curEnvTypes(), "")
+	rt := wc.inferExprTypeWithEnv(ex.Right, wc.curEnvTypes(), "")
+	if (ex.Op == "+" || ex.Op == "-" || ex.Op == "*" || ex.Op == "/" || ex.Op == "%") && (lt.kind == wkList || rt.kind == wkList) {
+		return wc.emitVectorBinaryExpr(c, ex, lt, rt)
+	}
 	if ex.Op == "+" && lt.kind == wkText {
 		if err := wc.emitExpr(c, ex.Left, lt); err != nil {
 			return err
@@ -2274,6 +2325,191 @@ func (wc *wasmCompiler) emitBinaryExpr(c *wasmCodeBuf, ex *BinaryExpr) error {
 		c.op(opF64Ge)
 	}
 	return nil
+}
+
+func (wc *wasmCompiler) emitVectorBinaryExpr(c *wasmCodeBuf, ex *BinaryExpr, lt, rt wasmTypeInfo) error {
+	leftIsList := lt.kind == wkList
+	rightIsList := rt.kind == wkList
+
+	var leftListL, leftDataL, rightListL, rightDataL, nLocal uint32
+	var leftNumL, rightNumL uint32
+
+	if leftIsList {
+		leftListL = wc.allocLocal(wasmI32)
+		leftDataL = wc.allocLocal(wasmI32)
+		if err := wc.emitExpr(c, ex.Left, lt); err != nil {
+			return err
+		}
+		c.localTee(leftListL)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(leftDataL)
+	} else {
+		leftNumL = wc.allocLocal(wasmF64)
+		if err := wc.emitExpr(c, ex.Left, wasmTypeInfo{kind: wkNum}); err != nil {
+			return err
+		}
+		c.localSet(leftNumL)
+	}
+
+	if rightIsList {
+		rightListL = wc.allocLocal(wasmI32)
+		rightDataL = wc.allocLocal(wasmI32)
+		if err := wc.emitExpr(c, ex.Right, rt); err != nil {
+			return err
+		}
+		c.localTee(rightListL)
+		c.memOp(opI32Load, 2, 0)
+		c.localSet(rightDataL)
+	} else {
+		rightNumL = wc.allocLocal(wasmF64)
+		if err := wc.emitExpr(c, ex.Right, wasmTypeInfo{kind: wkNum}); err != nil {
+			return err
+		}
+		c.localSet(rightNumL)
+	}
+
+	nLocal = wc.allocLocal(wasmI32)
+	if leftIsList {
+		c.localGet(leftListL)
+	} else {
+		c.localGet(rightListL)
+	}
+	c.memOp(opI32Load, 2, 4)
+	c.localSet(nLocal)
+
+	outList := wc.allocLocal(wasmI32)
+	c.localGet(nLocal)
+	c.call(wc.rt.fnListNew)
+	c.localSet(outList)
+
+	iLocal := wc.allocLocal(wasmI32)
+	c.i32Const(0)
+	c.localSet(iLocal)
+
+	c.block(wasmBlockVoid)
+	c.loop(wasmBlockVoid)
+	c.localGet(iLocal)
+	c.localGet(nLocal)
+	c.op(opI32GeS)
+	c.brIf(1)
+
+	c.localGet(outList)
+	if leftIsList {
+		c.localGet(leftDataL)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		c.op(opF64ReinterpretI64)
+	} else {
+		c.localGet(leftNumL)
+	}
+	if rightIsList {
+		c.localGet(rightDataL)
+		c.localGet(iLocal)
+		c.i32Const(8)
+		c.op(opI32Mul)
+		c.op(opI32Add)
+		c.memOp(opI64Load, 3, 0)
+		c.op(opF64ReinterpretI64)
+	} else {
+		c.localGet(rightNumL)
+	}
+	switch ex.Op {
+	case "+":
+		c.op(opF64Add)
+	case "-":
+		c.op(opF64Sub)
+	case "*":
+		c.op(opF64Mul)
+	case "/":
+		c.op(opF64Div)
+	case "%":
+		bTmp := wc.allocLocal(wasmF64)
+		aTmp := wc.allocLocal(wasmF64)
+		c.localSet(bTmp)
+		c.localSet(aTmp)
+		c.localGet(aTmp)
+		c.localGet(aTmp)
+		c.localGet(bTmp)
+		c.op(opF64Div)
+		c.op(opF64Trunc)
+		c.localGet(bTmp)
+		c.op(opF64Mul)
+		c.op(opF64Sub)
+	}
+	c.op(opI64ReinterpretF64)
+	c.call(wc.rt.fnListPush)
+	c.localSet(outList)
+
+	c.localGet(iLocal)
+	c.i32Const(1)
+	c.op(opI32Add)
+	c.localSet(iLocal)
+	c.br(0)
+	c.op(opEnd)
+	c.op(opEnd)
+
+	c.localGet(outList)
+	return nil
+}
+
+func (wc *wasmCompiler) unionVariantTag(unionName, targetName string, targetKind wasmValKind) (int32, bool) {
+	ul := wc.unions[unionName]
+	if ul == nil {
+		return 0, false
+	}
+	for _, vr := range ul.variants {
+		if vr.kind == wkRec && vr.name == targetName {
+			return int32(vr.tag), true
+		}
+		if targetName == "number" && vr.kind == wkNum {
+			return int32(vr.tag), true
+		}
+		if targetName == "text" && vr.kind == wkText {
+			return int32(vr.tag), true
+		}
+		if targetName == "" && vr.kind == targetKind {
+			return int32(vr.tag), true
+		}
+	}
+	return 0, false
+}
+
+func (wc *wasmCompiler) extractUnionRecordNarrow(cond Expr) (string, string, bool) {
+	var varName, typeName string
+	switch c := cond.(type) {
+	case *BinaryExpr:
+		if c.Op != "is" {
+			return "", "", false
+		}
+		id, ok := c.Left.(*IdentExpr)
+		if !ok {
+			return "", "", false
+		}
+		tn, isType := wc.exprAsTypeName(c.Right)
+		if !isType {
+			return "", "", false
+		}
+		varName, typeName = id.Name, tn
+	case *TypeCheckExpr:
+		if c.Negated {
+			return "", "", false
+		}
+		id, ok := c.Target.(*IdentExpr)
+		if !ok {
+			return "", "", false
+		}
+		varName, typeName = id.Name, c.TypeName
+	default:
+		return "", "", false
+	}
+	slot, ok := wc.resolveVar(varName)
+	if !ok || slot.typ.kind != wkUnion || wc.records[typeName] == nil {
+		return "", "", false
+	}
+	return varName, typeName, true
 }
 
 func (wc *wasmCompiler) emitCastExpr(c *wasmCodeBuf, ex *CastExpr) error {
@@ -2333,6 +2569,29 @@ func (wc *wasmCompiler) emitCastExpr(c *wasmCodeBuf, ex *CastExpr) error {
 	}
 	if ex.TypeName == "screen.frame_state" {
 		wc.emitBuildFrameStateFromBuf(c)
+		return nil
+	}
+	if wc.unions[ex.TypeName] != nil && wc.unionWasmType(ex.TypeName).kind == wkUnion {
+		vt := wc.inferExprTypeWithEnv(ex.Target, wc.curEnvTypes(), "")
+		if vt.kind == wkUnion && vt.name == ex.TypeName {
+			return wc.emitExpr(c, ex.Target, vt)
+		}
+		tag, ok := wc.unionVariantTag(ex.TypeName, vt.name, vt.kind)
+		if !ok {
+			return fmt.Errorf("wasm: value of type %q is not a member of union %q", vt.name, ex.TypeName)
+		}
+		boxPtr := wc.allocLocal(wasmI32)
+		c.i32Const(16)
+		c.call(wc.rt.fnAlloc)
+		c.localTee(boxPtr)
+		c.i32Const(tag)
+		c.memOp(opI32Store, 2, 0)
+		c.localGet(boxPtr)
+		if err := wc.emitExprAsI64(c, ex.Target, vt); err != nil {
+			return err
+		}
+		c.memOp(opI64Store, 3, 8)
+		c.localGet(boxPtr)
 		return nil
 	}
 	return wc.emitExpr(c, ex.Target, wasmTypeInfo{kind: wkText})
